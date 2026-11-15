@@ -94,6 +94,258 @@ function setup(options: { microphone?: boolean } = {}) {
   };
   return { execute: createToolExecutor(adapter), state: () => state, remember, adapter };
 }
+it('commits Input EQ through its native Double profile with independent zero retention and paired Undo', async () => {
+  const { execute, state } = setup();
+  Object.assign(state().documents.left.presets[0].inputEq[0], {
+    frequency: 720.123456789,
+    q: 0.4,
+    gain: 2,
+    enabled: false,
+  });
+  Object.assign(state().documents.right.presets[0].inputEq[0], {
+    frequency: 900.987654321,
+    q: 1.3,
+    gain: -2,
+    enabled: true,
+  });
+  const before = structuredClone(state().documents),
+    input = { target: 'both', preset: 1, index: 1 };
+  expect(
+    await execute('fusion_eq_set', {
+      ...input,
+      patch: { frequency: 10.35, q: 0.4005, gain: 7.555 },
+    }),
+  ).toMatchObject({ ok: true });
+  for (const role of ['left', 'right'] as const) {
+    const f = state().documents[role].presets[0].inputEq[0];
+    expect(f.frequency).toBe(10.4);
+    expect(f.frequency).not.toBe(Math.fround(10.4));
+    expect(f.q).toBe(0.401);
+    expect(f.gain).toBe(7.56);
+    expect(f.enabled).toBe(before[role].presets[0].inputEq[0].enabled);
+  }
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(before);
+  expect(
+    await execute('fusion_eq_set', { ...input, patch: { frequency: 0, q: 0, gain: 0 } }),
+  ).toMatchObject({ ok: true });
+  for (const role of ['left', 'right'] as const) {
+    const f = state().documents[role].presets[0].inputEq[0];
+    expect(f.frequency).toBe(role === 'left' ? 720.1 : 901);
+    expect(f.q).toBe(before[role].presets[0].inputEq[0].q);
+    expect(f.gain).toBe(0);
+  }
+});
+it('provides strict stateless EQ wheels with independent Both values, source no-ops and one Undo', async () => {
+  const { execute, state, adapter } = setup(),
+    edits = vi.spyOn(adapter, 'edit');
+  Object.assign(state().documents.left.presets[0].inputEq[0], {
+    frequency: 99,
+    q: 0.4,
+    gain: 0,
+    enabled: false,
+  });
+  Object.assign(state().documents.right.presets[0].inputEq[0], {
+    frequency: 100,
+    q: 1.3,
+    gain: 0,
+    enabled: true,
+  });
+  const before = structuredClone(state().documents),
+    input = { target: 'both', preset: 1, index: 1, direction: 'up' };
+  expect(TOOL_DEFINITIONS.find((tool) => tool.name === 'fusion_eq_adjust')).toBeDefined();
+  expect(await execute('fusion_eq_adjust', { ...input, parameter: 'frequency' })).toMatchObject({
+    ok: true,
+    changed: true,
+    basis: 'each',
+    roles: [
+      { slot: 'left', value: 100 },
+      { slot: 'right', value: 110 },
+    ],
+  });
+  expect(edits).toHaveBeenCalledTimes(1);
+  expect(state().documents.left.presets[0].inputEq[0].enabled).toBe(false);
+  expect(state().documents.right.presets[0].inputEq[0].enabled).toBe(true);
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(before);
+  expect(await execute('fusion_eq_adjust', { ...input, parameter: 'q' })).toMatchObject({
+    ok: true,
+    roles: [{ value: 0.44 }, { value: 1.34 }],
+  });
+  await execute('fusion_history', { action: 'undo' });
+  state().documents.left.presets[0].inputEq[0].q = 20;
+  edits.mockClear();
+  const bounded = structuredClone(state().documents);
+  expect(
+    await execute('fusion_eq_adjust', { ...input, parameter: 'q', basis: 'left' }),
+  ).toMatchObject({
+    ok: true,
+    changed: false,
+    roles: [
+      { value: 20, text: '20.000' },
+      { value: 1.3, text: '1.300' },
+    ],
+  });
+  expect(edits).not.toHaveBeenCalled();
+  expect(state().documents).toEqual(bounded);
+  expect(
+    await execute('fusion_eq_adjust', { ...input, parameter: 'q', basis: 'right' }),
+  ).toMatchObject({ ok: true, changed: true, roles: [{ value: 1.34 }, { value: 1.34 }] });
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(bounded);
+  Object.assign(state().documents.left.presets[0].inputEq[0], {
+    q: 0.4,
+    coefficients: { b0: 0.9, b1: 0, b2: 0, f1: 0.1, f2: 0 },
+    provenance: 'panel',
+  });
+  Object.assign(state().documents.right.presets[0].inputEq[0], {
+    q: 0.44,
+    coefficients: { b0: 0.8, b1: 0, b2: 0, f1: 0.2, f2: 0 },
+    provenance: 'panel',
+  });
+  const mirrored = structuredClone(state().documents);
+  edits.mockClear();
+  expect(
+    await execute('fusion_eq_adjust', { ...input, parameter: 'q', basis: 'left' }),
+  ).toMatchObject({ ok: true, changed: true, roles: [{ value: 0.44 }, { value: 0.44 }] });
+  expect(edits).toHaveBeenCalledTimes(1);
+  expect(state().documents.left.presets[0].inputEq[0].coefficients).toBeUndefined();
+  expect(state().documents.left.presets[0].inputEq[0].enabled).toBe(false);
+  expect(state().documents.right).toEqual(mirrored.right);
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(mirrored);
+});
+it('preserves EQ bypass caches and per-role shape bypass, with independent whole-EQ activation and no-op history', async () => {
+  const { execute, state, adapter } = setup(),
+    edits = vi.spyOn(adapter, 'edit');
+  for (const role of ['left', 'right'] as const)
+    Object.assign(state().documents[role].presets[0].inputEq[0], {
+      enabled: role === 'right',
+      coefficients: { b0: 0.9, b1: 0, b2: 0, f1: 0.1, f2: 0 },
+      provenance: 'panel',
+    });
+  const before = structuredClone(state().documents),
+    input = { target: 'both', preset: 1, index: 1 };
+  expect(await execute('fusion_eq_set', { ...input, patch: { enabled: false } })).toMatchObject({
+    ok: true,
+  });
+  for (const role of ['left', 'right'] as const)
+    expect(state().documents[role].presets[0].inputEq[0].coefficients).toEqual(
+      before[role].presets[0].inputEq[0].coefficients,
+    );
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(before);
+  edits.mockClear();
+  expect(
+    await execute('fusion_eq_set', {
+      target: 'left',
+      preset: 1,
+      index: 1,
+      patch: { q: before.left.presets[0].inputEq[0].q },
+    }),
+  ).toMatchObject({ ok: true });
+  // An explicit q edit rounds the source's imported .707106... to .707.
+  expect(state().documents.left.presets[0].inputEq[0].q).toBe(0.707);
+  await execute('fusion_history', { action: 'undo' });
+  expect(
+    await execute('fusion_eq_set', { ...input, patch: { kind: 'highshelf2' }, enabled: true }),
+  ).toMatchObject({ ok: true });
+  for (const role of ['left', 'right'] as const) {
+    const p = state().documents[role].presets[0];
+    expect(p.inputEq[0].enabled).toBe(before[role].presets[0].inputEq[0].enabled);
+    expect(p.inputEq[0].coefficients).toBeUndefined();
+    expect(p.eqEnabled).toBe(true);
+  }
+  const current = structuredClone(state().documents);
+  edits.mockClear();
+  expect(await execute('fusion_eq_set', { ...input, patch: {}, enabled: true })).toMatchObject({
+    ok: true,
+  });
+  expect(edits).not.toHaveBeenCalled();
+  expect(state().documents).toEqual(current);
+});
+it('preflights every EQ bank before a paired edit and rejects malformed wheel arguments without history', async () => {
+  const { execute, state, adapter } = setup(),
+    edits = vi.spyOn(adapter, 'edit');
+  state().documents.right.presets[0].inputEq[8].kind = 'allpass2';
+  const before = structuredClone(state().documents),
+    input = { target: 'both', preset: 1, index: 1 };
+  expect(await execute('fusion_eq_set', { ...input, patch: { gain: 1 } })).toMatchObject({
+    ok: false,
+  });
+  expect(
+    await execute('fusion_eq_adjust', { ...input, parameter: 'gain', direction: 'up' }),
+  ).toMatchObject({ ok: false });
+  for (const extra of [
+    { parameter: 'q2' },
+    { basis: 'unknown' },
+    { step: 1 },
+    { parameter: 'frequency', direction: 'none' },
+  ])
+    expect(
+      await execute('fusion_eq_adjust', { ...input, parameter: 'q', direction: 'up', ...extra }),
+    ).toMatchObject({ ok: false });
+  expect(
+    await execute('fusion_eq_adjust', {
+      target: 'left',
+      preset: 1,
+      index: 1,
+      parameter: 'gain',
+      direction: 'up',
+      basis: 'right',
+    }),
+  ).toMatchObject({ ok: false });
+  expect(edits).not.toHaveBeenCalled();
+  expect(state().documents).toEqual(before);
+});
+it('bounds only explicitly edited EQ fields while retaining wider untouched imports and bypass state', async () => {
+  const { execute, state } = setup(),
+    left = state().documents.left.presets[0].inputEq[0];
+  Object.assign(left, { frequency: 720.123456789, q: 1.234567890123, gain: 24, enabled: false });
+  const input = { target: 'left', preset: 1, index: 1 };
+  expect(await execute('fusion_eq_set', { ...input, patch: { gain: 99 } })).toMatchObject({
+    ok: true,
+  });
+  expect(state().documents.left.presets[0].inputEq[0]).toMatchObject({
+    frequency: 720.123456789,
+    q: 1.234567890123,
+    gain: 15.9,
+    enabled: false,
+  });
+  expect(
+    await execute('fusion_eq_set', { ...input, patch: { gain: -99, q: -1, frequency: 1 } }),
+  ).toMatchObject({ ok: true });
+  expect(state().documents.left.presets[0].inputEq[0]).toMatchObject({
+    frequency: 10,
+    q: 0.1,
+    gain: -15.9,
+    enabled: false,
+  });
+});
+it('exposes explicit EQ cache redesign for Reset without changing ordinary bypass or no-op behavior', async () => {
+  const { execute, state } = setup();
+  for (const role of ['left', 'right'] as const)
+    Object.assign(state().documents[role].presets[0].inputEq[0], {
+      gain: 0,
+      enabled: false,
+      coefficients: { b0: 0.9, b1: 0, b2: 0, f1: 0.1, f2: 0 },
+      provenance: 'panel',
+    });
+  const before = structuredClone(state().documents),
+    input = { target: 'both', preset: 1, index: 1, patch: { enabled: false, gain: 0 } };
+  expect(await execute('fusion_eq_set', input)).toMatchObject({ ok: true });
+  expect(state().documents).toEqual(before);
+  expect(await execute('fusion_eq_set', { ...input, redesign: true })).toMatchObject({ ok: true });
+  for (const role of ['left', 'right'] as const) {
+    const f = state().documents[role].presets[0].inputEq[0];
+    expect(f.coefficients).toBeUndefined();
+    expect(f.provenance).toBeUndefined();
+    expect(f.enabled).toBe(false);
+    expect(f.gain).toBe(0);
+  }
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(before);
+});
 it('retains disabled raw coefficients under MCP bypass and latent edits and merges Both patches independently', async () => {
   const { execute, state, adapter } = setup();
   const vectors = {
@@ -279,7 +531,7 @@ it('exposes one strict wheel event with atomic independent Both changes, no-op p
   });
   const before = structuredClone(state().documents);
   expect(TOOL_DEFINITIONS.find((tool) => tool.name === 'fusion_filter_adjust')).toBeDefined();
-  expect(TOOL_DEFINITIONS).toHaveLength(90);
+  expect(TOOL_DEFINITIONS).toHaveLength(91);
   const event = {
     target: 'both',
     preset: 1,
@@ -1563,13 +1815,13 @@ it('EQ defaults, copy-all and transient bank operations preserve independent ste
     ).ok,
   ).toBe(false);
 });
-it('input EQ rejects unsupported filters and out-of-range gain atomically and decodes erased band9 at16k', async () => {
+it('input EQ rejects unsupported filters and nonfinite gain atomically and decodes erased band9 at16k', async () => {
   const { execute, state } = setup(),
     before = structuredClone(state().documents);
   for (const patch of [
     { kind: 'allpass2' },
     { kind: 'unity' },
-    { gain: 40 },
+    { gain: Infinity },
     { coefficients: { b0: 1, b1: 0, b2: 0, f1: 0, f2: 0 } },
   ])
     expect(

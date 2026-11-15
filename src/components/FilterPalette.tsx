@@ -14,6 +14,7 @@ import {
   HFD_MANUAL_Q_BOUNDS,
   HFD_MANUAL_GAIN_BOUNDS,
 } from '../domain/manual-parameter';
+import { HFD_INPUT_EQ_PROFILE } from '../domain/input-eq-parameters';
 
 export const FILTER_LABELS: Record<FilterKind, string> = {
   unity: 'Empty section',
@@ -228,7 +229,6 @@ export default function FilterPalette({
   const select = (kind: FilterKind) =>
     onDraft({
       kind,
-      ...(eq ? { enabled: true } : {}),
     });
   return (
     <dialog
@@ -393,19 +393,22 @@ export default function FilterPalette({
               {draft.kind !== 'raw' && (
                 <Numeric
                   label={draft.kind === 'asymmetric' ? 'Zero frequency' : 'Frequency'}
-                  frequencyWheel={eq ? 'input-eq' : 'advanced'}
+                  frequencyWheel={eq ? undefined : 'advanced'}
+                  inputEqParameter={eq ? 'frequency' : undefined}
+                  contextKey={`${parameterContext}:frequency`}
                   frequencyWheelMin={eq ? undefined : 10}
                   frequencyWheelMax={eq ? undefined : frequencyMaximum}
                   value={draft.frequency}
                   onChange={(frequency) => onDraft({ frequency })}
-                  deferTextCommit={!eq}
+                  deferTextCommit
                   normalizeText={
                     eq
                       ? undefined
                       : (text, previousValue) =>
                           normalizeHfdManualFrequencyText(text, { previousValue })
                   }
-                  min={eq ? 1 : 10}
+                  min={eq ? HFD_INPUT_EQ_PROFILE.frequency.min : 10}
+                  adjustmentBounds={eq ? { min: 1, max: 50000 } : undefined}
                   max={50000}
                   unit="Hz"
                 />
@@ -413,21 +416,24 @@ export default function FilterPalette({
               {hasGain(draft.kind) && (
                 <Numeric
                   label="Amount"
-                  contextKey={eq ? undefined : `${parameterContext}:gain`}
+                  contextKey={`${parameterContext}:gain`}
                   value={draft.gain}
                   onChange={(gain) => onDraft({ gain })}
                   parameterWheel={eq ? undefined : 'gain'}
-                  parameterWheelAdditionalGain={preset.channels[channelIndex].additionalGain ?? 0}
-                  deferTextCommit={!eq}
+                  inputEqParameter={eq ? 'gain' : undefined}
+                  parameterWheelAdditionalGain={
+                    eq ? undefined : (preset.channels[channelIndex].additionalGain ?? 0)
+                  }
+                  deferTextCommit
                   normalizeText={
                     eq
                       ? undefined
                       : (text, previousValue) => normalizeHfdManualGainText(text, { previousValue })
                   }
                   formatValue={eq ? undefined : formatHfdManualGainValue}
-                  min={eq ? -32 : HFD_MANUAL_GAIN_BOUNDS.min}
-                  max={eq ? 32 : HFD_MANUAL_GAIN_BOUNDS.max}
-                  adjustmentBounds={eq ? undefined : { min: -60, max: 60 }}
+                  min={eq ? HFD_INPUT_EQ_PROFILE.gain.min : HFD_MANUAL_GAIN_BOUNDS.min}
+                  max={eq ? HFD_INPUT_EQ_PROFILE.gain.max : HFD_MANUAL_GAIN_BOUNDS.max}
+                  adjustmentBounds={eq ? { min: -32, max: 32 } : { min: -60, max: 60 }}
                   unit="dB"
                   step={0.5}
                 />
@@ -436,21 +442,24 @@ export default function FilterPalette({
                 <Numeric
                   precision={3}
                   label={draft.kind === 'asymmetric' ? 'Zero Q' : 'Width · Q'}
-                  contextKey={eq ? undefined : `${parameterContext}:q`}
+                  contextKey={`${parameterContext}:q`}
                   value={draft.q}
                   onChange={(q) => onDraft({ q })}
                   parameterWheel={eq ? undefined : 'q'}
-                  parameterWheelAdditionalGain={preset.channels[channelIndex].additionalGain ?? 0}
-                  deferTextCommit={!eq}
+                  inputEqParameter={eq ? 'q' : undefined}
+                  parameterWheelAdditionalGain={
+                    eq ? undefined : (preset.channels[channelIndex].additionalGain ?? 0)
+                  }
+                  deferTextCommit
                   normalizeText={
                     eq
                       ? undefined
                       : (text, previousValue) => normalizeHfdManualQText(text, { previousValue })
                   }
                   formatValue={eq ? undefined : formatHfdManualQValue}
-                  min={eq ? 0.001 : HFD_MANUAL_Q_BOUNDS.min}
-                  max={eq ? 100 : HFD_MANUAL_Q_BOUNDS.max}
-                  adjustmentBounds={eq ? undefined : { min: 0.001, max: 100 }}
+                  min={eq ? HFD_INPUT_EQ_PROFILE.q.min : HFD_MANUAL_Q_BOUNDS.min}
+                  max={eq ? HFD_INPUT_EQ_PROFILE.q.max : HFD_MANUAL_Q_BOUNDS.max}
+                  adjustmentBounds={{ min: 0.001, max: 100 }}
                   step={0.05}
                 />
               )}

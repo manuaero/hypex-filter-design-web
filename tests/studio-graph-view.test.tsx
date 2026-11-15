@@ -966,6 +966,344 @@ async function typeNumeric(field: HTMLInputElement, text: string) {
   });
 }
 
+it('Input EQ inspector retains local frequency Text until commit and stores the shared profile Double', async () => {
+  const band = state().documents.left.presets[0].inputEq[0];
+  Object.assign(band, { kind: 'peak', enabled: false, frequency: 400, q: 0.7, gain: 0 });
+  await mount();
+  await act(async () => seen.adapter!.view({ tab: 'Input EQ', eqBand: 1 }));
+  const before = structuredClone(state().documents);
+  const input = host.querySelector<HTMLInputElement>(
+    '#selected-filter-inspector [aria-label="Frequency"]',
+  )!;
+  await typeNumeric(input, '10.35');
+  expect(input.value).toBe('10.35');
+  expect(state().documents).toEqual(before);
+  await act(async () => input.blur());
+  const next = state().documents.left.presets[0].inputEq[0];
+  expect(next.frequency).toBe(10.4);
+  expect(next.frequency).not.toBe(Math.fround(10.4));
+  expect(next.enabled).toBe(false);
+  expect(input.value).toBe('10.4');
+  expect(state().documents.right).toEqual(before.right);
+  expect(state().past).toHaveLength(1);
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+});
+
+it('explicit Input EQ Reset clears retained gain-zero caches even when its scalar parameters are already unchanged', async () => {
+  const coefficients = { b0: 0.8, b1: 0.125, b2: -0.0625, f1: -0.2, f2: 0.1 };
+  Object.assign(state().documents.left.presets[0].inputEq[0], {
+    kind: 'peak',
+    enabled: false,
+    gain: 0,
+    coefficients,
+    provenance: 'hfd',
+  });
+  Object.assign(state().documents.right.presets[0].inputEq[0], {
+    kind: 'peak',
+    enabled: true,
+    gain: 0,
+    coefficients: { ...coefficients, b0: 0.9 },
+    provenance: 'panel',
+  });
+  useWorkspace.setState({ linkedEdits: true });
+  await mount();
+  await act(async () => seen.adapter!.view({ tab: 'Input EQ', eqBand: 1 }));
+  const before = structuredClone(state().documents);
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>('button[title="Reset selected filter"]')!.click(),
+  );
+  for (const role of ['left', 'right'] as const) {
+    const band = state().documents[role].presets[0].inputEq[0];
+    expect(band).toMatchObject({ gain: 0, enabled: false });
+    expect(band.coefficients).toBeUndefined();
+    expect(band.provenance).toBeUndefined();
+  }
+  expect(state().past).toHaveLength(1);
+  const reset = structuredClone(state().documents);
+  const enabled = [...host.querySelectorAll<HTMLLabelElement>('.toggle-label')]
+    .find((label) => label.textContent?.trim() === 'Filter enabled')!
+    .querySelector<HTMLInputElement>('input')!;
+  await act(async () => enabled.click());
+  for (const role of ['left', 'right'] as const) {
+    expect(state().documents[role].presets[0].inputEq[0].enabled).toBe(true);
+    expect(state().documents[role].presets[0].inputEq[0].coefficients).toBeUndefined();
+  }
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(reset);
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+});
+
+it('Input EQ type replacement preserves independent band bypass in the selector and palette unless explicitly overridden', async () => {
+  Object.assign(state().documents.left.presets[0].inputEq[0], {
+    kind: 'peak',
+    enabled: false,
+    q: 0.7,
+  });
+  Object.assign(state().documents.right.presets[0].inputEq[0], {
+    kind: 'peak',
+    enabled: true,
+    q: 1.3,
+  });
+  useWorkspace.setState({ linkedEdits: true });
+  await mount();
+  await act(async () => seen.adapter!.view({ tab: 'Input EQ', eqBand: 1 }));
+  const before = structuredClone(state().documents);
+  const selector = host.querySelector<HTMLSelectElement>('.exact-filter-type select')!;
+  await act(async () => {
+    selector.value = 'lowshelf2';
+    selector.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  expect(state().documents.left.presets[0].inputEq[0]).toMatchObject({
+    kind: 'lowshelf2',
+    enabled: false,
+  });
+  expect(state().documents.right.presets[0].inputEq[0]).toMatchObject({
+    kind: 'lowshelf2',
+    enabled: true,
+  });
+  expect(state().past).toHaveLength(1);
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+  await act(async () => host.querySelector<HTMLButtonElement>('.inspector-shape')!.click());
+  let dialog = host.querySelector<HTMLDialogElement>('dialog[aria-label="Change filter type"]')!;
+  await act(async () =>
+    [...dialog.querySelectorAll<HTMLButtonElement>('.shape-choice')]
+      .find((b) => b.textContent?.includes('High shelf'))!
+      .click(),
+  );
+  await act(async () =>
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Apply shape')!.click(),
+  );
+  expect(state().documents.left.presets[0].inputEq[0]).toMatchObject({
+    kind: 'highshelf2',
+    enabled: false,
+  });
+  expect(state().documents.right.presets[0].inputEq[0]).toMatchObject({
+    kind: 'highshelf2',
+    enabled: true,
+  });
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+  await act(async () => host.querySelector<HTMLButtonElement>('.inspector-shape')!.click());
+  dialog = host.querySelector<HTMLDialogElement>('dialog[aria-label="Change filter type"]')!;
+  await act(async () => {
+    expect(
+      await createToolExecutor(seen.adapter!)('fusion_filter_palette', {
+        action: 'update',
+        draft: { enabled: true },
+      }),
+    ).toMatchObject({ ok: true });
+  });
+  await act(async () =>
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Apply shape')!.click(),
+  );
+  expect(state().documents.left.presets[0].inputEq[0].enabled).toBe(true);
+  expect(state().documents.right.presets[0].inputEq[0].enabled).toBe(true);
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+});
+
+it('Input EQ inspector wheel mirrors one profile source event without output AdditionalGain and preserves one Undo', async () => {
+  Object.assign(state().documents.left.presets[0].inputEq[0], {
+    kind: 'peak',
+    enabled: false,
+    q: 0.7,
+    gain: 15.85,
+  });
+  Object.assign(state().documents.right.presets[0].inputEq[0], {
+    kind: 'peak',
+    enabled: true,
+    q: 1.3,
+    gain: -2,
+  });
+  state().documents.left.presets[0].channels[0].additionalGain = 10;
+  useWorkspace.setState({ linkedEdits: true });
+  await mount();
+  await act(async () => seen.adapter!.view({ tab: 'Input EQ', eqBand: 1 }));
+  const before = structuredClone(state().documents);
+  const gain = host.querySelector<HTMLInputElement>(
+    '#selected-filter-inspector [aria-label="Filter gain"]',
+  )!;
+  await spin(gain, -360);
+  for (const role of ['left', 'right'] as const)
+    expect(state().documents[role].presets[0].inputEq[0].gain).toBe(15.9);
+  expect(gain.value).toBe('15.90');
+  expect(host.querySelector('#selected-filter-inspector')!.textContent).not.toContain('Stored');
+  expect(state().past).toHaveLength(1);
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+  const q = host.querySelector<HTMLInputElement>(
+    '#selected-filter-inspector [aria-label="Q factor"]',
+  )!;
+  await spin(q, -120);
+  expect(state().documents.left.presets[0].inputEq[0]).toMatchObject({ q: 0.74, enabled: false });
+  expect(state().documents.right.presets[0].inputEq[0]).toMatchObject({ q: 0.74, enabled: true });
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+});
+
+it('Input EQ Mirror wheel and typed edits retain an unchanged peer exact cache and provenance', async () => {
+  const leftCache = { b0: 0.8, b1: 0.125, b2: -0.0625, f1: -0.2, f2: 0.1 };
+  const rightCache = { b0: 0.9, b1: -0.0625, b2: 0.03125, f1: 0.3, f2: -0.125 };
+  Object.assign(state().documents.left.presets[0].inputEq[0], {
+    kind: 'peak',
+    q: 0.4,
+    gain: 0,
+    enabled: false,
+    coefficients: leftCache,
+    provenance: 'hfd',
+  });
+  Object.assign(state().documents.right.presets[0].inputEq[0], {
+    kind: 'peak',
+    q: 0.44,
+    gain: 0,
+    enabled: true,
+    coefficients: rightCache,
+    provenance: 'panel',
+  });
+  useWorkspace.setState({ linkedEdits: true });
+  await mount();
+  await act(async () => seen.adapter!.view({ tab: 'Input EQ', eqBand: 1 }));
+  const before = structuredClone(state().documents);
+  const q = host.querySelector<HTMLInputElement>(
+    '#selected-filter-inspector [aria-label="Q factor"]',
+  )!;
+  const verify = () => {
+    const changed = state().documents.left.presets[0].inputEq[0];
+    expect(changed).toMatchObject({ q: 0.44, enabled: false });
+    expect(changed.coefficients).toBeUndefined();
+    expect(changed.provenance).toBeUndefined();
+    expect(state().documents.right).toEqual(before.right);
+    const expectedLeft = structuredClone(before.left);
+    expectedLeft.presets[0].inputEq[0] = { ...expectedLeft.presets[0].inputEq[0], q: 0.44 };
+    delete expectedLeft.presets[0].inputEq[0].coefficients;
+    delete expectedLeft.presets[0].inputEq[0].provenance;
+    expect(state().documents.left).toEqual(expectedLeft);
+    expect(state().past).toHaveLength(1);
+  };
+  await spin(q, -120);
+  verify();
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+  await typeNumeric(q, '0.44');
+  await act(async () => q.blur());
+  verify();
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+});
+
+it('Input EQ paired edits validate the complete counterpart bank before publishing a source wheel or typed commit', async () => {
+  state().documents.right.presets[0].inputEq[8].gain = 100;
+  useWorkspace.setState({ linkedEdits: true });
+  await mount();
+  await act(async () => seen.adapter!.view({ tab: 'Input EQ', eqBand: 1 }));
+  const before = structuredClone(state().documents),
+    revision = state().documentRevision;
+  const q = host.querySelector<HTMLInputElement>(
+    '#selected-filter-inspector [aria-label="Q factor"]',
+  )!;
+  await spin(q, -120);
+  expect(state().documents).toEqual(before);
+  expect(q.value).toBe('0.707');
+  expect(state().documentRevision).toBe(revision);
+  expect(state().past).toHaveLength(0);
+  const frequency = host.querySelector<HTMLInputElement>(
+    '#selected-filter-inspector [aria-label="Frequency"]',
+  )!;
+  await typeNumeric(frequency, '10.35');
+  await act(async () => frequency.blur());
+  expect(state().documents).toEqual(before);
+  expect(state().documentRevision).toBe(revision);
+  expect(state().past).toHaveLength(0);
+  expect(host.textContent).toMatch(/metadata exceeds device range/i);
+});
+
+it('Input EQ no-op bounds and passive band selection retain imported caches and discard pending drafts', async () => {
+  const coefficients = { b0: 0.8, b1: 0.125, b2: -0.0625, f1: -0.2, f2: 0.1 };
+  Object.assign(state().documents.left.presets[0].inputEq[0], {
+    kind: 'peak',
+    enabled: false,
+    q: 20.000001,
+    coefficients,
+    provenance: 'hfd',
+  });
+  useWorkspace.setState({ linkedEdits: true });
+  await mount();
+  await act(async () => seen.adapter!.view({ tab: 'Input EQ', eqBand: 1 }));
+  const before = structuredClone(state().documents),
+    revision = state().documentRevision;
+  const q = host.querySelector<HTMLInputElement>(
+    '#selected-filter-inspector [aria-label="Q factor"]',
+  )!;
+  expect(q.value).toBe('20.000');
+  await spin(q, -120);
+  expect(state().documents).toEqual(before);
+  expect(state().documentRevision).toBe(revision);
+  expect(state().past).toHaveLength(0);
+  await typeNumeric(q, '-');
+  await act(async () => seen.adapter!.view({ eqBand: 2 }));
+  expect(q.value).toBe('0.707');
+  await act(async () => q.blur());
+  expect(state().documents).toEqual(before);
+  expect(state().past).toHaveLength(0);
+});
+
+it('Input EQ palette shares Double commits and profile wheels while staging until Apply or Cancel', async () => {
+  Object.assign(state().documents.left.presets[0].inputEq[0], {
+    kind: 'peak',
+    enabled: false,
+    q: 0.7,
+    gain: 0,
+  });
+  state().documents.left.presets[0].channels[0].additionalGain = 10;
+  await mount();
+  await act(async () => seen.adapter!.view({ tab: 'Input EQ', eqBand: 1 }));
+  const before = structuredClone(state().documents);
+  await act(async () => host.querySelector<HTMLButtonElement>('.inspector-shape')!.click());
+  let dialog = host.querySelector<HTMLDialogElement>('dialog[aria-label="Change filter type"]')!;
+  const f = dialog.querySelector<HTMLInputElement>('[aria-label="Frequency"]')!,
+    q = dialog.querySelector<HTMLInputElement>('[aria-label="Width · Q"]')!,
+    gain = dialog.querySelector<HTMLInputElement>('[aria-label="Amount"]')!;
+  for (const [input, text] of [
+    [f, '10.35'],
+    [q, '0.4005'],
+    [gain, '7.555'],
+  ] as const) {
+    await typeNumeric(input, text);
+    expect(state().documents).toEqual(before);
+    await act(async () => input.blur());
+  }
+  expect(f.value).toBe('10.4');
+  expect(q.value).toBe('0.401');
+  expect(gain.value).toBe('7.56');
+  await spin(f, -120);
+  await spin(q, -360);
+  await spin(gain, -120);
+  expect(f.value).toBe('11.4');
+  expect(q.value).toBe('0.441');
+  expect(gain.value).toBe('7.66');
+  expect(state().documents).toEqual(before);
+  await act(async () =>
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Apply shape')!.click(),
+  );
+  const next = state().documents.left.presets[0].inputEq[0];
+  expect(next).toMatchObject({ frequency: 11.4, q: 0.441, gain: 7.66, enabled: false });
+  expect(next.frequency).not.toBe(Math.fround(11.4));
+  expect(state().documents.right).toEqual(before.right);
+  expect(state().past).toHaveLength(1);
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+  await act(async () => host.querySelector<HTMLButtonElement>('.inspector-shape')!.click());
+  dialog = host.querySelector<HTMLDialogElement>('dialog[aria-label="Change filter type"]')!;
+  await typeNumeric(dialog.querySelector<HTMLInputElement>('[aria-label="Amount"]')!, '-');
+  await act(async () =>
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Cancel')!.click(),
+  );
+  expect(state().documents).toEqual(before);
+});
+
 it('raw inspector preserves retained bypassed vectors and merges one committed Mirror coefficient independently per role', async () => {
   const left = { b0: 0.25, b1: 0.125, b2: -0.0625, f1: -0.2, f2: 0.1 };
   const right = { b0: 0.5, b1: -0.15, b2: 0.03125, f1: 0.3, f2: -0.125 };

@@ -1,6 +1,8 @@
 import { encodeEq } from '../hardware/codec';
 import { finite } from './dsp';
 import type { Filter, Preset, Project } from './model';
+import type { ManualFilterPatch } from './editing';
+import { normalizeHfdInputEqText } from './input-eq-parameters';
 
 export type EqBankEntry = { bands: Filter[]; enabled: boolean };
 export type EqBank = EqBankEntry[];
@@ -9,6 +11,44 @@ export type EqBank = EqBankEntry[];
 // Its ninth entry is 16 kHz; this is not the new-project/erased-page path.
 const DEFAULT_CENTERS = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 16000] as const;
 const EQ_KINDS = ['peak', 'lowshelf2', 'highshelf2'];
+
+/** Explicit input-EQ authoring only. Selection/import never calls this helper.
+ * UI FloatEdit results may already be normalized; MCP decimal values use the
+ * same fixed EQ profile. Bypass and unchanged values retain original caches. */
+export function editInputEqBand(
+  current: Filter,
+  patch: ManualFilterPatch,
+  { normalize = true, redesign = false }: { normalize?: boolean; redesign?: boolean } = {},
+): Filter {
+  if (patch.coefficients !== undefined)
+    throw new Error('Input EQ does not support manual coefficient overrides');
+  const { coefficients: _coefficients, ...parameters } = patch;
+  const source =
+    Object.keys(parameters).length && current.kind === 'unity' && !current.enabled
+      ? { ...current, kind: 'peak' as const, gain: 0 }
+      : current;
+  const next = { ...source, ...parameters, id: current.id };
+  if (Object.hasOwn(current, 'sourceId')) next.sourceId = current.sourceId;
+  else delete next.sourceId;
+  for (const field of ['frequency', 'q', 'gain'] as const) {
+    if (parameters[field] === undefined) continue;
+    if (!Number.isFinite(parameters[field])) throw new Error('Input EQ parameter must be finite');
+    next[field] = normalize
+      ? normalizeHfdInputEqText(field, String(parameters[field]), { previousValue: current[field] })
+          .value
+      : parameters[field];
+  }
+  if (
+    redesign ||
+    (['kind', 'frequency', 'q', 'gain', 'shelfDirection'] as const).some(
+      (field) => !Object.is(next[field], current[field]),
+    )
+  ) {
+    delete next.coefficients;
+    delete next.provenance;
+  }
+  return next;
+}
 
 function presetIndex(index: number) {
   if (!Number.isInteger(index) || index < 0 || index >= 3)

@@ -16,6 +16,8 @@ export interface ManualNumberOptions {
   previousValue?: number;
   storage: 'single' | 'double';
   label: string;
+  /** Source literal80-bit bounds, distinct from promoted configuration Doubles. */
+  extendedBounds?: { readonly min: string; readonly max: string };
 }
 type Ratio = { n: bigint; d: bigint };
 const pow2 = (exponent: number) => 1n << BigInt(exponent);
@@ -127,13 +129,35 @@ function fixed(value: Ratio, places: ManualNumberPlaces) {
   return `${rounded < 0n ? '-' : ''}${absolute / decimalScale}.${String(absolute % decimalScale).padStart(places, '0')}`;
 }
 
+function numberBounds(
+  min: number,
+  max: number,
+  literals: ManualNumberOptions['extendedBounds'],
+  label: string,
+) {
+  const minimum = literals ? parse(literals.min, label) : double(min),
+    maximum = literals ? parse(literals.max, label) : double(max);
+  if (literals && (!Object.is(storeDouble(minimum), min) || !Object.is(storeDouble(maximum), max)))
+    throw new Error(`Invalid manual ${label.toLowerCase()} literal bounds`);
+  return { minimum, maximum };
+}
+
 /** Bounded whole-value commit, distinct from native per-keystroke timing.
  * Grammar: printable ASCII decimal dot/comma and ordinary exponents;128 chars,
  * absolute explicit/net exponent<=400. No special/nonfinite input strings.
  */
 export function normalizeManualNumberText(
   text: string,
-  { min, max, places, zeroAllowed, previousValue, storage, label }: ManualNumberOptions,
+  {
+    min,
+    max,
+    places,
+    zeroAllowed,
+    previousValue,
+    storage,
+    label,
+    extendedBounds,
+  }: ManualNumberOptions,
 ): ManualNumberResult {
   if (
     !Number.isFinite(min) ||
@@ -144,6 +168,7 @@ export function normalizeManualNumberText(
     !['single', 'double'].includes(storage)
   )
     throw new Error(`Invalid manual ${label.toLowerCase()} bounds or format`);
+  const { minimum, maximum } = numberBounds(min, max, extendedBounds, label);
   let value = parse(text, label);
   if (!zeroAllowed && value.n === 0n) {
     // ba6ee3..ba6ef0 skips exact0, then formats the old internal Value.
@@ -155,8 +180,6 @@ export function normalizeManualNumberText(
       throw new Error(`Zero ${label.toLowerCase()} requires the previous field value`);
     value = double(previousValue);
   } else {
-    const minimum = double(min),
-      maximum = double(max);
     if (compare(value, minimum) < 0n) value = minimum;
     else if (compare(value, maximum) > 0n) value = maximum;
   }
@@ -181,15 +204,17 @@ export interface ManualNumberWheelState {
   readonly [wheelStateBrand]: true;
 }
 export interface ManualNumberWheelOptions {
-  parameter: 'q' | 'gain';
+  parameter: 'frequency' | 'q' | 'gain';
+  profile?: 'ordinary' | 'input-eq';
   displayedText?: string;
   state?: ManualNumberWheelState;
-  step: number;
+  step: number | 'decade';
   min: number;
   max: number;
-  places: 2 | 3;
+  places: ManualNumberPlaces;
   zeroAllowed: boolean;
   additionalGain: number;
+  extendedBounds?: { readonly min: string; readonly max: string };
 }
 export interface ManualNumberWheelResult extends ManualNumberResult {
   changed: boolean;
@@ -199,7 +224,8 @@ interface WheelMemory {
   internal: Ratio;
   text: string;
   value: number;
-  parameter: 'q' | 'gain';
+  parameter: 'frequency' | 'q' | 'gain';
+  profile: 'ordinary' | 'input-eq';
 }
 const wheelMemory = new WeakMap<ManualNumberWheelState, WheelMemory>();
 const addExtended = (a: Ratio, b: Ratio) => extended({ n: a.n * b.d + b.n * a.d, d: a.d * b.d });
@@ -227,12 +253,17 @@ export function adjustManualNumberWheel(
   direction: -1 | 1,
   options: ManualNumberWheelOptions,
 ): ManualNumberWheelResult {
-  const { parameter, step, min, max, places, zeroAllowed, additionalGain } = options;
+  const { parameter, step, min, max, places, zeroAllowed, additionalGain } = options,
+    profile = options.profile ?? 'ordinary';
   if (
-    !['q', 'gain'].includes(parameter) ||
+    !['ordinary', 'input-eq'].includes(profile) ||
+    !['frequency', 'q', 'gain'].includes(parameter) ||
+    (parameter === 'frequency' && profile !== 'input-eq') ||
     (direction !== -1 && direction !== 1) ||
-    ![2, 3].includes(places) ||
-    [value, step, min, max, additionalGain].some(
+    ![1, 2, 3].includes(places) ||
+    (step === 'decade' ? parameter !== 'frequency' : !Number.isFinite(step)) ||
+    (typeof step === 'number' && Math.abs(step) >= 1e17) ||
+    [value, min, max, additionalGain].some(
       (number) => !Number.isFinite(number) || Math.abs(number) >= 1e17,
     ) ||
     min > max
@@ -242,7 +273,10 @@ export function adjustManualNumberWheel(
   const previous = options.state === undefined ? undefined : wheelMemory.get(options.state);
   if (
     options.state !== undefined &&
-    (!previous || previous.parameter !== parameter || !Object.is(previous.value, value))
+    (!previous ||
+      previous.parameter !== parameter ||
+      previous.profile !== profile ||
+      !Object.is(previous.value, value))
   )
     throw new Error('Manual wheel state does not match the current field value');
   let text = options.displayedText ?? previous?.text ?? fixed(double(value), places);
@@ -250,13 +284,21 @@ export function adjustManualNumberWheel(
     throw new Error('Manual wheel state does not match the displayed text');
   // Strict dirty-Text admission is intentional; do not turn malformed/NAN/INF
   // input into zero or silently substitute the canonical model value.
-  if (!Number.isFinite(storeDouble(parse(text, 'Wheel value'))))
+  const parsedText = parse(text, 'Wheel value');
+  if (!Number.isFinite(storeDouble(parsedText)))
     throw new Error('Wheel value cannot be stored as Double');
   let internal = previous?.internal ?? double(value),
     model = value;
-  const minimum = double(min),
-    maximum = double(max),
-    delta = double(direction * step);
+  const { minimum, maximum } = numberBounds(min, max, options.extendedBounds, 'Wheel value');
+  // cee9e4 reads Text as Extended for the directional100/1000/10000
+  // thresholds. Do not narrow dirty Text to Double before choosing its decade.
+  const before = (boundary: number) =>
+    direction > 0
+      ? compare(parsedText, double(boundary)) < 0n
+      : compare(parsedText, double(boundary)) <= 0n;
+  const amount =
+      step === 'decade' ? (before(100) ? 1 : before(1000) ? 10 : before(10000) ? 100 : 1000) : step,
+    delta = double(direction * amount);
 
   function setBounded(candidate: Ratio, notify = true) {
     if (!zeroAllowed && candidate.n === 0n) {
@@ -282,7 +324,7 @@ export function adjustManualNumberWheel(
     setBounded(addExtended(parse(text, 'Wheel value'), amount));
   }
 
-  if (parameter === 'gain') {
+  if (parameter === 'gain' && profile === 'ordinary') {
     // c64323: Text is narrowed to Double, then channel AdditionalGain is added
     // in Extended. This ceiling follows AddValue even when its delta was0.
     const parsed = storeDouble(parse(text, 'Wheel value'));
@@ -295,6 +337,6 @@ export function adjustManualNumberWheel(
 
   if (!Number.isFinite(model)) throw new Error('Wheel value cannot be stored as Double');
   const state = Object.freeze({}) as ManualNumberWheelState;
-  wheelMemory.set(state, { internal, text, value: model, parameter });
+  wheelMemory.set(state, { internal, text, value: model, parameter, profile });
   return { text, value: model, changed: !Object.is(model, value), state };
 }

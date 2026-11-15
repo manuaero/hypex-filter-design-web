@@ -2,7 +2,7 @@
 
 Agents use the same controllers and validation as the human interface. Normal users can work entirely through visible controls; the optional command console is a development aid.
 
-The current registry contains **90 commands**, including stateless native parameter-wheel adjustments, shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
+The current registry contains **91 commands**, including stateless native parameter-wheel adjustments, shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
 
 ## Pair a local client
 
@@ -328,3 +328,27 @@ The optional hosted bridge has its own authentication and browser-lease checks. 
 Each role merges only `b0` into its own complete finite vector. The other four values, bypass state and first-cache interpretation stay independent. All targets are preflighted before one Undoable edit; malformed or linked destinations refuse the entire operation. An exact no-op retains metadata and history. Raw bypass or latent parameter edits retain the vector under the default redesign option. Full nonraw cache overrides remain compatible; changed vectors clear stale original-coefficient provenance.
 
 Direct raw Add starts at Unity. Conversion captures the current unbypassed section; the palette converts its staged preview and replaces the whole proposed section only on Apply. Human typed coefficients commit on Enter/blur. Partial coefficient authoring does not resolve an ambiguous gain cache or weaken compile stability/Q24 checks. The core/MCP can retain signed zero in memory; existing UI/JSON number semantics canonicalize it. These 29 browser checks exercised the shared executor through the optional developer console, not a remote MCP transport. See [explicit coefficient editing](HFD-RAW-COEFFICIENT-EDITOR.md).
+
+## V42 Input EQ parameter checkpoint
+
+Input EQ frequency, Q and gain have their own recovered FloatEdit authoring profile. Frequency commits to **Double**, unlike the ordinary output-BQ Single path:
+
+| Field | Explicit Text bounds | Fixed display | Wheel event |
+| --- | --- | --- | --- |
+| Frequency | 10–50,000 Hz | one decimal | directional 1/10/100/1,000 Hz decades |
+| Q | 0.1–20 | three decimals | 0.04 |
+| Gain | −15.9…15.9 dB | two decimals | 0.1 dB |
+
+Whole Text is parsed/normalized with the recovered Extended arithmetic, then formatted and reparsed to Double. Exact frequency/Q zero keeps the previous internal value before that format/reparse, so excess canonical precision may round; gain zero is accepted. Strict finite browser input and semantic Enter/blur commits are bounded adaptations, not native per-keystroke timing acceptance. Untouched imported parameters are retained. EQ wheels do not use output-channel AdditionalGain.
+
+`fusion_eq_adjust` applies one signed, stateless wheel event. Magnitude, custom steps and private field state are not tool arguments:
+
+```json
+{"target":"both","preset":1,"index":1,"parameter":"q","direction":"up","basis":"each"}
+```
+
+The default basis advances each selected role independently; `left` or `right` mirrors that selected source's changed value. A source no-op does not overwrite its peer. Each result returns the role's own Text and value. All destination EQ banks validate before a single Undoable design transaction, with no amplifier I/O. `fusion_eq_set` uses the same committed-field profile. Its `patch.enabled` controls one band; the separate top-level `enabled` controls whole-EQ activation. Type changes retain per-role band bypass unless explicitly changed.
+
+Changed design fields clear their own old coefficient/provenance cache. Bypass, exact no-ops and unchanged mirrored peers retain it. Explicit Reset uses `redesign:true` to clear the cache even when scalars already match; ordinary edits leave this false. Human inspector wheels use field-local opaque state, while creation-palette edits stay local until Apply. Passive native band-selection normalization and actual native EQ popup/Default acceptance remain open.
+
+Actual isolated Studio work recorded **45 accepted browser checks and two retained initial unaccepted assertions** among 47 observed attempts. The immediate graph-footer heading assertion was corrected by subsequent DOM and later footer observations. A fast leading-dot commit initially appeared unchanged; its cause remains unproven. Observed-draft commits, three repeated wheel/Undo/leading-dot sequences and five separate JSDOM diagnostics passed. No product defect was reproduced, but JSDOM does not adjudicate the browser observation and its timing qualification remains open. These synthetic browser checks exercise the shared executor, not a remote MCP transport. Native/physical EQ uploads, two physical amplifiers, macOS USB and download delivery are not qualified. See [Input EQ field scope](HFD-INPUT-EQ-FIELDS-v42.md).

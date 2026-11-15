@@ -13,6 +13,7 @@ import {
 import { newProject } from '../src/domain/model';
 import { createWorkspaceStore } from '../src/state/workspace';
 import { assertWorkspaceWrite, type WorkspaceEnvelope } from '../src/state/persistence';
+import { HFD_INPUT_EQ_PROFILE } from '../src/domain/input-eq-parameters';
 
 let host: HTMLDivElement, root: Root;
 beforeEach(() => {
@@ -28,6 +29,94 @@ afterEach(async () => {
 function field() {
   return host.querySelector<HTMLInputElement>('input')!;
 }
+
+it.each([
+  ['frequency', 400, '10.35', 10.4, '10.4'],
+  ['q', 0.7, '0.4005', 0.401, '0.401'],
+  ['gain', 7.5, '7.555', 7.56, '7.56'],
+] as const)(
+  'Input EQ %s commits local Text as its fixed-profile Double',
+  async (parameter, initial, text, expected, shown) => {
+    const profile = HFD_INPUT_EQ_PROFILE[parameter];
+    const changed = await render(initial, {
+      inputEqParameter: parameter,
+      frequencyWheel: undefined,
+      min: profile.min,
+      max: profile.max,
+    });
+    await act(async () => field().focus());
+    await enter(text);
+    expect(field().value).toBe(text);
+    expect(changed).not.toHaveBeenCalled();
+    await key('Enter');
+    expect(changed).toHaveBeenCalledExactlyOnceWith(expected);
+    expect(expected).not.toBe(Math.fround(expected));
+    expect(field().value).toBe(shown);
+  },
+);
+
+it.each([
+  ['frequency', 100, 110, 100, 99],
+  ['q', 0.7, 0.74, 0.7, 0.66],
+  ['gain', 15.85, 15.9, 15.8, 15.7],
+] as const)(
+  'Input EQ %s wheel uses the full profile once per event without channel AdditionalGain',
+  async (parameter, initial, up, down, again) => {
+    const profile = HFD_INPUT_EQ_PROFILE[parameter];
+    const changed = await render(initial, {
+      inputEqParameter: parameter,
+      frequencyWheel: undefined,
+      min: profile.min,
+      max: profile.max,
+      parameterWheelAdditionalGain: 10,
+    });
+    expect((await wheel(-360)).defaultPrevented).toBe(true);
+    expect(changed).toHaveBeenLastCalledWith(up);
+    expect((await wheel(0)).defaultPrevented).toBe(false);
+    expect(changed).toHaveBeenCalledTimes(1);
+    await wheel(120);
+    expect(changed).toHaveBeenLastCalledWith(down);
+    await wheel(1);
+    expect(changed).toHaveBeenLastCalledWith(again);
+    expect(host.textContent).not.toContain('Stored');
+  },
+);
+
+it('Input EQ passive formatting preserves imported precision and resets wheel state after external replacement', async () => {
+  const changed = vi.fn();
+  let replace!: (value: number) => void;
+  function Controlled() {
+    const [value, setValue] = useState(20.000001);
+    replace = setValue;
+    return (
+      <Numeric
+        label="Input EQ Q"
+        value={value}
+        inputEqParameter="q"
+        contextKey="left:eq1"
+        onChange={(next) => {
+          changed(next);
+          setValue(next);
+        }}
+      />
+    );
+  }
+  await act(async () => root.render(<Controlled />));
+  expect(field().value).toBe('20.000');
+  await act(async () => field().focus());
+  await act(async () => field().blur());
+  expect(changed).not.toHaveBeenCalled();
+  await wheel(-120);
+  expect(changed).not.toHaveBeenCalled();
+  await act(async () => replace(1.3));
+  await wheel(120);
+  expect(changed).toHaveBeenCalledExactlyOnceWith(1.26);
+  await act(async () => field().focus());
+  await enter('not finite');
+  await act(async () => field().blur());
+  expect(changed).toHaveBeenCalledTimes(1);
+  expect(field().value).toBe('1.260');
+});
 
 it('keeps continuous decimal typing live and discards a focused draft after an external value replacement', async () => {
   const changed = vi.fn();

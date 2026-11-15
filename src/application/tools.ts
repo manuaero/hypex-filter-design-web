@@ -3,6 +3,7 @@ import {
   copyInputEqToPresets,
   snapshotEqBank,
   applyEqBank,
+  editInputEqBand,
   type EqBank,
 } from '../domain/equalizer';
 import { readEqBank, uploadEqBankPair, EqBankUploadError } from '../hardware/eq-bank';
@@ -35,6 +36,7 @@ import {
   resetMeasurementProcessing,
 } from '../domain/measurement';
 import { z } from 'zod';
+import { hfdInputEqWheelNext, formatHfdInputEqValue } from '../domain/input-eq-parameters';
 import {
   type Slot,
   type Channel,
@@ -469,9 +471,9 @@ const eqFilterPatch = z
   .object({
     kind: z.enum(['peak', 'lowshelf2', 'highshelf2']).optional(),
     enabled: z.boolean().optional(),
-    frequency: finite.positive().max(50000).optional(),
-    q: finite.positive().max(100).optional(),
-    gain: finite.min(-32).max(32).optional(),
+    frequency: finite.optional(),
+    q: finite.optional(),
+    gain: finite.optional(),
   })
   .strict();
 const channelPatch = z
@@ -1099,6 +1101,17 @@ const schemas = {
       index: z.number().int().min(1).max(9),
       patch: eqFilterPatch,
       enabled: z.boolean().optional(),
+      redesign: z.boolean().default(false),
+    })
+    .strict(),
+  fusion_eq_adjust: z
+    .object({
+      target,
+      preset,
+      index: z.number().int().min(1).max(9),
+      parameter: z.enum(['frequency', 'q', 'gain']),
+      direction: z.enum(['up', 'down']),
+      basis: z.enum(['each', 'left', 'right']).default('each'),
     })
     .strict(),
   fusion_fir_set: z
@@ -1688,7 +1701,10 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     'Inspect granted local project database folders and recent projects, sort direct Config.xml project folders, or open fresh validated files into explicit design roles. Open requires trusted context, current document revision and a retry-stable requestId. Filesystem grants occur only through the human folder picker. Library references remain labeled snapshots. No hardware calls or permission prompts.',
   fusion_project_directory:
     'Save or Save As one explicit design role into a previously write-granted project folder. Prepare captures the revision, files and recovery copies before commit; review before authorizing replacements. Retry resumes that exact export; recovery restores originals while retaining introduced files. Status pages save history with offset/limit/includeArchived and record files/outcome paths with id/fileOffset/fileLimit. export-recovery creates a bounded file transfer; format:zip preserves raw binary recovery files. review-archive captures a terminal record; archive requires its reviewId, confirm:true and removeLocalRecovery:true, then removes browser recovery copies while retaining a historical replay receipt. Offer export first; a download does not establish durable external backup. Partial/uncertain records cannot be archived. Older records marked needsLocalAdoption expose metadata only: review-legacy prepares a bounded review and may open the local approval UI (localReviewOpened). adopt-legacy requires a locally minted human UI context; paired/manual/WebMCP calls cannot self-approve with confirm or owner arguments. After local approval, original IDs, owners and receipts remain intact and normal record operations work. Requires trusted workspace admission; never prompts for filesystem permissions or calls the amplifier.',
-  fusion_eq_set: 'Edit a band in the separate nine-band input EQ design.',
+  fusion_eq_set:
+    'Edit one of nine input EQ bands. Explicit frequency/Q/gain values commit through the EQ FloatEdit profile: 10–50,000 Hz/one decimal, Q 0.1–20/three decimals, gain −15.9…15.9 dB/two decimals; all use Double storage. Exact frequency/Q zero restores each role’s previous internal field value before formatting and Double reparse, so imported extra precision may round; gain zero is accepted. Type changes preserve band Enabled unless supplied. Whole-EQ enabled is separate. Untouched imported fields stay unchanged. redesign:true explicitly clears the preserved coefficient cache for a Reset even when numeric values are unchanged; default false retains bypass/no-op caches. All selected designs validate before one Undoable edit; no amplifier I/O.',
+  fusion_eq_adjust:
+    'Apply one stateless input-EQ wheel event to a one-based preset/band index. Frequency uses the native decade step, Q uses 0.04, gain uses 0.1; full FloatEdit bounds/format/reparse and Double storage apply. There is no output-channel AdditionalGain ceiling. Both basis:each adjusts independent values; basis:left/right mirrors a changed source value while preserving every role’s bypass and other fields. A source no-op never mirrors. Each command starts from a fresh passive display; continuous human gestures have separate opaque field state. All targets preflight before one Undoable edit; no amplifier I/O or native popup acceptance is implied.',
   fusion_fir_set:
     'Load or replace FIR taps while retaining bypass and placement unless enabled is explicit; browser clear unloads and bypasses. Alternatively supply only native plus target/preset: coupled Clear retains latent enabled/count while clearing shared input and selected output; placement changes Used without rewriting Enabled; enabled changes only its selected node. All are undoable design edits with no hardware calls.',
   fusion_measurement_set: 'Import or clear a channel frequency-response measurement.',
@@ -2772,20 +2788,92 @@ export function createToolExecutor(adapter: ToolAdapter) {
         }
         case 'fusion_eq_set': {
           const p = schemas.fusion_eq_set.parse(a);
-          adapter.edit(roles(p.target), (doc) => {
-            const pr = doc.presets[p.preset - 1];
-            const f = pr.inputEq[p.index - 1];
-            if (f.kind === 'unity' && !f.enabled) {
-              f.kind = 'peak';
-              f.gain = 0;
-            }
-            Object.assign(f, p.patch);
-            delete f.coefficients;
-            delete f.provenance;
-            encodeEq(pr.inputEq);
-            if (p.enabled !== undefined) pr.eqEnabled = p.enabled;
+          const changed = roles(p.target).filter((role) => {
+            const pr = state.documents[role].presets[p.preset - 1],
+              f = pr.inputEq[p.index - 1];
+            const next = editInputEqBand(f, p.patch, { redesign: p.redesign });
+            encodeEq(pr.inputEq.map((band, index) => (index === p.index - 1 ? next : band)));
+            return (
+              JSON.stringify(f) !== JSON.stringify(next) ||
+              (p.enabled !== undefined && p.enabled !== pr.eqEnabled)
+            );
           });
+          if (changed.length)
+            adapter.edit(changed, (doc) => {
+              const pr = doc.presets[p.preset - 1];
+              pr.inputEq[p.index - 1] = editInputEqBand(pr.inputEq[p.index - 1], p.patch, {
+                redesign: p.redesign,
+              });
+              if (p.enabled !== undefined) pr.eqEnabled = p.enabled;
+            });
           break;
+        }
+        case 'fusion_eq_adjust': {
+          const p = schemas.fusion_eq_adjust.parse(a),
+            selected = roles(p.target);
+          if (p.basis !== 'each' && !selected.includes(p.basis))
+            throw new Error('EQ wheel source must be a selected role');
+          const fields = selected.map((slot) => {
+            const pr = state.documents[slot].presets[p.preset - 1];
+            if (pr.inputEq.length !== 9) throw new Error('Input EQ requires nine bands');
+            const filter = pr.inputEq[p.index - 1];
+            return { slot, filter, preset: pr };
+          });
+          const compute = (field: (typeof fields)[number]) =>
+            hfdInputEqWheelNext(
+              p.parameter,
+              field.filter[p.parameter],
+              p.direction === 'up' ? 1 : -1,
+            );
+          const source =
+            p.basis === 'each'
+              ? undefined
+              : compute(fields.find((field) => field.slot === p.basis)!);
+          const plan = fields.map((field) => {
+            const result = source ?? compute(field),
+              before = field.filter[p.parameter];
+            const changed = result.changed && !Object.is(result.value, before);
+            const next = changed
+              ? editInputEqBand(field.filter, { [p.parameter]: result.value }, { normalize: false })
+              : field.filter;
+            encodeEq(
+              field.preset.inputEq.map((band, index) => (index === p.index - 1 ? next : band)),
+            );
+            return {
+              slot: field.slot,
+              before,
+              value: changed ? result.value : before,
+              text: changed ? result.text : formatHfdInputEqValue(p.parameter, before),
+              changed,
+              beforeFilter: structuredClone(field.filter),
+            };
+          });
+          const changed = plan.filter((role) => role.changed);
+          if (changed.length)
+            adapter.edit(
+              changed.map((role) => role.slot),
+              (doc) => {
+                const pr = doc.presets[p.preset - 1],
+                  filter = pr.inputEq[p.index - 1];
+                const matches = changed.filter(
+                  (role) => JSON.stringify(role.beforeFilter) === JSON.stringify(filter),
+                );
+                const role = matches[0];
+                if (!role || matches.some((match) => !Object.is(match.value, role.value)))
+                  throw new Error('The EQ wheel target changed');
+                pr.inputEq[p.index - 1] = editInputEqBand(
+                  filter,
+                  { [p.parameter]: role.value },
+                  { normalize: false },
+                );
+              },
+            );
+          return {
+            ok: true,
+            changed: changed.length > 0,
+            basis: p.basis,
+            roles: plan.map(({ beforeFilter: _beforeFilter, ...role }) => role),
+          };
         }
         case 'fusion_fir_set': {
           const p = schemas.fusion_fir_set.parse(a);

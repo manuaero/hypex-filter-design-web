@@ -7,7 +7,7 @@ import LiveEqToggle from './LiveEqToggle';
 import LiveMeters from './LiveMeters';
 import NoisePanel from './NoisePanel';
 import { createNoiseController } from '../application/noise-control';
-import { type EqBank } from '../domain/equalizer';
+import { type EqBank, editInputEqBand } from '../domain/equalizer';
 import { EqBankUploadError } from '../hardware/eq-bank';
 import SignalChain from './SignalChain';
 import {
@@ -32,6 +32,7 @@ import {
   HFD_MANUAL_Q_BOUNDS,
   HFD_MANUAL_GAIN_BOUNDS,
 } from '../domain/manual-parameter';
+import { HFD_INPUT_EQ_PROFILE } from '../domain/input-eq-parameters';
 import InteractivePlot, { type PlotRange } from './InteractivePlot';
 import { createPlotViewController } from '../application/plot-view';
 import {
@@ -1684,7 +1685,7 @@ export default function Studio() {
         pr.channels.forEach((c) => (c.globalDelayUs = patch.globalDelayUs!));
     });
   };
-  const editFilter = (patch: ManualFilterPatch, redesign = false) => {
+  const editFilter = (patch: ManualFilterPatch, redesign = false, forceEqRedesign = false) => {
     try {
       const current = useWorkspace.getState();
       if (
@@ -1705,15 +1706,17 @@ export default function Studio() {
         const list = tab === 'Input EQ' ? pr.inputEq : c.filters,
           index = tab === 'Input EQ' ? eqIndex : w.filter,
           original = list[index],
-          source =
-            tab === 'Input EQ' && original.kind === 'unity' && !original.enabled
-              ? { ...original, kind: 'peak' as const, gain: 0 }
-              : original,
-          next = editManualFilter(source, patch, {
-            redesign,
-            manualFrequency: false,
-            manualParameters: false,
-          });
+          next =
+            tab === 'Input EQ'
+              ? editInputEqBand(original, patch, {
+                  normalize: false,
+                  redesign: forceEqRedesign,
+                })
+              : editManualFilter(original, patch, {
+                  redesign,
+                  manualFrequency: false,
+                  manualParameters: false,
+                });
         if (tab === 'Input EQ') encodeEq(list.map((f, i) => (i === index ? next : f)));
         return { list, index, next, channel: c };
       };
@@ -1727,8 +1730,10 @@ export default function Studio() {
           prepared.channel.coefficientCache = 'base';
       });
       setError('');
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     }
   };
   const wheelFilter = (
@@ -1793,7 +1798,7 @@ export default function Studio() {
     const draft =
       mode === 'add'
         ? { ...newFilter('peak'), frequency: frequency ?? 1000, gain: 3 }
-        : { ...structuredClone(list[index]), ...(eq ? { enabled: true } : {}) };
+        : structuredClone(list[index]);
     paletteEnabledExplicit.current = false;
     setPaletteDraft(draft);
     setPaletteFailure('');
@@ -1814,13 +1819,12 @@ export default function Studio() {
     setPaletteFailure('');
     if (Object.hasOwn(patch, 'enabled')) paletteEnabledExplicit.current = true;
     setPaletteDraft((old) => {
-      const { coefficients: _coefficients, ...parameters } = patch;
       const next = palette?.eq
-        ? { ...old, ...parameters }
+        ? editInputEqBand(old, patch, { normalize: manualParameters })
         : editManualFilter(old, patch, {
             manualParameters,
           });
-      if (next.kind !== 'raw') {
+      if (!palette?.eq && next.kind !== 'raw') {
         delete next.coefficients;
         delete next.provenance;
       }
@@ -1847,7 +1851,7 @@ export default function Studio() {
         list[palette.index] = {
           ...structuredClone(paletteDraft),
           enabled:
-            palette.mode === 'replace' && !palette.eq && !paletteEnabledExplicit.current
+            palette.mode === 'replace' && !paletteEnabledExplicit.current
               ? old.enabled
               : paletteDraft.enabled,
           id: old.id,
@@ -3086,7 +3090,7 @@ export default function Studio() {
                         onAdd={(frequency) => openPalette('add', undefined, frequency)}
                         onRemove={() =>
                           tab === 'Input EQ'
-                            ? editFilter({ enabled: false, gain: 0 }, true)
+                            ? editFilter({ enabled: false, gain: 0 }, true, true)
                             : designAction(
                                 () => w.edit((p) => deleteBiquad(p, w.preset, w.channel, w.filter)),
                                 'Filter deleted; its settings are retained in the unused slot.',
@@ -3396,7 +3400,7 @@ export default function Studio() {
                     title="Reset selected filter"
                     onClick={() =>
                       tab === 'Input EQ'
-                        ? editFilter({ enabled: false, gain: 0 }, true)
+                        ? editFilter({ enabled: false, gain: 0 }, true, true)
                         : editFilter({ ...newFilter(), sourceId: filter.sourceId }, true)
                     }
                   >
@@ -3431,11 +3435,7 @@ export default function Studio() {
                         if (kind === 'raw') {
                           editFilter({ kind });
                           setShowRaw(true);
-                        } else
-                          editFilter(
-                            { kind, ...(tab === 'Input EQ' ? { enabled: true } : {}) },
-                            true,
-                          );
+                        } else editFilter({ kind }, true);
                       }}
                     >
                       {Object.entries(FILTER_NAMES)
@@ -3459,7 +3459,14 @@ export default function Studio() {
                       end={w.endGesture}
                       label={filter.kind === 'asymmetric' ? 'Zero frequency' : 'Frequency'}
                       contextKey={`${w.slot}:${w.preset}:${w.channel}:${tab}:${filter.id}:${filter.kind}:${documentEpochs[w.slot]}:frequency`}
-                      frequencyWheel={tab === 'Input EQ' ? 'input-eq' : 'advanced'}
+                      frequencyWheel={tab === 'Input EQ' ? undefined : 'advanced'}
+                      inputEqParameter={tab === 'Input EQ' ? 'frequency' : undefined}
+                      onInputEqWheel={
+                        tab === 'Input EQ'
+                          ? (result) =>
+                              !result.changed || editFilter({ frequency: result.value }, true)
+                          : undefined
+                      }
                       frequencyWheelMin={tab === 'Input EQ' ? undefined : 10}
                       frequencyWheelMax={
                         tab === 'Input EQ'
@@ -3468,7 +3475,7 @@ export default function Studio() {
                       }
                       value={filter.frequency}
                       onChange={(frequency) => editFilter({ frequency }, true)}
-                      deferTextCommit={tab !== 'Input EQ'}
+                      deferTextCommit
                       normalizeText={
                         tab === 'Input EQ'
                           ? undefined
@@ -3476,8 +3483,9 @@ export default function Studio() {
                               normalizeHfdManualFrequencyText(text, { previousValue })
                       }
                       unit="Hz"
-                      min={tab === 'Input EQ' ? 1 : 10}
+                      min={tab === 'Input EQ' ? HFD_INPUT_EQ_PROFILE.frequency.min : 10}
                       max={50000}
+                      adjustmentBounds={tab === 'Input EQ' ? { min: 1, max: 50000 } : undefined}
                       step={1}
                     />
                   )}
@@ -3491,13 +3499,21 @@ export default function Studio() {
                       value={filter.q}
                       onChange={(q) => editFilter({ q }, true)}
                       parameterWheel={tab === 'Input EQ' ? undefined : 'q'}
-                      parameterWheelAdditionalGain={channel.additionalGain ?? 0}
+                      inputEqParameter={tab === 'Input EQ' ? 'q' : undefined}
+                      onInputEqWheel={
+                        tab === 'Input EQ'
+                          ? (result) => !result.changed || editFilter({ q: result.value }, true)
+                          : undefined
+                      }
+                      parameterWheelAdditionalGain={
+                        tab === 'Input EQ' ? undefined : (channel.additionalGain ?? 0)
+                      }
                       onParameterWheel={
                         tab === 'Input EQ'
                           ? undefined
                           : (result, direction) => wheelFilter('q', result, direction)
                       }
-                      deferTextCommit={tab !== 'Input EQ'}
+                      deferTextCommit
                       normalizeText={
                         tab === 'Input EQ'
                           ? undefined
@@ -3505,9 +3521,13 @@ export default function Studio() {
                               normalizeHfdManualQText(text, { previousValue })
                       }
                       formatValue={tab === 'Input EQ' ? undefined : formatHfdManualQValue}
-                      min={tab === 'Input EQ' ? 0.001 : HFD_MANUAL_Q_BOUNDS.min}
-                      max={tab === 'Input EQ' ? 100 : HFD_MANUAL_Q_BOUNDS.max}
-                      adjustmentBounds={tab === 'Input EQ' ? undefined : { min: 0.001, max: 100 }}
+                      min={
+                        tab === 'Input EQ' ? HFD_INPUT_EQ_PROFILE.q.min : HFD_MANUAL_Q_BOUNDS.min
+                      }
+                      max={
+                        tab === 'Input EQ' ? HFD_INPUT_EQ_PROFILE.q.max : HFD_MANUAL_Q_BOUNDS.max
+                      }
+                      adjustmentBounds={{ min: 0.001, max: 100 }}
                       step={0.01}
                     />
                   )}
@@ -3520,13 +3540,21 @@ export default function Studio() {
                       value={filter.gain}
                       onChange={(gain) => editFilter({ gain }, true)}
                       parameterWheel={tab === 'Input EQ' ? undefined : 'gain'}
-                      parameterWheelAdditionalGain={channel.additionalGain ?? 0}
+                      inputEqParameter={tab === 'Input EQ' ? 'gain' : undefined}
+                      onInputEqWheel={
+                        tab === 'Input EQ'
+                          ? (result) => !result.changed || editFilter({ gain: result.value }, true)
+                          : undefined
+                      }
+                      parameterWheelAdditionalGain={
+                        tab === 'Input EQ' ? undefined : (channel.additionalGain ?? 0)
+                      }
                       onParameterWheel={
                         tab === 'Input EQ'
                           ? undefined
                           : (result, direction) => wheelFilter('gain', result, direction)
                       }
-                      deferTextCommit={tab !== 'Input EQ'}
+                      deferTextCommit
                       normalizeText={
                         tab === 'Input EQ'
                           ? undefined
@@ -3535,9 +3563,19 @@ export default function Studio() {
                       }
                       formatValue={tab === 'Input EQ' ? undefined : formatHfdManualGainValue}
                       unit="dB"
-                      min={tab === 'Input EQ' ? -32 : HFD_MANUAL_GAIN_BOUNDS.min}
-                      max={tab === 'Input EQ' ? 32 : HFD_MANUAL_GAIN_BOUNDS.max}
-                      adjustmentBounds={tab === 'Input EQ' ? undefined : { min: -60, max: 60 }}
+                      min={
+                        tab === 'Input EQ'
+                          ? HFD_INPUT_EQ_PROFILE.gain.min
+                          : HFD_MANUAL_GAIN_BOUNDS.min
+                      }
+                      max={
+                        tab === 'Input EQ'
+                          ? HFD_INPUT_EQ_PROFILE.gain.max
+                          : HFD_MANUAL_GAIN_BOUNDS.max
+                      }
+                      adjustmentBounds={
+                        tab === 'Input EQ' ? { min: -32, max: 32 } : { min: -60, max: 60 }
+                      }
                       step={0.1}
                     />
                   )}

@@ -10,6 +10,14 @@ import {
   type HfdManualWheelState,
   type HfdManualWheelResult,
 } from '../domain/parameter-wheel';
+import {
+  normalizeHfdInputEqText,
+  formatHfdInputEqValue,
+  hfdInputEqWheelNext,
+  type HfdInputEqParameter,
+  type HfdInputEqWheelState,
+  type HfdInputEqWheelResult,
+} from '../domain/input-eq-parameters';
 export default function Numeric({
   label,
   value,
@@ -27,6 +35,8 @@ export default function Numeric({
   parameterWheel,
   parameterWheelAdditionalGain = 0,
   onParameterWheel,
+  inputEqParameter,
+  onInputEqWheel,
   begin,
   end,
   precision = 8,
@@ -56,6 +66,9 @@ export default function Numeric({
   parameterWheelAdditionalGain?: number;
   /** Optional shared workspace action. False rejects the event without a local edit. */
   onParameterWheel?: (result: HfdManualWheelResult, direction: -1 | 1) => boolean | void;
+  /** Full native Input EQ Text/Double/wheel profile; no channel-gain coupling. */
+  inputEqParameter?: HfdInputEqParameter;
+  onInputEqWheel?: (result: HfdInputEqWheelResult, direction: -1 | 1) => boolean | void;
   begin?: () => void;
   end?: (cancel?: boolean) => void;
   precision?: number;
@@ -67,13 +80,15 @@ export default function Numeric({
   contextKey?: string | number;
 }) {
   const format = (n: number) =>
-    formatValue && Number.isFinite(n)
-      ? formatValue(n)
-      : frequencyWheel === 'advanced'
-        ? formatHfdAdvancedFrequency(n)
-        : Number.isFinite(n)
-          ? String(+n.toFixed(precision))
-          : '';
+    inputEqParameter && Number.isFinite(n)
+      ? formatHfdInputEqValue(inputEqParameter, n)
+      : formatValue && Number.isFinite(n)
+        ? formatValue(n)
+        : frequencyWheel === 'advanced'
+          ? formatHfdAdvancedFrequency(n)
+          : Number.isFinite(n)
+            ? String(+n.toFixed(precision))
+            : '';
   const [draft, setDraft] = useState(format(value)),
     [focused, setFocused] = useState(false);
   const input = useRef<HTMLInputElement>(null),
@@ -84,12 +99,14 @@ export default function Numeric({
     liveEmission = useRef<number | undefined>(undefined),
     previousValue = useRef(value),
     parameterWheelState = useRef<HfdManualWheelState | undefined>(undefined),
+    inputEqWheelState = useRef<HfdInputEqWheelState | undefined>(undefined),
     parameterWheelText = useRef<{ value: number; text: string } | undefined>(undefined),
     draftContext = useRef(contextKey);
   useLayoutEffect(() => {
     if (draftContext.current === contextKey) return;
     draftContext.current = contextKey;
     parameterWheelState.current = undefined;
+    inputEqWheelState.current = undefined;
     parameterWheelText.current = undefined;
     cancelled.current = false;
     dirty.current = false;
@@ -98,7 +115,7 @@ export default function Numeric({
     liveEmission.current = undefined;
     previousValue.current = value;
     setDraft(format(value));
-  }, [contextKey, value, frequencyWheel, precision, formatValue]);
+  }, [contextKey, value, frequencyWheel, inputEqParameter, precision, formatValue]);
   useLayoutEffect(() => {
     if (previousValue.current === value) return;
     previousValue.current = value;
@@ -106,6 +123,7 @@ export default function Numeric({
     liveEmission.current = undefined;
     if (!ownEdit) {
       parameterWheelState.current = undefined;
+      inputEqWheelState.current = undefined;
       parameterWheelText.current = undefined;
     }
     if (focused && !ownEdit) {
@@ -114,13 +132,14 @@ export default function Numeric({
       submitted.current = undefined;
       setDraft(format(value));
     }
-  }, [value, focused, frequencyWheel, precision, formatValue]);
+  }, [value, focused, frequencyWheel, inputEqParameter, precision, formatValue]);
   useEffect(() => {
     const hadWheelText = parameterWheelText.current !== undefined;
     parameterWheelState.current = undefined;
+    inputEqWheelState.current = undefined;
     parameterWheelText.current = undefined;
     if (hadWheelText) setDraft(format(value));
-  }, [parameterWheel, parameterWheelAdditionalGain, min, max]);
+  }, [parameterWheel, parameterWheelAdditionalGain, inputEqParameter, min, max]);
   useEffect(() => {
     // A new canonical value (including external Undo) ends submission deduplication.
     // Otherwise repeating the same wheel edit after Undo could be suppressed.
@@ -131,7 +150,7 @@ export default function Numeric({
           ? parameterWheelText.current.text
           : format(value),
       );
-  }, [value, focused, frequencyWheel, precision, formatValue]);
+  }, [value, focused, frequencyWheel, inputEqParameter, precision, formatValue]);
   const parse = (s: string) => (s.trim() === '' ? NaN : Number(s.replace(',', '.')));
   const commit = (
     n: number,
@@ -157,6 +176,7 @@ export default function Numeric({
   };
   const adjust = (direction: -1 | 1, wheel = false) => {
     parameterWheelState.current = undefined;
+    inputEqWheelState.current = undefined;
     parameterWheelText.current = undefined;
     const n = parse(draft),
       current = Number.isFinite(n) ? n : value,
@@ -196,6 +216,7 @@ export default function Numeric({
       if (onParameterWheel?.(result, direction) === false) {
         liveEmission.current = undefined;
         parameterWheelState.current = undefined;
+        inputEqWheelState.current = undefined;
         parameterWheelText.current = undefined;
         dirty.current = false;
         setDraft(format(value));
@@ -211,6 +232,36 @@ export default function Numeric({
     } catch {
       liveEmission.current = undefined;
       parameterWheelState.current = undefined;
+      inputEqWheelState.current = undefined;
+      parameterWheelText.current = undefined;
+      dirty.current = false;
+      setDraft(format(value));
+    }
+  };
+  const adjustInputEq = (direction: -1 | 1) => {
+    if (!inputEqParameter) return;
+    try {
+      const result = hfdInputEqWheelNext(inputEqParameter, value, direction, {
+        displayedText: draft,
+        state: inputEqWheelState.current,
+      });
+      if (result.changed && result.value !== value) liveEmission.current = result.value;
+      if (onInputEqWheel?.(result, direction) === false) {
+        liveEmission.current = undefined;
+        inputEqWheelState.current = undefined;
+        parameterWheelText.current = undefined;
+        dirty.current = false;
+        setDraft(format(value));
+        return;
+      }
+      if (result.changed && result.value !== value && !onInputEqWheel) onChange(result.value);
+      inputEqWheelState.current = result.state;
+      parameterWheelText.current = { value: result.value, text: result.text };
+      dirty.current = false;
+      setDraft(result.text);
+    } catch {
+      liveEmission.current = undefined;
+      inputEqWheelState.current = undefined;
       parameterWheelText.current = undefined;
       dirty.current = false;
       setDraft(format(value));
@@ -221,11 +272,12 @@ export default function Numeric({
   // its EQ value changes. Reinstall with the current draft/props after render.
   useEffect(() => {
     const field = input.current;
-    if (!field || (!frequencyWheel && !parameterWheel)) return;
+    if (!field || (!frequencyWheel && !parameterWheel && !inputEqParameter)) return;
     const wheel = (event: WheelEvent) => {
       if (disabled || (commitOnly && !focused) || event.deltaY === 0) return;
       event.preventDefault();
-      if (parameterWheel) adjustParameter(event.deltaY < 0 ? 1 : -1);
+      if (inputEqParameter) adjustInputEq(event.deltaY < 0 ? 1 : -1);
+      else if (parameterWheel) adjustParameter(event.deltaY < 0 ? 1 : -1);
       else adjust(event.deltaY < 0 ? 1 : -1, true);
     };
     field.addEventListener('wheel', wheel, { passive: false });
@@ -257,6 +309,7 @@ export default function Numeric({
           value={draft}
           onFocus={() => {
             parameterWheelState.current = undefined;
+            inputEqWheelState.current = undefined;
             baseline.current = value;
             submitted.current = undefined;
             dirty.current = false;
@@ -268,6 +321,7 @@ export default function Numeric({
             // the model. Passive refresh returns to canonical Text and must
             // also discard the state bound to that previous guarded Text.
             parameterWheelState.current = undefined;
+            inputEqWheelState.current = undefined;
             parameterWheelText.current = undefined;
             setFocused(false);
             if (cancelled.current) {
@@ -282,8 +336,10 @@ export default function Numeric({
               return;
             }
             try {
-              if (normalizeText) {
-                const normalized = normalizeText(draft, value);
+              if (inputEqParameter || normalizeText) {
+                const normalized = inputEqParameter
+                  ? normalizeHfdInputEqText(inputEqParameter, draft, { previousValue: value })
+                  : normalizeText!(draft, value);
                 commit(normalized.value, { min, max }, true);
                 setDraft(normalized.text);
               } else {
@@ -299,11 +355,12 @@ export default function Numeric({
           }}
           onChange={(e) => {
             parameterWheelState.current = undefined;
+            inputEqWheelState.current = undefined;
             parameterWheelText.current = undefined;
             dirty.current = true;
             setDraft(e.target.value);
             const n = parse(e.target.value);
-            if (!commitOnly && !deferTextCommit && Number.isFinite(n)) {
+            if (!commitOnly && !deferTextCommit && !inputEqParameter && Number.isFinite(n)) {
               liveEmission.current = n;
               onChange(n);
             }
@@ -318,16 +375,20 @@ export default function Numeric({
             if (e.key === 'Enter') e.currentTarget.blur();
             if (e.key === 'Escape') {
               parameterWheelState.current = undefined;
+              inputEqWheelState.current = undefined;
               parameterWheelText.current = undefined;
               cancelled.current = true;
-              if (!commitOnly && (!deferTextCommit || value !== baseline.current))
+              if (
+                !commitOnly &&
+                ((!deferTextCommit && !inputEqParameter) || value !== baseline.current)
+              )
                 onChange(baseline.current);
               setDraft(format(baseline.current));
               e.currentTarget.blur();
             }
           }}
           onWheel={(e) => {
-            if (frequencyWheel || parameterWheel) return;
+            if (frequencyWheel || parameterWheel || inputEqParameter) return;
             if (disabled || (commitOnly && !focused)) return;
             adjust(e.deltaY < 0 ? 1 : -1);
           }}
