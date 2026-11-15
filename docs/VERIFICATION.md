@@ -2,6 +2,104 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V38 manual frequency and retained-bypass checkpoint
+
+Nine new offline HFD 5.2.4.24 checkpoints cover ordinary frequency commits,
+disabled type replacement and two native edge cases. Classic screenshots and
+real mouse/keyboard input were used while verified interface ownership kept
+HFD disconnected. HFD closed normally before release, and the interface
+open/close probe and OS inventory recovered cleanly. No amplifier command or
+fresh physical sector read occurred; the dated V35 hardware evidence remains
+separate. Saved preferences changed only in recent-project entries, with empty
+ASIO names retained.
+
+Actual native pole-frequency text committed on Tab as follows: `1` → `10.0`,
+`10.35` → `10.4`, `400.04` → `400.0`, and `50001` → `50000.0`. The half-tie
+stores IEEE Single 10.399999618530273, serialized by native XML as
+10.3999996185303. Returning to 400 restored the complete baseline XML bytes.
+Draft text retained the prior curve until commit. A separate F1 zero edit
+restored its prior 720 Hz value and the complete preceding XML bytes.
+
+Changing a disabled LP2 at 720 Hz / Q0.4 to HP2 retained Enabled=false and all
+latent parameters; only seven type/derived values changed. Selecting Unity
+through the native dropdown instead produced Boost/Cut and a NaN cache in
+this example. That artifact is rejected by the web importer. Explicit browser
+Unity remains a valid intentional extension; this native quirk is not treated
+as a valid response or reproduced as an encoding. Native Delete is separate.
+
+The shared manual editor commits raw text using bounded Extended conversion,
+one decimal and Single storage, with ordinary bounds of 10–50,000 Hz. It
+normalizes only explicitly edited frequencies. Imported values, untouched
+latent fields, input EQ, diagnostic previews and the existing wheel/graph
+contracts remain separate. The 40 kHz default browser viewport does not narrow
+manual authoring. Native custom-axis bound changes remain unqualified.
+
+The full development-source suite passed **2,560/2,560 tests across 181 files**:
+zero failures or pending tests, two workers, no omissions and unchanged
+timeouts. All **368 source/test/configuration files**, including **13 changed
+code/test paths**, remained hash-identical during the run. Global typecheck and
+changed-file formatting passed. Four new paths contain the pure manual
+normalizer, its tests and sanitized native fixture/test evidence. No vendor
+project or machine/device identity is included in those fixtures.
+
+Actual Studio acceptance passed **31 bounded browser checks** in isolated
+fixtures. They cover local drafts, decimal/Single/Q24 values, cancellation,
+whole-project Undo, bypass-preserving type changes, mixed Enabled states in
+paired palette replacement, enabled Add, valid Unity, shared Both commands,
+untouched imported precision and canonical whole-project reload. Explicit
+palette Enabled override is component-tested, not newly browser-transport-
+qualified. The registry remains **89 commands**; no blocked hardware/audio/file
+I/O attempts appeared in nineteen retained phase snapshots.
+
+Two incorrect browser-test expectations were retained and corrected without
+production changes: default `redesign:true` replaces imported caches even
+when zero retains frequency, and Add Undo retains the current section
+selection. The wrong-slot probe was inspected and undone once before section1
+was selected for acceptance. With `redesign:false`, a Both zero edit retains
+each role's frequency, cache and complete project. The first focused component
+test failure used an obsolete adapter closure; that test was corrected before
+the passing focused run. No failed-run evidence was discarded.
+
+The first immediate post-edit reload preserved both projects even though its
+preceding snapshot still reported saving. A second reload from observed
+Ready/saved state also preserved both complete accepted projects. The final
+state was Ready with no unsaved changes. This is browser-origin persistence
+evidence, not download delivery or remote authenticated MCP transport proof.
+The test tab/server were closed, and the user's port3210 origin stayed intact.
+
+The shared shape controls preserve Enabled independently for each destination
+unless it is explicitly overridden. Preview changes use Apply, and Add starts
+enabled. Device upload behavior did not change in this increment. Production
+firmware programming, the native Default EQ popup, arbitrary raw/gesture/view
+cases, complete HFD parity, two physical amplifiers, macOS USB and acoustics
+remain unqualified.
+
+### Fresh public-source and production checks
+
+Public verification completed on **2026-11-15 at 17:20:22 UTC**, using Node.js
+24.22.1. The full unfiltered suite passed **2,559 tests with one optional skip
+and zero failures: 2,560 total in 181 files**. It used two workers, unchanged
+timeouts and no omissions. The sole skip checks optional installed vendor-PDF
+identity; the public repository omits that PDF and its fallback tests ran.
+Global typecheck, Next production build and Worker packaging passed. The
+generated Next environment file stayed unchanged.
+
+The public allowlist contains **376 source/test/configuration files plus 13
+protected documentation/assets: 389 files total**. The production build has
+24 static assets totaling **1,899,983 bytes** and a **3,101,755-byte Worker**,
+SHA-256 `a3ee32a446a0a4a6116c70e8f3dfe0c92c7d544f054ad473eb9ac51c48569856`.
+The actual compiled client and packaged Worker both report manual
+`optional:true`, `bundled:false`, with the official vendor fallback link.
+The actual Worker returns home200/manual404 in an isolated runtime without
+`process`. Source and built-output privacy scans found zero matches across
+five checked categories; these are bounded scans, not exhaustive detection.
+
+The private app update also deployed successfully with MCP enabled and its
+owner-only audience unchanged. No public hosted deployment is claimed.
+After the tests/build, only README and this verification page gained final
+result text; the 376 checked source files and build inputs stayed exact. The
+tested manifest and final documentation manifest are recorded separately.
+
 ## V37 native filter lifecycle checkpoint
 
 Fresh classic HFD 5.2.4.24 offline GUI work produced nine completed native

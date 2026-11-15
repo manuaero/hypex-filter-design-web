@@ -3,6 +3,7 @@ import { act, useState, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import Numeric from '../src/components/Numeric';
+import { normalizeHfdManualFrequencyText } from '../src/domain/manual-frequency';
 import { newProject } from '../src/domain/model';
 import { createWorkspaceStore } from '../src/state/workspace';
 import { assertWorkspaceWrite, type WorkspaceEnvelope } from '../src/state/persistence';
@@ -53,6 +54,58 @@ it('keeps continuous decimal typing live and discards a focused draft after an e
   const calls = changed.mock.calls.length;
   await act(async () => field().blur());
   expect(changed).toHaveBeenCalledTimes(calls);
+});
+
+it.each([
+  ['1', 10, '10.0'],
+  ['10.35', Math.fround(10.4), '10.4'],
+  ['400,04', 400, '400.0'],
+  ['50001', 50000, '50000.0'],
+  ['0', 720, '720.0'],
+])(
+  'defers native manual Text %s until blur, then commits its decimal/Single value',
+  async (text, expected, shown) => {
+    const changed = await render(720, {
+      min: 10,
+      max: 50000,
+      frequencyWheel: 'advanced',
+      deferTextCommit: true,
+      normalizeText: (raw, previousValue) =>
+        normalizeHfdManualFrequencyText(raw, { previousValue }),
+    });
+    await act(async () => field().focus());
+    await enter(text);
+    expect(field().value).toBe(text);
+    expect(changed).not.toHaveBeenCalled();
+    await act(async () => field().blur());
+    if (expected === 720) expect(changed).not.toHaveBeenCalled();
+    else expect(changed).toHaveBeenCalledExactlyOnceWith(expected);
+    expect(field().value).toBe(shown);
+  },
+);
+
+it('defers invalid manual text without gating hover wheel, preserves its Single result on blur, and cancels Escape', async () => {
+  const changed = await render(1000, {
+    min: 10,
+    max: 50000,
+    frequencyWheel: 'advanced',
+    frequencyWheelMin: 10,
+    frequencyWheelMax: 40000,
+    deferTextCommit: true,
+    normalizeText: (raw, previousValue) => normalizeHfdManualFrequencyText(raw, { previousValue }),
+  });
+  await wheel(-120);
+  expect(changed).toHaveBeenCalledExactlyOnceWith(1068.0999755859375);
+  await act(async () => field().focus());
+  await enter('10.35');
+  await key('Escape');
+  expect(changed).toHaveBeenCalledTimes(1);
+  expect(field().value).toBe('1068.1');
+  await act(async () => field().focus());
+  await enter('not finite');
+  await act(async () => field().blur());
+  expect(changed).toHaveBeenCalledTimes(1);
+  expect(field().value).toBe('1068.1');
 });
 
 it('drops a pending draft when the role or explicit project replacement context changes', async () => {

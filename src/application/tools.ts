@@ -13,6 +13,7 @@ import {
   clearPreset,
   deleteBiquad,
   isUnusedBiquad,
+  editManualFilter,
 } from '../domain/editing';
 import { copyPresetBetween } from '../domain/preset-copy';
 import {
@@ -445,6 +446,12 @@ const filterPatch = z
   })
   .partial()
   .strict();
+// Manual commands commit decimal Text through the same native field normalizer.
+// Diagnostic preview retains its wider positive-frequency validation above.
+const manualFilterPatch = filterPatch.extend({
+  frequency: finite.optional(),
+  frequency2: finite.optional(),
+});
 const eqFilterPatch = z
   .object({
     kind: z.enum(['peak', 'lowshelf2', 'highshelf2']).optional(),
@@ -891,7 +898,7 @@ const schemas = {
       action: z.enum(['open', 'update', 'apply', 'cancel']),
       mode: z.enum(['add', 'replace']).optional(),
       index: index.optional(),
-      draft: filterPatch.optional(),
+      draft: manualFilterPatch.optional(),
     })
     .strict(),
   fusion_preview_filter: z
@@ -908,7 +915,7 @@ const schemas = {
       target,
       preset,
       channel,
-      frequency: finite.positive().max(50000),
+      frequency: finite,
       kind: kinds.default('peak'),
     })
     .strict(),
@@ -918,7 +925,7 @@ const schemas = {
       preset,
       channel,
       index,
-      patch: filterPatch,
+      patch: manualFilterPatch,
       redesign: z.boolean().default(true),
     })
     .strict(),
@@ -1580,7 +1587,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   fusion_preview_filter:
     'Calculate a proposed filter’s coefficients and complex response without changing a project or device.',
   fusion_filter_add:
-    'Add a new filter to the first unused Unity slot, with Boost/Cut as the default.',
+    'Add a new filter to the first unused Unity slot, with Boost/Cut as the default. Explicit frequency commits use native decimal Text, 10–50,000 Hz bounds, one decimal and Single storage.',
   fusion_channel_cache:
     'Resolve an ambiguous custom first-section XML cache as base coefficients or coefficients already including channel gain.',
   fusion_channel_link:
@@ -1619,7 +1626,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     'Import a local HFD XML or Fusion JSON design without applying saved device settings.',
   fusion_project_export: 'Return a project file as text for saving.',
   fusion_filter_set:
-    'Edit a manual crossover biquad. Redesign explicitly replaces preserved imported coefficients.',
+    'Edit a manual crossover biquad. Explicit frequency/F2 commits use canonical decimal Text, 10–50,000 Hz bounds, one decimal and Single storage; exact zero retains the previous field value. Untouched imported values stay unchanged. A shape change preserves Enabled unless explicitly supplied. Redesign explicitly replaces preserved imported coefficients.',
   fusion_biquad_exchange:
     'Exchange two same-channel biquad parameter sets while preserving physical graph slots and read-only linked channels.',
   fusion_channel_copy:
@@ -2111,9 +2118,8 @@ export function createToolExecutor(adapter: ToolAdapter) {
               i = c.filters.findIndex(isUnusedBiquad);
             if (i < 0) throw new Error('No unused biquad slots remain');
             c.filters[i] = {
-              ...newFilter(p.kind),
+              ...editManualFilter(newFilter(p.kind), { frequency: p.frequency }),
               id: c.filters[i].id,
-              frequency: p.frequency,
               sourceId: c.filters[i].sourceId,
             };
             if (i === 0) c.coefficientCache = 'base';
@@ -2124,7 +2130,7 @@ export function createToolExecutor(adapter: ToolAdapter) {
           const p = schemas.fusion_filter_set.parse(a);
           adapter.edit(roles(p.target), (doc) => {
             const f = doc.presets[p.preset - 1].channels[p.channel - 1].filters[p.index - 1];
-            Object.assign(f, p.patch);
+            Object.assign(f, editManualFilter(f, p.patch, { redesign: p.redesign }));
             if (p.redesign && !p.patch.coefficients) {
               delete f.coefficients;
               delete f.provenance;

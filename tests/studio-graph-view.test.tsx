@@ -953,6 +953,107 @@ async function spin(field: HTMLInputElement, deltaY: number) {
 const selectedFilter = (slot: Slot = 'left') =>
   state().documents[slot].presets[0].channels[0].filters[0];
 
+async function typeNumeric(field: HTMLInputElement, text: string) {
+  await act(async () => field.focus());
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, text);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+it('actual inspector retains raw F2 drafts until commit, uses 50k manual bounds independently of viewport, and preserves imported values/Undo', async () => {
+  importedAsymmetric();
+  await mount();
+  await differingRoleAndModeBounds();
+  const before = structuredClone(state().documents);
+  const inspector = host.querySelector('#selected-filter-inspector')!;
+  let pole = inspector.querySelector<HTMLInputElement>('[aria-label="Pole frequency"]')!;
+  await typeNumeric(pole, '1');
+  expect(state().documents).toEqual(before);
+  expect(pole.value).toBe('1');
+  await act(async () => pole.blur());
+  expect(selectedFilter().frequency2).toBe(10);
+  expect(selectedFilter().frequency).toBe(before.left.presets[0].channels[0].filters[0].frequency);
+  expect(state().documents.right).toEqual(before.right);
+  expect(state().past).toHaveLength(1);
+  await act(async () => seen.adapter!.undo());
+  expect(state().documents).toEqual(before);
+  pole = inspector.querySelector<HTMLInputElement>('[aria-label="Pole frequency"]')!;
+  await typeNumeric(pole, '10.35');
+  expect(state().documents).toEqual(before);
+  await act(async () =>
+    pole.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
+  );
+  expect(selectedFilter().frequency2).toBe(10.399999618530273);
+  expect(pole.value).toBe('10.4');
+  const frequency = inspector.querySelector<HTMLInputElement>('[aria-label="Zero frequency"]')!;
+  await typeNumeric(frequency, '50001');
+  await act(async () => frequency.blur());
+  expect(selectedFilter().frequency).toBe(50000);
+  expect(view().plotViews.left.Magnitude.range.frequencyMax).toBe(1234.5);
+  expect(state().documents.right).toEqual(before.right);
+});
+
+it('actual type selector and Both palette preserve each bypass flag; explicit shared enabled overrides remain available', async () => {
+  Object.assign(selectedFilter(), { kind: 'lowpass2', enabled: false, frequency: 720, q: 0.4 });
+  Object.assign(selectedFilter('right'), { kind: 'lowpass2', enabled: true, frequency: 900 });
+  await mount();
+  const before = structuredClone(state().documents);
+  const type = host.querySelector<HTMLSelectElement>('.exact-filter-type select')!;
+  await act(async () => {
+    type.value = 'highpass2';
+    type.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  expect(selectedFilter()).toMatchObject({
+    kind: 'highpass2',
+    enabled: false,
+    frequency: 720,
+    q: 0.4,
+  });
+  expect(state().documents.right).toEqual(before.right);
+  await act(async () => seen.adapter!.undo());
+  expect(state().documents).toEqual(before);
+  await act(async () => seen.adapter!.choose({ linkedEdits: true }));
+  await act(async () => host.querySelector<HTMLButtonElement>('.inspector-shape')!.click());
+  const dialog = host.querySelector<HTMLDialogElement>('dialog[aria-label="Change filter type"]')!;
+  expect(dialog.textContent).toContain('Shape changes retain bypass');
+  await act(async () =>
+    [...dialog.querySelectorAll('button')]
+      .find((button) => button.querySelector('strong')?.textContent === 'High-pass')!
+      .click(),
+  );
+  await act(async () =>
+    [...dialog.querySelectorAll('button')]
+      .find((button) => button.textContent === 'Apply shape')!
+      .click(),
+  );
+  expect(selectedFilter()).toMatchObject({ kind: 'highpass2', enabled: false });
+  expect(selectedFilter('right')).toMatchObject({ kind: 'highpass2', enabled: true });
+  expect(selectedFilter().id).toBe(before.left.presets[0].channels[0].filters[0].id);
+  expect(selectedFilter('right').id).toBe(before.right.presets[0].channels[0].filters[0].id);
+  await act(async () => seen.adapter!.undo());
+  expect(state().documents).toEqual(before);
+  const execute = (name: string, args: unknown) => createToolExecutor(seen.adapter!)(name, args);
+  await act(async () => {
+    await execute('fusion_filter_palette', { action: 'open', mode: 'replace' });
+  });
+  await act(async () => {
+    await execute('fusion_filter_palette', {
+      action: 'update',
+      draft: { kind: 'highpass2', enabled: true, frequency: 10.35 },
+    });
+  });
+  await act(async () => {
+    expect(await execute('fusion_filter_palette', { action: 'apply' })).toMatchObject({ ok: true });
+  });
+  for (const slot of ['left', 'right'] as const)
+    expect(selectedFilter(slot)).toMatchObject({
+      kind: 'highpass2',
+      enabled: true,
+      frequency: 10.399999618530273,
+    });
+});
+
 it('actual inspector F1/F2 wheel uses min10 and the selected role Magnitude maximum while Phase is visible; imported values and exact Undo survive', async () => {
   const imported = importedAsymmetric();
   await mount();

@@ -94,6 +94,87 @@ function setup(options: { microphone?: boolean } = {}) {
   };
   return { execute: createToolExecutor(adapter), state: () => state, remember };
 }
+it('commits explicit manual frequencies with native Text semantics while preserving independent Both bypass and untouched imports', async () => {
+  const { execute, state } = setup();
+  const left = state().documents.left.presets[0].channels[0].filters[0];
+  const right = state().documents.right.presets[0].channels[0].filters[0];
+  Object.assign(left, {
+    enabled: false,
+    kind: 'lowpass2',
+    frequency: 720,
+    frequency2: 988.101806640625,
+  });
+  Object.assign(right, {
+    enabled: true,
+    kind: 'lowpass2',
+    frequency: 900,
+    frequency2: 1777.123456789,
+  });
+  const before = structuredClone(state().documents);
+  expect(
+    await execute('fusion_filter_set', {
+      target: 'both',
+      preset: 1,
+      channel: 1,
+      index: 1,
+      patch: { kind: 'highpass2', frequency: 10.35 },
+    }),
+  ).toMatchObject({ ok: true });
+  for (const slot of ['left', 'right'] as const) {
+    const filter = state().documents[slot].presets[0].channels[0].filters[0];
+    expect(filter.frequency).toBe(10.399999618530273);
+    expect(filter.frequency2).toBe(before[slot].presets[0].channels[0].filters[0].frequency2);
+    expect(filter.enabled).toBe(before[slot].presets[0].channels[0].filters[0].enabled);
+    expect(filter.id).toBe(before[slot].presets[0].channels[0].filters[0].id);
+  }
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(before);
+  expect(
+    await execute('fusion_filter_set', {
+      target: 'left',
+      preset: 1,
+      channel: 1,
+      index: 1,
+      patch: { frequency: 0, frequency2: 50001, enabled: true },
+    }),
+  ).toMatchObject({ ok: true });
+  expect(state().documents.left.presets[0].channels[0].filters[0]).toMatchObject({
+    frequency: 720,
+    frequency2: 50000,
+    enabled: true,
+  });
+  expect(state().documents.right).toEqual(before.right);
+  const unused = state().documents.right.presets[0].channels[0].filters.findIndex(
+    (filter) => filter.kind === 'unity',
+  );
+  expect(
+    await execute('fusion_filter_add', { target: 'right', preset: 1, channel: 1, frequency: 1 }),
+  ).toMatchObject({ ok: true });
+  expect(state().documents.right.presets[0].channels[0].filters[unused].frequency).toBe(10);
+  const frozen = structuredClone(state().documents);
+  for (const patch of [
+    { frequency: NaN },
+    { frequency2: Infinity },
+    { frequency: 1000, unexpected: true },
+  ])
+    expect(
+      await execute('fusion_filter_set', {
+        target: 'both',
+        preset: 1,
+        channel: 1,
+        index: 1,
+        patch,
+      }),
+    ).toMatchObject({ ok: false });
+  expect(state().documents).toEqual(frozen);
+  // Diagnostic preview remains independent of manual authoring bounds/rounding.
+  expect(
+    await execute('fusion_preview_filter', {
+      filter: { kind: 'lowpass1', frequency: 1 },
+      frequencies: [10],
+    }),
+  ).toMatchObject({ ok: true });
+});
 it('analyzes measured complex responses and included-channel sums without editing the designs', async () => {
   const { execute, state } = setup();
   const pr = state().documents.left.presets[0];

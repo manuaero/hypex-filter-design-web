@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { clearPreset, copyChannelProcessing, exchangeBiquads } from '../src/domain/editing';
+import {
+  clearPreset,
+  copyChannelProcessing,
+  exchangeBiquads,
+  editManualFilter,
+} from '../src/domain/editing';
 import { effectiveSections } from '../src/domain/dsp';
 import { linkChannel } from '../src/domain/links';
 import { newProject, type Channel, type Filter, type Project } from '../src/domain/model';
@@ -67,6 +72,53 @@ function localProperties(channel: Channel) {
     slots: channel.filters.map(identity),
   };
 }
+
+describe('explicit manual filter commits', () => {
+  it('normalizes only supplied frequency fields from decimal Text and preserves zero previous-value semantics', () => {
+    const source = varied().presets[0].channels[0].filters[0];
+    source.frequency = 720;
+    source.frequency2 = 988.101806640625;
+    const before = structuredClone(source);
+    const next = editManualFilter(source, { frequency: 10.35 });
+    expect(next.frequency).toBe(10.399999618530273);
+    expect(next.frequency2).toBe(before.frequency2);
+    expect(next.coefficients).toEqual(before.coefficients);
+    expect(editManualFilter(source, { frequency: 0 }).frequency).toBe(720);
+    expect(editManualFilter(source, { frequency: -1 }).frequency).toBe(10);
+    expect(editManualFilter(source, { frequency2: 50001 }).frequency2).toBe(50000);
+    expect(source).toEqual(before);
+    expect(() => editManualFilter(source, { frequency: Infinity })).toThrow(/finite/);
+  });
+
+  it.each([false, true])(
+    'retains Enabled=%s, identities and latent native values across type redesign',
+    (enabled) => {
+      const source = varied().presets[0].channels[0].filters[0];
+      Object.assign(source, {
+        kind: 'lowpass2',
+        enabled,
+        frequency: 5.049999999999999,
+        frequency2: 988.101806640625,
+      });
+      const before = structuredClone(source);
+      const next = editManualFilter(source, { kind: 'highpass2' }, { redesign: true });
+      expect(next).toEqual({
+        ...before,
+        kind: 'highpass2',
+        coefficients: undefined,
+        provenance: undefined,
+      });
+      expect(next.enabled).toBe(enabled);
+      expect(next.frequency).toBe(before.frequency);
+      expect(next.frequency2).toBe(before.frequency2);
+      expect(source).toEqual(before);
+      expect(editManualFilter(source, { kind: 'unity' }, { redesign: true }).enabled).toBe(enabled);
+      expect(editManualFilter(source, { kind: 'highpass2', enabled: !enabled }).enabled).toBe(
+        !enabled,
+      );
+    },
+  );
+});
 
 describe('biquad parameter exchange', () => {
   it('exchanges disabled/raw parameters and caches while retaining graph slot identity', () => {

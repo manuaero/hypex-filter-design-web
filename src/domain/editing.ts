@@ -1,4 +1,5 @@
 import { rootChannel } from './links';
+import { normalizeHfdManualFrequencyText } from './manual-frequency';
 import {
   CHANNELS,
   emptyFir,
@@ -8,6 +9,34 @@ import {
   type Preset,
   type Project,
 } from './model';
+
+/** Explicit manual edits only: never normalize imported or untouched fields. */
+export function editManualFilter(
+  current: Filter,
+  patch: Partial<Filter>,
+  {
+    redesign = false,
+    manualFrequency = true,
+  }: { redesign?: boolean; manualFrequency?: boolean } = {},
+): Filter {
+  const next = { ...current, ...patch, id: current.id };
+  if (Object.hasOwn(current, 'sourceId')) next.sourceId = current.sourceId;
+  else delete next.sourceId;
+  if (manualFrequency) {
+    for (const field of ['frequency', 'frequency2'] as const) {
+      if (patch[field] === undefined) continue;
+      if (!Number.isFinite(patch[field])) throw new Error('Frequency must be finite');
+      next[field] = normalizeHfdManualFrequencyText(String(patch[field]), {
+        previousValue: current[field],
+      }).value;
+    }
+  }
+  if (redesign && next.kind !== 'raw' && patch.coefficients === undefined) {
+    delete next.coefficients;
+    delete next.provenance;
+  }
+  return next;
+}
 
 /** Native Add considers the Unity type unused, independently of Enabled. */
 export function isUnusedBiquad(filter: Pick<Filter, 'kind'>): boolean {

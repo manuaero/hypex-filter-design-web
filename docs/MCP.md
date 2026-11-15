@@ -76,6 +76,27 @@ Add a design section to an explicit destination:
 
 That design edit does not upload the section. Inspect state and use Undo when appropriate. Hardware upload is a separate operation.
 
+## Manual frequency commits and retained bypass
+
+`fusion_filter_set`, `fusion_filter_add` and manual palette draft edits use the
+same ordinary crossover frequency normalizer as the visible fields. Numeric
+arguments deliberately use their canonical decimal text: for example, 10.35
+commits to 10.4 Hz stored as IEEE Single. Finite values clamp to 10–50,000 Hz;
+zero uses the corresponding role's previous field value. Unsupported text,
+NaN and Infinity are rejected. Diagnostic `fusion_preview_filter` and input EQ
+retain their separate contracts.
+
+Only explicitly supplied frequencies are normalized. Opening an imported
+project, inspecting it, or changing only its kind does not rewrite latent
+frequency precision. Type changes preserve Enabled unless it is explicitly
+provided. A Both palette replacement retains each destination's independent
+Enabled flag; an explicit draft Enabled value overrides both. Add creates an
+enabled new section. Explicit Unity produces a valid Unity response; the
+native dropdown's observed Boost/Cut/NaN edge case is not reproduced.
+
+These are design edits. Apply commits a preview to the design; Upload remains
+a separate amplifier action.
+
 ## Native Delete, broader Reset and reusable slots
 
 The normal card Remove and graph Delete actions share `fusion_filter_delete`:

@@ -16,7 +16,9 @@ import {
   clearPreset,
   deleteBiquad,
   isUnusedBiquad,
+  editManualFilter,
 } from '../domain/editing';
+import { normalizeHfdManualFrequencyText } from '../domain/manual-frequency';
 import InteractivePlot, { type PlotRange } from './InteractivePlot';
 import { createPlotViewController } from '../application/plot-view';
 import {
@@ -354,6 +356,7 @@ export default function Studio() {
     [palette, setPalette] = useState<PaletteScope>(),
     [paletteDraft, setPaletteDraft] = useState<Filter>(() => newFilter('peak')),
     [paletteFailure, setPaletteFailure] = useState('');
+  const paletteEnabledExplicit = useRef(false);
   const saveDialogRef = useRef<SaveDialogCapture | undefined>(undefined);
   const [audioAccess, setAudioAccess] = useState<{
     controller: CaptureController;
@@ -1683,7 +1686,7 @@ export default function Studio() {
         f.kind = 'peak';
         f.gain = 0;
       }
-      Object.assign(f, patch);
+      Object.assign(f, editManualFilter(f, patch, { redesign, manualFrequency: false }));
       if (redesign && f.kind !== 'raw') {
         delete f.coefficients;
         delete f.provenance;
@@ -1711,7 +1714,8 @@ export default function Studio() {
     const draft =
       mode === 'add'
         ? { ...newFilter('peak'), frequency: frequency ?? 1000, gain: 3 }
-        : { ...structuredClone(list[index]), enabled: true };
+        : { ...structuredClone(list[index]), ...(eq ? { enabled: true } : {}) };
+    paletteEnabledExplicit.current = false;
     setPaletteDraft(draft);
     setPaletteFailure('');
     setPalette({
@@ -1727,8 +1731,9 @@ export default function Studio() {
   }
   function updatePalette(patch: Partial<Filter>) {
     setPaletteFailure('');
+    if (Object.hasOwn(patch, 'enabled')) paletteEnabledExplicit.current = true;
     setPaletteDraft((old) => {
-      const next = { ...old, ...patch };
+      const next = palette?.eq ? { ...old, ...patch } : editManualFilter(old, patch);
       if (next.kind !== 'raw') {
         delete next.coefficients;
         delete next.provenance;
@@ -1755,6 +1760,10 @@ export default function Studio() {
           );
         list[palette.index] = {
           ...structuredClone(paletteDraft),
+          enabled:
+            palette.mode === 'replace' && !palette.eq && !paletteEnabledExplicit.current
+              ? old.enabled
+              : paletteDraft.enabled,
           id: old.id,
           sourceId: old.sourceId,
         };
@@ -3325,11 +3334,14 @@ export default function Studio() {
                         if (kind === 'raw') {
                           editFilter({
                             kind,
-                            enabled: true,
                             coefficients: coefficients ?? { b0: 1, b1: 0, b2: 0, f1: 0, f2: 0 },
                           });
                           setShowRaw(true);
-                        } else editFilter({ kind, enabled: kind !== 'unity' }, true);
+                        } else
+                          editFilter(
+                            { kind, ...(tab === 'Input EQ' ? { enabled: true } : {}) },
+                            true,
+                          );
                       }}
                     >
                       {Object.entries(FILTER_NAMES)
@@ -3362,8 +3374,15 @@ export default function Studio() {
                       }
                       value={filter.frequency}
                       onChange={(frequency) => editFilter({ frequency }, true)}
+                      deferTextCommit={tab !== 'Input EQ'}
+                      normalizeText={
+                        tab === 'Input EQ'
+                          ? undefined
+                          : (text, previousValue) =>
+                              normalizeHfdManualFrequencyText(text, { previousValue })
+                      }
                       unit="Hz"
-                      min={1}
+                      min={tab === 'Input EQ' ? 1 : 10}
                       max={50000}
                       step={1}
                     />
@@ -3421,7 +3440,13 @@ export default function Studio() {
                       frequencyWheelMax={plotViews[w.slot].Magnitude.range.frequencyMax}
                       value={filter.frequency2}
                       onChange={(frequency2) => editFilter({ frequency2 }, true)}
+                      deferTextCommit
+                      normalizeText={(text, previousValue) =>
+                        normalizeHfdManualFrequencyText(text, { previousValue })
+                      }
                       unit="Hz"
+                      min={10}
+                      max={50000}
                     />
                     <Numeric
                       begin={w.beginGesture}

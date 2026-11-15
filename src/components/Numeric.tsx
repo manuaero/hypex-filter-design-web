@@ -15,6 +15,8 @@ export default function Numeric({
   step = 1,
   disabled = false,
   commitOnly = false,
+  deferTextCommit = false,
+  normalizeText,
   begin,
   end,
   precision = 8,
@@ -33,6 +35,9 @@ export default function Numeric({
   step?: number;
   disabled?: boolean;
   commitOnly?: boolean;
+  /** Keep typed text local until blur/Enter without requiring focus for wheel edits. */
+  deferTextCommit?: boolean;
+  normalizeText?: (text: string, previousValue: number) => { text: string; value: number };
   begin?: () => void;
   end?: (cancel?: boolean) => void;
   precision?: number;
@@ -175,16 +180,27 @@ export default function Numeric({
               end?.();
               return;
             }
-            const n = parse(draft);
-            if (Number.isFinite(n)) commit(n);
-            else setDraft(format(value));
+            try {
+              if (normalizeText) {
+                const normalized = normalizeText(draft, value);
+                commit(normalized.value, { min, max }, true);
+                setDraft(normalized.text);
+              } else {
+                const n = parse(draft);
+                if (Number.isFinite(n)) commit(n);
+                else setDraft(format(value));
+              }
+            } catch {
+              setDraft(format(value));
+              dirty.current = false;
+            }
             end?.();
           }}
           onChange={(e) => {
             dirty.current = true;
             setDraft(e.target.value);
             const n = parse(e.target.value);
-            if (!commitOnly && Number.isFinite(n)) {
+            if (!commitOnly && !deferTextCommit && Number.isFinite(n)) {
               liveEmission.current = n;
               onChange(n);
             }
@@ -199,7 +215,8 @@ export default function Numeric({
             if (e.key === 'Enter') e.currentTarget.blur();
             if (e.key === 'Escape') {
               cancelled.current = true;
-              if (!commitOnly) onChange(baseline.current);
+              if (!commitOnly && (!deferTextCommit || value !== baseline.current))
+                onChange(baseline.current);
               setDraft(format(baseline.current));
               e.currentTarget.blur();
             }

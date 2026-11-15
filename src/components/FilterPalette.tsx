@@ -4,6 +4,7 @@ import { ArrowRight, Check, X, SlidersHorizontal } from 'lucide-react';
 import { type Filter, type FilterKind, type Preset } from '../domain/model';
 import { design, response, presetResponse, encodeChannel, FILTER_NAMES } from '../domain/dsp';
 import Numeric from './Numeric';
+import { normalizeHfdManualFrequencyText } from '../domain/manual-frequency';
 
 export const FILTER_LABELS: Record<FilterKind, string> = {
   unity: 'Empty section',
@@ -195,7 +196,7 @@ export default function FilterPalette({
   const select = (kind: FilterKind) =>
     onDraft({
       kind,
-      enabled: true,
+      ...(eq ? { enabled: true } : {}),
       coefficients: kind === 'raw' ? { b0: 1, b1: 0, b2: 0, f1: 0, f2: 0 } : undefined,
       provenance: undefined,
     });
@@ -367,7 +368,14 @@ export default function FilterPalette({
                   frequencyWheelMax={eq ? undefined : frequencyMaximum}
                   value={draft.frequency}
                   onChange={(frequency) => onDraft({ frequency })}
-                  min={1}
+                  deferTextCommit={!eq}
+                  normalizeText={
+                    eq
+                      ? undefined
+                      : (text, previousValue) =>
+                          normalizeHfdManualFrequencyText(text, { previousValue })
+                  }
+                  min={eq ? 1 : 10}
                   max={50000}
                   unit="Hz"
                 />
@@ -403,8 +411,12 @@ export default function FilterPalette({
                     frequencyWheelMax={frequencyMaximum}
                     value={draft.frequency2}
                     onChange={(frequency2) => onDraft({ frequency2 })}
+                    deferTextCommit
+                    normalizeText={(text, previousValue) =>
+                      normalizeHfdManualFrequencyText(text, { previousValue })
+                    }
                     unit="Hz"
-                    min={1}
+                    min={10}
                     max={50000}
                   />
                   <Numeric
@@ -463,6 +475,9 @@ export default function FilterPalette({
             )}
             {(preview.error || failure) && (
               <div className="inline-error">{preview.error || failure}</div>
+            )}
+            {mode === 'replace' && !draft.enabled && (
+              <p className="palette-note">This section is bypassed. Shape changes retain bypass.</p>
             )}
           </section>
         </div>
