@@ -53,6 +53,18 @@ import {
 } from './device-settings';
 import { saveConfigurationBackup } from './storage';
 import {
+  nativeMixerAvailability,
+  assertNativeMixerCapture,
+  assertNativeMixerBaseline,
+  planNativeMixer,
+  decodeNativeMixer,
+  verifyNativeMixerReadback,
+  type NativeMixerCapture,
+  type NativeMixerIdentity,
+  type NativeMixerPlan,
+  type NativeMixerAvailabilityInput,
+} from './native-mixer';
+import {
   captureNativeSaveTemplate,
   nativeSaveFilenameAddresses,
   nativeSaveStatusMask,
@@ -147,6 +159,15 @@ export class NativeLimiterStepError extends Error {
     this.name = 'NativeLimiterStepError';
   }
 }
+export class NativeMixerStepError extends Error {
+  constructor(
+    message: string,
+    readonly attempted: boolean,
+  ) {
+    super(message);
+    this.name = 'NativeMixerStepError';
+  }
+}
 export class AmplifierModesStepError extends Error {
   constructor(
     message: string,
@@ -184,6 +205,26 @@ export class PanelSession {
   lastStatus?: PanelStatus;
   busy = false;
   private configuredModuleType?: number;
+  private mixerCapability?: Readonly<NativeMixerAvailabilityInput>;
+  /** Cached capability metadata only. This performs no I/O and grants no access. */
+  get nativeMixerCapability(): Readonly<NativeMixerAvailabilityInput> | undefined {
+    return this.mixerCapability;
+  }
+  private rememberNativeMixerCapability(
+    configuration: Uint8Array,
+    deviceConfiguration: Uint8Array,
+  ) {
+    const hardware = decodeHardwareOverview(configuration, deviceConfiguration),
+      next = {
+        product: configuration[1],
+        moduleType: hardware.moduleType,
+        core: `${configuration[2]}.${configuration[3]}`,
+        systemSetup: configuration[4],
+        stereoDsp: hardware.stereoDsp,
+      };
+    if (JSON.stringify(next) !== JSON.stringify(this.mixerCapability))
+      this.mixerCapability = Object.freeze(next);
+  }
   /** Cached only from the last successfully identified device configuration. */
   get moduleType(): number | undefined {
     return this.configuredModuleType;
@@ -224,6 +265,7 @@ export class PanelSession {
     )
       throw new Error('This USB interface is not the verified FA503 amplifier configuration');
     this.configuredModuleType = amplifier[11];
+    this.rememberNativeMixerCapability(c, amplifier);
     const name = await this.transport.exchange(packet(3, 8));
     const id = await this.readMemoryInternal(0x100, 32, 0);
     const serial = new TextDecoder('latin1').decode(id).replace(/\0.*$/s, '').trim();
@@ -718,16 +760,28 @@ export class PanelSession {
   private async prepareControlsInternal(patch: Controls) {
     // Capture the same proposal for wire construction and checks across awaits.
     patch = structuredClone(patch);
+    let identified: Identity | undefined;
     if (
       hasDisplayControls(patch) ||
       requiredControlOperations(patch).some((operation) => !runtimeProtectionOperation(operation))
     ) {
       const identity = await this.identifyInternal();
+      identified = identity;
       if (
         (patch.oledMaximumBrightness !== undefined || patch.oledDimmedBrightness !== undefined) &&
         !(unhex(identity.configuration)[4] & 0x10)
       )
         throw new Error('The amplifier does not advertise OLED brightness controls');
+    }
+    if (patch.routing === 3 || patch.routing === 4) {
+      const identity = identified ?? (await this.identifyInternal()),
+        configuration = unhex(identity.configuration),
+        deviceConfiguration = await this.transport.exchange(packet(0x66, 0));
+      this.rememberNativeMixerCapability(configuration, deviceConfiguration);
+      this.configuredModuleType = deviceConfiguration[11];
+      const available = nativeMixerAvailability(this.mixerCapability!);
+      if (!available.routingChoices.includes(patch.routing))
+        throw new Error(available.reason ?? 'Native User mixer routing is unavailable');
     }
     // Identity/accessory reads may take several exchanges. Preserve the latest ordinary
     // volume/mute/preset/settings snapshot immediately before reconstructing the 05 packet.
@@ -824,6 +878,122 @@ export class PanelSession {
         failure instanceof Error
           ? failure.message.slice(0, 1024)
           : 'Amplifier modes were not confirmed',
+        attempted,
+      );
+    }
+  }
+  /** Read-only native User mixer snapshot. Caller owns one session reservation.
+   * Capability and access are established before reading the matrix. */
+  async captureNativeMixerInternal(
+    expected: NativeMixerIdentity,
+    requirePermission = true,
+  ): Promise<NativeMixerCapture> {
+    const target = this.capturePasswordTarget(expected),
+      identity = await this.identifyInternal();
+    if (
+      (['serial', 'product', 'core', 'firmware'] as const).some(
+        (key) => identity[key] !== target[key],
+      )
+    )
+      throw new Error('Captured native mixer identity or firmware changed');
+    const configuration = unhex(identity.configuration),
+      deviceConfiguration = (await this.transport.exchange(packet(0x66, 0))).slice();
+    this.rememberNativeMixerCapability(configuration, deviceConfiguration);
+    this.configuredModuleType = deviceConfiguration[11];
+    const available = nativeMixerAvailability(this.mixerCapability!);
+    if (!available.editorAvailable) throw new Error(available.reason);
+    if (configuration[5] !== 3 || configuration[12] !== 3)
+      throw new Error('Native mixer requires three presets and three channels');
+    const status = await this.statusInternal();
+    if (requirePermission)
+      assertOperationAllowed(status, 'digitalLeftRight', this.configuredModuleType);
+    const mixerConfiguration = (await this.transport.exchange(packet(0x67, 0), 250)).slice(),
+      finalIdentity = await this.identifyInternal(),
+      finalConfiguration = (await this.transport.exchange(packet(0x66, 0))).slice(),
+      finalStatus = await this.statusInternal(),
+      captured = {
+        identity: target,
+        status: finalStatus.raw.slice(),
+        configuration,
+        deviceConfiguration: finalConfiguration,
+        mixerConfiguration,
+      };
+    this.rememberNativeMixerCapability(configuration, finalConfiguration);
+    this.configuredModuleType = finalConfiguration[11];
+    if (
+      (['serial', 'product', 'core', 'firmware'] as const).some(
+        (key) => finalIdentity[key] !== target[key],
+      ) ||
+      finalIdentity.configuration !== hex(configuration) ||
+      hex(finalConfiguration.slice(2)) !== hex(deviceConfiguration.slice(2))
+    )
+      throw new Error('Native mixer identity or configuration changed during capture');
+    assertNativeMixerCapture(captured, requirePermission);
+    return captured;
+  }
+  /** One67/01 setter and independent67/00 verification. No05,66, mute, reload,
+   * retry or rollback. All participants must finish the caller's final barrier. */
+  async writeNativeMixerInternal(
+    expected: NativeMixerIdentity,
+    baseline: NativeMixerCapture,
+    plan: NativeMixerPlan,
+    hooks: {
+      assertCurrent?: () => void;
+      readyToExchange?: () => Promise<void>;
+      afterReady?: () => Promise<void>;
+      beforeExchange?: () => void;
+      onAttempt?: () => void;
+    } = {},
+  ) {
+    let attempted = false;
+    try {
+      if (this.cloneMutation)
+        throw new Error('Native mixer cannot run inside a Clone mutation scope');
+      const target = this.capturePasswordTarget(expected),
+        original: NativeMixerCapture = {
+          identity: { ...baseline.identity },
+          status: baseline.status.slice(),
+          configuration: baseline.configuration.slice(),
+          deviceConfiguration: baseline.deviceConfiguration.slice(),
+          mixerConfiguration: baseline.mixerConfiguration.slice(),
+        },
+        rows = plan.rows.map((row) => ({ preset: row.preset, weights: [...row.weights] })),
+        proposed = planNativeMixer(original, rows),
+        suppliedRequest = plan.request.slice(),
+        suppliedExpected = plan.verification.expected.slice(),
+        suppliedMask = plan.verification.mask.slice();
+      if (
+        hex(suppliedRequest) !== hex(proposed.request) ||
+        hex(suppliedExpected) !== hex(proposed.verification.expected) ||
+        hex(suppliedMask) !== hex(proposed.verification.mask)
+      )
+        throw new Error('Native mixer reviewed packet or verification changed');
+      hooks.assertCurrent?.();
+      await hooks.readyToExchange?.();
+      hooks.assertCurrent?.();
+      const current = await this.captureNativeMixerInternal(target);
+      assertNativeMixerBaseline(original, current);
+      const finalPlan = planNativeMixer(current, rows);
+      await hooks.afterReady?.();
+      hooks.assertCurrent?.();
+      // The error's attempted flag remains authoritative if an observer or the
+      // final synchronous cancellation/assignment gate refuses before exchange.
+      hooks.onAttempt?.();
+      hooks.beforeExchange?.();
+      attempted = true;
+      const ack = await this.transport.exchange(finalPlan.request, 500);
+      // Host67 RX ignores byte1. Available5.82 target builds it from request
+      // byte2; it is not a fixed success byte. No payload/padding ACK guess.
+      if (ack.length !== 64 || ack[0] !== 0x67)
+        throw new Error('Unexpected native mixer write reply');
+      const actual = await this.transport.exchange(packet(0x67, 0), 250);
+      verifyNativeMixerReadback(finalPlan, actual);
+      return { mixerConfiguration: actual.slice(), matrix: decodeNativeMixer(actual) };
+    } catch (failure) {
+      throw new NativeMixerStepError(
+        failure instanceof Error
+          ? failure.message.slice(0, 1024)
+          : 'Native mixer Save was not confirmed',
         attempted,
       );
     }
@@ -1378,6 +1548,7 @@ export class PanelSession {
         configuration = await this.transport.exchange(packet(0x66, 0)),
         hypexName = await this.readMemoryInternal(0x120, 32, 0),
         oemName = await this.readMemoryInternal(0x140, 32, 0);
+      this.rememberNativeMixerCapability(unhex(identity.configuration), configuration);
       return {
         identity: { ...identity },
         ...decodeHardwareOverview(unhex(identity.configuration), configuration),

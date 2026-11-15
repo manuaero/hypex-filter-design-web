@@ -64,6 +64,8 @@ import { createDeviceDefaultsController } from '../application/device-defaults';
 import { createDeviceCloneController, deviceCloneSnapshotPage } from '../application/device-clone';
 import { createCloneWorkspace } from '../application/clone-workspace';
 import { createAmplifierModesController } from '../application/amplifier-modes';
+import { createNativeMixerController } from '../application/native-mixer';
+import NativeMixerPanel from './NativeMixerPanel';
 import {
   createNativeProjectSaveController,
   type NativeProjectSaveController,
@@ -973,6 +975,24 @@ export default function Studio() {
       });
     };
   }, [nativeLimiter]);
+  const nativeMixer = useMemo(
+    () => createNativeMixerController({ binding: (slot) => liveRef.current[slot], operate }),
+    [],
+  );
+  const nativeMixerSnapshot = useSyncExternalStore(
+    nativeMixer.subscribe,
+    nativeMixer.getSnapshot,
+    nativeMixer.getSnapshot,
+  );
+  const mixerLifetime = useRef(0);
+  useEffect(() => {
+    const lifetime = ++mixerLifetime.current;
+    return () => {
+      queueMicrotask(() => {
+        if (mixerLifetime.current === lifetime) nativeMixer.dispose();
+      });
+    };
+  }, [nativeMixer]);
   const defaultsLifetime = useRef(0);
   useEffect(() => {
     const lifetime = ++defaultsLifetime.current;
@@ -1090,6 +1110,7 @@ export default function Studio() {
     deviceClone.refreshBindings();
     amplifierModes.refreshBindings();
     nativeLimiter.refreshBindings();
+    nativeMixer.refreshBindings();
     noiseController.refreshBindings();
   }, [
     live,
@@ -1100,6 +1121,7 @@ export default function Studio() {
     deviceClone,
     amplifierModes,
     nativeLimiter,
+    nativeMixer,
     noiseController,
   ]);
   const revealInspector = () => {
@@ -1724,6 +1746,7 @@ export default function Studio() {
     amplifierModes,
     nativeProjectSave,
     nativeLimiter,
+    nativeMixer,
     eqClipboard: {
       get: () => (eqClipboard.current ? structuredClone(eqClipboard.current) : undefined),
       set: (bank, label) => {
@@ -1760,6 +1783,7 @@ export default function Studio() {
       amplifierModes: modesSnapshot,
       projectSaveCaptures: nativeSaveSnapshot,
       nativeLimiter: nativeLimiterSnapshotPage(nativeLimiterSnapshot),
+      nativeMixer: nativeMixerSnapshot,
       workspaceAuthority: workspaceAuthority.getSnapshot(),
       noise: noiseController.getSnapshot(),
       sourceOpen: sourceOpenStatus(),
@@ -3460,7 +3484,7 @@ export default function Studio() {
                 does not change these controls.
               </p>
               <details className="device-workflow">
-                <summary>Clone saved settings and filters</summary>
+                <summary>Device templates · settings and filters</summary>
                 <DeviceClonePanel
                   controller={deviceClone}
                   slot={w.slot}
@@ -3518,6 +3542,18 @@ export default function Studio() {
                   <NativeLimiterPanel
                     controller={nativeLimiter}
                     slot={w.slot}
+                    connectedRoles={SLOTS.filter((slot) => !!live[slot])}
+                    getContext={() =>
+                      (projectSourceContext.current ??= workspaceAuthority.localContext('ui'))
+                    }
+                    contextReady={authorityStatus.phase === 'ready'}
+                    externalBusy={!!busy}
+                  />
+                  <NativeMixerPanel
+                    controller={nativeMixer}
+                    slot={w.slot}
+                    preset={(w.preset + 1) as 1 | 2 | 3}
+                    onPresetChange={(preset) => chooseWorkspace({ preset: preset - 1 })}
                     connectedRoles={SLOTS.filter((slot) => !!live[slot])}
                     getContext={() =>
                       (projectSourceContext.current ??= workspaceAuthority.localContext('ui'))
@@ -3857,9 +3893,14 @@ export default function Studio() {
                       'Native byte mapping and paired simulation pass. Physical Defaults/recovery writes remain unverified; the current original preset1 checksum and DSP On state were checked read-only.',
                     ],
                     [
-                      'Clone settings',
+                      'Device templates',
                       'Typed native templates, atomic connected-device metadata capture, separate physical EQ and staged filter designs, explicit paired review/apply and complete durable recovery records',
-                      'Source and synthetic tests only for Clone writes. No live bridge/configuration test is permitted with the connected drivers. A second physical amplifier is unavailable.',
+                      'Source and synthetic tests only for template writes. No live bridge/configuration test is permitted with the connected drivers. A second physical amplifier is unavailable.',
+                    ],
+                    [
+                      'Native digital mixer',
+                      'Conditional OEM StereoDSP editor, three independent preset matrices, native weight formatting and quantization; shared UI/MCP drafts with reviewed Left/Right/Both Save',
+                      'Commercial FA503 hides the native editor. Protocol and paired behavior are tested in simulation; physical OEM mixer writes remain unqualified. No manufacturing Enable mixer or bridge write is used.',
                     ],
                     [
                       'Agent access',

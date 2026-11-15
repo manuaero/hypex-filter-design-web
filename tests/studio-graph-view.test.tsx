@@ -945,6 +945,38 @@ it('actual cached view command opens the offline NoisePanel; local/compatibility
   expect(state().past).toHaveLength(0);
 });
 
+it('actual Studio adapter exposes the same cached native mixer controller and view without USB or document mutations', async () => {
+  const usb = vi
+    .spyOn(WebHidTransport.prototype, 'exchange')
+    .mockRejectedValue(new Error('Unexpected USB exchange'));
+  await mount();
+  const before = structuredClone(state().documents),
+    revision = state().documentRevision,
+    actor = seen.authority!.localContext('manual'),
+    execute = createToolExecutor(seen.adapter!);
+  expect(seen.adapter!.nativeMixer).toBeDefined();
+  const result = await execute('fusion_native_mixer', { action: 'status' }, actor);
+  expect(result).toMatchObject({
+    ok: true,
+    mixer: { roles: { left: { connected: false }, right: { connected: false } }, records: [] },
+  });
+  expect(seen.adapter!.viewState!()).toMatchObject({
+    nativeMixer: seen.adapter!.nativeMixer!.getSnapshot(),
+  });
+  const controllerStatus = seen.adapter!.nativeMixer!.status(actor);
+  expect(result).toEqual({ ok: true, mixer: controllerStatus });
+  await act(async () => {
+    expect(
+      await execute('fusion_native_mixer', { action: 'load', target: 'both', preset: 2 }, actor),
+    ).toMatchObject({ ok: false });
+  });
+  expect(state().preset).toBe(0);
+  expect(usb).not.toHaveBeenCalled();
+  expect(state().documents).toEqual(before);
+  expect(state().documentRevision).toBe(revision);
+  expect(state().past).toHaveLength(0);
+});
+
 it('actual Studio gesture context includes channel identity and changes when a project replaces the selected channel at the same indices', async () => {
   await mount();
   const before = seen.plot!.contextKey!;

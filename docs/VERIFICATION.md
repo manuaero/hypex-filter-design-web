@@ -80,6 +80,48 @@ DSP was On, bridge was Off and no errors or warnings were reported. Both complet
 
 The browser's download-anchor action produced no observed download event. Its internal Downloads page was unavailable under the browser-control policy, so browser file delivery is not claimed. This is separate from the MCP bytes that were delivered and verified. A successful read/export also does not establish a fresh independent HFD GUI comparison or behavior with two physical amplifiers.
 
+## V33 native mixer release checks
+
+Fresh public-checkout checks on **2026-11-15** passed **2,339 tests, one
+optional-PDF skip and zero failures: 2,340 total tests across 171 files**.
+Typecheck and production build passed. The registry contains 88 commands.
+The build produced 24 static assets totaling 1,874,950 bytes and a
+3,065,748-byte Worker. Its actual compiled client and isolated process-free
+Worker both report the manual absent and optional; actual Worker routes return
+200 for the home page and 404 for the omitted PDF. The skip remains the exact
+optional installed-PDF acceptance test. Dependencies and lockfile were unchanged.
+
+The conditional native mixer now has shared human/MCP role/preset drafts,
+native formatting and quantized previews, fixed review, strict retained
+before-images, all-target barriers and single-attempt write/readback. Fresh
+browser simulation checked Cancel, native 0.105-to-0.11 normalization, different
+Left/Right values, retained inactive preset drafts/words, human Save of an MCP
+review, lost ACK, and zero-I/O replay. Forbidden settings/configuration/bridge/
+power writes and barrier violations remained zero. The 995-by-856 browser view
+kept both matrices, their context and Save visible without horizontal overflow.
+
+One actual commercial FA503 was checked read-only. It reported module 9,
+StereoDSP disabled, DSP On, bridge Off and no errors or warnings. The UI offered
+only Left + Right/Right/Left routing, with no editable mixer weights. Both full
+workspace projects, selection and revision remained unchanged, and the USB
+connection was closed afterward. No hardware setter was invoked. This checks
+the commercial eligibility display; it does not qualify a physical OEM mixer
+writer or two physical amplifiers. The deployed app's actual shared mixer
+command also returned valid cached offline state without changing its projects.
+
+Earlier v31/v32 privacy scans missed a physical device identifier in one test
+fixture. V33 replaces it with an explicit synthetic identifier and narrowly
+corrects the two public ancestor commits, preserving all other files and commit
+metadata. The current source and reachable public branch history pass the
+stricter scan. Previously fetched copies or cached old commit views cannot be
+recalled by a branch update. Vendor files, private hosting metadata and local
+recovery artifacts remain excluded.
+
+Browser download completion, independent native GUI comparisons, physical
+OEM mixer writes, paired physical operation and other qualification limits
+remain open. Source and simulation coverage must not be described as exhaustive
+verified HFD parity.
+
 ## Evidence categories
 
 | Category                      | What it establishes                                                                                  | What it does not establish                                       |
@@ -117,7 +159,7 @@ Remaining qualification includes:
 - Conditional accessories, four-output DSP3-224 workflows and other hardware families.
 - Fresh native comparisons for remaining detailed display/interaction behavior.
 
-Known software limitations also remain, including a conditional/OEM custom digital mixer weight editor and historical non-directory owner migration. Ordinary connected Save now has a supported-profile implementation and one actual FA503 read/export check; browser download completion, paired physical capture, independent native comparison and other profiles remain open. File formats and grouped source coverage must not be advertised as exhaustive HFD parity.
+The conditional/OEM digital mixer editor is implemented with shared native-format drafts and reviewed Save; its physical OEM writer remains unqualified. Historical non-directory owner migration remains a software limitation. Ordinary connected Save has a supported-profile implementation and one actual FA503 read/export check; browser download completion, paired physical capture, independent native comparison and other profiles remain open. File formats and grouped source coverage must not be advertised as exhaustive HFD parity.
 
 ## Report reproducible evidence
 

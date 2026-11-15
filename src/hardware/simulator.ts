@@ -10,6 +10,9 @@ export class SimulatedPanel implements Transport {
   closed = false;
   configuration = packet(6, 22, 5, 1);
   deviceConfiguration = packet(0x66);
+  /** Full signed-Q8 matrix, including latent values outside the ordinary editor. */
+  mixerConfiguration = packet(0x67);
+  mixerWrites = 0;
   powerMode = 2;
   noiseRequested = false;
   noiseRequests = 0;
@@ -120,6 +123,20 @@ export class SimulatedPanel implements Transport {
           this.deviceConfiguration[1] = 0;
         }
         return this.deviceConfiguration.slice();
+      }
+      if (c === 0x67) {
+        if (request[1] === 1) {
+          this.mixerConfiguration.set(request.slice(2, 38), 2);
+          this.eeprom.set(request.slice(2, 38), 0xd0);
+          this.mixerWrites++;
+          const reply = this.mixerConfiguration.slice();
+          // Explicit model of the inspected5.82 response builder, not a claim
+          // that physical firmware5.7 ACK/EEPROM behavior has been qualified.
+          reply[1] = request[2];
+          return reply;
+        }
+        if (request[1] === 0) return this.mixerConfiguration.slice();
+        throw new Error('Unsupported simulated mixer selector');
       }
       if (c === 8) {
         if (request[1] === 0x1e) {

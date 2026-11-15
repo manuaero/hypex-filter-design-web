@@ -29,7 +29,7 @@ const bit = (id: string) => OEM_ITEMS.find((item) => item.id === id)!.mask;
 function fixture(mask = 0, moduleType = 0, flags = 2) {
   const panel = new SimulatedPanel('OEM-UI-SIMULATION'),
     session = new PanelSession(panel, async () => {});
-  panel.configuration[4] = 0x10;
+  panel.configuration[4] = 0x12; // OLED plus native digital mixer group.
   panel.deviceConfiguration[11] = moduleType;
   panel.status[51] = flags;
   panel.status[24] = mask & 255;

@@ -115,6 +115,57 @@ function toggle(label: string) {
   return element!;
 }
 
+it('offers native User mixer routing only for an enabled OEM editor and retains an unsupported reported selection', async () => {
+  const standard = amplifier('STANDARD');
+  standard.panel.configuration[4] |= 2;
+  standard.panel.deviceConfiguration[11] = 9;
+  standard.panel.status[11] = 3;
+  await render(standard);
+  const reported = select('Digital channel');
+  expect(reported.value).toBe('3');
+  expect([...reported.options].map((option) => [option.value, option.disabled])).toEqual([
+    ['3', true],
+    ['0', false],
+    ['1', false],
+    ['2', false],
+  ]);
+  expect(reported.selectedOptions[0].textContent).toContain('reported, unavailable');
+  const eligible = amplifier('OEM');
+  eligible.panel.configuration[4] |= 2;
+  eligible.panel.deviceConfiguration[11] = 1;
+  eligible.panel.deviceConfiguration[14] |= 128;
+  await render(eligible);
+  expect([...select('Digital channel').options].map((option) => option.text)).toEqual([
+    'Left + Right',
+    'Right',
+    'Left',
+    'User mixer',
+    'Disabled',
+  ]);
+  await choose(select('Digital channel'), 4);
+  expect(controls).toHaveBeenCalledExactlyOnceWith({ routing: 4 });
+  expect(standard.panel.writes + eligible.panel.writes).toBe(0);
+});
+
+it('hides the digital group when absent and removes advanced choices when StereoDSP is disabled', async () => {
+  const hidden = amplifier('HIDDEN');
+  hidden.panel.deviceConfiguration[11] = 1;
+  await render(hidden);
+  expect(host.querySelector('select[aria-label="Digital channel"]')).toBeNull();
+  const disabled = amplifier('DISABLED');
+  disabled.panel.configuration[4] |= 2;
+  disabled.panel.deviceConfiguration[11] = 1;
+  disabled.panel.deviceConfiguration[14] &= ~128;
+  await render(disabled);
+  expect([...select('Digital channel').options].map((option) => option.value)).toEqual([
+    '0',
+    '1',
+    '2',
+  ]);
+  expect(controls).not.toHaveBeenCalled();
+  expect(hidden.panel.writes + disabled.panel.writes).toBe(0);
+});
+
 it('matches the screenshot native module and amplifier names and all four literal analogue input readouts', async () => {
   const f = amplifier();
   f.panel.deviceConfiguration[11] = 9;

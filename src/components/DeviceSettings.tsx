@@ -7,6 +7,7 @@ import { settings, type Controls, type PanelStatus } from '../hardware/codec';
 import type { PanelSession, Identity } from '../hardware/session';
 import { decodeProtection, type ProtectionOperation } from '../hardware/protection';
 import { dspPowerOffAvailability } from '../hardware/power-availability';
+import { nativeMixerAvailability } from '../hardware/native-mixer';
 import type { PowerStatistics } from '../hardware/device-settings';
 import {
   INPUT_SOURCES,
@@ -84,7 +85,18 @@ export default function DeviceSettings({
     [failure, setFailure] = useState('');
   const access = decodeProtection(live.status, hardware?.moduleType),
     can = (operation: ProtectionOperation) => access.operations[operation].allowed,
-    powerOff = dspPowerOffAvailability(hardware?.identity.firmware ?? live.identity.firmware);
+    powerOff = dspPowerOffAvailability(hardware?.identity.firmware ?? live.identity.firmware),
+    mixer = hardware
+      ? nativeMixerAvailability({
+          product: hardware.product,
+          moduleType: hardware.moduleType,
+          core: hardware.identity.core,
+          systemSetup: hardware.systemSetup,
+          stereoDsp: hardware.stereoDsp,
+        })
+      : undefined,
+    routing = live.status.raw[11] & 7,
+    routingLabels = ['Left + Right', 'Right', 'Left', 'User mixer', 'Disabled'];
   const generation = useRef(0),
     mounted = useRef(true),
     currentSession = useRef(live.session),
@@ -315,20 +327,28 @@ export default function DeviceSettings({
               ))}
             </select>
           </label>
-          <label className="field-label">
-            Digital channel
-            <select
-              value={live.status.raw[11] & 7}
-              disabled={!can('digitalLeftRight')}
-              onChange={(e) => controls({ routing: Number(e.target.value) })}
-            >
-              {['Left + Right', 'Right', 'Left', 'User mixer', 'Disabled'].map((s, i) => (
-                <option key={s} value={i}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
+          {(mixer?.groupVisible ?? !hardware) && (
+            <label className="field-label">
+              Digital channel
+              <select
+                aria-label="Digital channel"
+                value={routing}
+                disabled={!mixer || !can('digitalLeftRight')}
+                onChange={(e) => controls({ routing: Number(e.target.value) })}
+              >
+                {!mixer?.routingChoices.includes(routing) && (
+                  <option value={routing} disabled>
+                    {routingLabels[routing] ?? `Unknown (${routing})`} · reported, unavailable
+                  </option>
+                )}
+                {(mixer?.routingChoices ?? []).map((i) => (
+                  <option key={i} value={i}>
+                    {routingLabels[i]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <Switch
             label="Source lock"
             checked={s.sourceLock}

@@ -14,14 +14,14 @@ Left and Right have independent sessions. The same physical identity must not be
 
 ## Record families
 
-| Record/command family  | Current use                                                                                                          |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `03`                   | DSP design filename/name data.                                                                                       |
-| `05`                   | Runtime and writable control/settings record; status telemetry and one-shot write triggers have different ownership. |
-| `06`                   | Product/core/firmware/capability information.                                                                        |
-| `66`                   | Amplifier/configuration/limiter record, with reserved and manufacturing fields preserved.                            |
-| `67`                   | Captured per-preset digital mixer values. Capture support does not establish a user mixer setter.                    |
-| Memory/page operations | Bounded backup, IIR/EQ/FIR images, programming and verification through explicitly allowed ranges.                   |
+| Record/command family  | Current use                                                                                                                |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `03`                   | DSP design filename/name data.                                                                                             |
+| `05`                   | Runtime and writable control/settings record; status telemetry and one-shot write triggers have different ownership.       |
+| `06`                   | Product/core/firmware/capability information.                                                                              |
+| `66`                   | Amplifier/configuration/limiter record, with reserved and manufacturing fields preserved.                                  |
+| `67`                   | Native per-preset digital mixer values; conditional OEM editor with reviewed single-attempt Save and independent readback. |
+| Memory/page operations | Bounded backup, IIR/EQ/FIR images, programming and verification through explicitly allowed ranges.                         |
 
 Codecs preserve unowned fields instead of rebuilding a record from UI defaults. Unknown stored enum values remain visible and are not automatically normalized on mount.
 
@@ -38,6 +38,25 @@ Master/Slave modes have native dependent-field effects. Slave mode clears wake-o
 The supported processing design rate is 93,750 Hz. Output paths contain fifteen biquads, with separate metadata and stored coefficient provenance. Native saved caches can represent different calculation stages; imports retain that distinction rather than blindly applying channel gain twice.
 
 Input EQ has three independent nine-band banks. Captured physical EQ is separate from staged design EQ. FIR placement/capacity and enable flags are also separate from whether a tap cache is loaded. Native folders preserve original measurement samples and resources alongside XML; browser-only processing state uses a validated sidecar.
+
+## Conditional native mixer
+
+The User mixer editor requires configured OEM module 1, supported core metadata
+and the actual enabled StereoDSP flag, with native group reachability and
+settings-entry/DigitalLeftRight permissions checked separately. It is not an
+editable feature of commercial FA503 module 9. Manufacturing Enable mixer is
+read-only in the browser. Advanced routing admission rechecks actual capability.
+
+Three presets each hold six signed little-endian Q8 weights. Only an explicitly
+opened row receives native two-decimal Text formatting; inactive rows retain
+exact words. Edited values use Single-to-Q24 conversion followed by the upper
+16 bits, rather than direct Q8 rounding. Review fixes each target's own draft.
+All required originals are durably verified before any setter and a fresh
+common barrier precedes wire admission. One 67/01 attempt is followed by a
+separate 67/00 readback. Verification covers the matrix data while allowing the
+native variable selector/padding behavior. No mute, common-settings, bridge,
+power or manufacturing write is added. Physical OEM writer acceptance remains
+unqualified. See [the native mixer workflow](NATIVE_MIXER.md).
 
 ## Connected Native Save
 

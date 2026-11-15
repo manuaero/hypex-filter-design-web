@@ -2,7 +2,7 @@
 
 Agents use the same controllers and validation as the human interface. Normal users can work entirely through visible controls; the optional command console is a development aid.
 
-The current registry contains **87 commands**, including shared amplifier-mode review and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
+The current registry contains **88 commands**, including shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
 
 ## Pair a local client
 
@@ -92,6 +92,29 @@ That design edit does not upload the section. Inspect state and use Undo when ap
 | Help                         | `fusion_help`                                                                                                                                                                                      |
 
 Some older clients cache tool names. Existing validated compatibility namespaces expose selected newer operations; use the server’s current schema rather than guessing nested arguments. Firmware inspection and authentication actions are available through `fusion_device_read` namespaces. Physical firmware programming remains disabled.
+
+## Native digital User mixer
+
+`fusion_native_mixer` uses the same conditional editor and exact independent
+Left/Right drafts as the human panel. Presets and channels are one-based.
+
+| Action                             | Behavior                                                                                       |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `status`                           | Cached capability, matrices, drafts, review, outcomes and bounded history; no I/O.             |
+| `load`                             | Read an explicit target and open only the chosen preset with native formatting.                |
+| `open`, `edit`                     | Open or edit a row at the exact controller revision; no hardware write.                        |
+| `cancel`                           | Restore the captured row and close it without reopening on ordinary rerenders.                 |
+| `review`                           | Freshly check the fixed target/preset/revision and publish the shared review.                  |
+| `save`                             | Require that one-use review ID and `confirm: true`; journal, preflight, write once and verify. |
+| `discard-review`                   | Discard the pending review.                                                                    |
+| `refresh-history`, `export-record` | Read local history or create checked chunks for a retained record.                             |
+
+The current `revision` comes from status or load. Edit specifies target, preset,
+channel, input (`left` or `right`) and value. A Both operation uses each device's
+own row, preserving other physical presets. Commercial module 9 does not expose
+the native weight editor. Manufacturing Enable mixer is read-only; raw packets
+and arbitrary settings are rejected. Partial/uncertain results never retry or
+roll back automatically. See [the mixer workflow](NATIVE_MIXER.md).
 
 ## Native Save artifacts
 

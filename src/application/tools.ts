@@ -98,6 +98,8 @@ import { DeviceAuthOperationError, type DeviceAuthController } from './device-au
 import { DeviceDefaultsError, type DeviceDefaultsController } from './device-defaults';
 import { AmplifierModesError, type AmplifierModesController } from './amplifier-modes';
 import { amplifierModesToolSchema, executeAmplifierModesTool } from './amplifier-modes-tools';
+import { nativeMixerToolSchema, executeNativeMixerTool } from './native-mixer-tools';
+import { NativeMixerError, type NativeMixerController } from './native-mixer';
 import {
   DeviceCloneError,
   deviceCloneRecordSummary,
@@ -201,6 +203,7 @@ export interface ToolAdapter {
   deviceClone?: DeviceCloneController;
   nativeLimiter?: NativeLimiterController;
   amplifierModes?: AmplifierModesController;
+  nativeMixer?: NativeMixerController;
   nativeProjectSave?: NativeProjectSaveController;
   descriptorVerifier?: UsbDescriptorVerifier;
   sources?: ProjectSources;
@@ -1455,6 +1458,7 @@ const schemas = {
   ]),
   fusion_device_clone: deviceCloneToolSchema,
   fusion_amplifier_modes: amplifierModesToolSchema,
+  fusion_native_mixer: nativeMixerToolSchema,
   fusion_limiter_editor: z.discriminatedUnion('action', [
     z.object({ action: z.literal('status') }).strict(),
     z.object({ action: z.literal('load'), target }).strict(),
@@ -1524,6 +1528,8 @@ const schemas = {
 };
 export type ToolName = keyof typeof schemas;
 export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
+  fusion_native_mixer:
+    'Use the shared native digital User mixer editor for eligible OEM StereoDSP devices. No manufacturing enable operation is exposed. status reads cached weights, eligibility, independent Left/Right drafts, reviews and bounded history without I/O. load freshly reads the complete three-preset matrix and opens only the explicit one-based preset; open applies native modal formatting to that row without I/O. edit stages one CH1/2/3 left/right contribution in -1..1 at an exact revision; negative weights invert and no sum normalization is imposed. cancel restores the exact captured row and closes it. review captures fresh identities, permissions and matrix baselines. save requires a context-bound one-use reviewId and confirm:true; all changed-target before-images are durably verified before any setter, followed by an all-target fresh barrier. Only the selected row changes; other physical presets remain byte-exact. Both uses each amplifier own draft. One 67/01 attempt per changed target is independently read back; partial and uncertain outcomes stay in the UI and never retry or roll back automatically. refresh-history reads local journals; export-record returns a checked chunked recovery record. No common settings, DSP power, bridge or manufacturing configuration writes. Physical OEM mixer and two-device operation remain unqualified.',
   fusion_amplifier_modes:
     'Use the same staged amplifier configuration editor as the human UI. status reads cached mode drafts, permissions, coupled setting previews and the latest result without device I/O. edit changes master/slave, bridge or soft clip drafts at an exact revision; it sends no reports. Left and Right retain independent drafts; Both applies each own draft and skips unchanged roles. cancel discards the selected drafts. load explicitly reads fresh selected devices and resets those drafts. review reads fresh identities/permissions and fences the mode-owned fields, including native master/slave dependencies; apply requires its one-use reviewId and confirm:true. All selected targets are preflighted and all changed-target configuration backups verified before any setter. Fresh unrelated runtime, mute, sources, EQ/FIR, display and security settings are preserved. No automatic mute, DSP restart, retry or rollback. A partial result marks each fixed amplifier separately and appears in the UI. Consumed receipt replay performs no I/O. Bridge configuration must never be applied during live testing with the connected Right drivers.',
   fusion_device_clone:
@@ -3680,6 +3686,17 @@ export function createToolExecutor(adapter: ToolAdapter) {
             context: context ? { ...context, ...(signal ? { signal } : {}) } : undefined,
             view: () => adapter.view({ tab: 'Device settings' }),
           });
+        case 'fusion_native_mixer':
+          return await executeNativeMixerTool(a, {
+            controller: adapter.nativeMixer,
+            context: context ? { ...context, ...(signal ? { signal } : {}) } : undefined,
+            view: (preset) => {
+              if (preset !== undefined) adapter.choose({ preset: preset - 1 });
+              adapter.view({ tab: 'Device settings' });
+            },
+            files: adapter.files,
+            transferPage,
+          });
         case 'fusion_device_clone':
           return await executeDeviceCloneTool(a, {
             controller: adapter.deviceClone,
@@ -3850,7 +3867,8 @@ export function createToolExecutor(adapter: ToolAdapter) {
         signal?.aborted &&
         !(e instanceof NativeLimiterError && e.result) &&
         !(e instanceof DeviceCloneError && e.result) &&
-        !(e instanceof AmplifierModesError && e.result)
+        !(e instanceof AmplifierModesError && e.result) &&
+        !(e instanceof NativeMixerError && e.result)
       )
         throw e;
       return {
@@ -3865,6 +3883,7 @@ export function createToolExecutor(adapter: ToolAdapter) {
           : {}),
         ...(e instanceof NativeLimiterError && e.result ? { result: e.result } : {}),
         ...(e instanceof AmplifierModesError && e.result ? { result: e.result } : {}),
+        ...(e instanceof NativeMixerError && e.result ? { result: e.result } : {}),
         ...(e instanceof DeviceCloneError
           ? {
               persistence: e.persistence,

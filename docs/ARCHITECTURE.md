@@ -50,6 +50,24 @@ Connected roles use sorted session reservations, all-settled reads and final all
 
 The controller retains at most eight IDs and budgets detached projects plus resolved file text against 80 million characters and 640 MB. Both roles count separately. Failures retain bounded summaries rather than large partial artifacts; release/dispose invalidates late work without closing a user-owned device. These artifacts are page-local and distinct from durable directory journals.
 
+## Conditional native mixer
+
+`hardware/native-mixer.ts` models capability reachability, exact raw Q8 rows,
+explicit native row opening, typed Text formatting and Single/Q24 wire
+quantization. Cached Session capability is for presentation only; final reads
+and writes independently validate identity and native permissions. Commercial
+module 9 does not expose an editable User mixer.
+
+`application/native-mixer.ts` owns the same independent role/preset drafts,
+revision, review and outcome for UI and MCP. A Save fixes its selected row,
+retains the other physical rows exactly and reserves all participants. Durable
+before-images and a common fresh barrier precede a single write/readback per
+changed role. Strict CAS journals retain original reports, desired bytes and
+attempt outcomes. Consumed replay is zero-I/O; no automatic retry, rollback or
+manufacturing enable setter is provided. Human record download and agent
+chunked export expose the same retained journal. See the
+[native mixer workflow](NATIVE_MIXER.md).
+
 ## State, history and durable commits
 
 The workspace has independent Left/Right projects, a selection and a monotonic document revision. Hydration gates edits. Asynchronous imports bind their role, preset, channel and expected revision before awaiting a picker, read or analysis. They cannot retarget themselves to a later selection.
