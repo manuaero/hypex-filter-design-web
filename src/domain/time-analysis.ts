@@ -27,7 +27,8 @@ export interface TimeAnalysis {
   channels: TimeCurve[];
   sum?: TimeCurve;
   warnings: string[];
-  /** Native Fit truncated bounds remain in original measurement coordinates. */
+  /** Native Fit truncated requests come from the selected reference's timed
+   * grid in original measurement coordinates; they need not be ordered. */
   windowBounds?: { minMs: number; maxMs: number };
 }
 
@@ -59,6 +60,33 @@ function nativeLength(channel: Channel | undefined) {
   do n *= 4;
   while (n < stop && n < CAPACITY);
   return n;
+}
+
+/** c6d6fc scans plotted X values, not the crop indices themselves. The stored
+ * binary64 spacing is multiplied by i, while the two crop bounds are divided
+ * independently. Thus 10/48000 lies just above grid point10 and selects11.
+ * Preserve the native 0s/2s defaults and early right-bound exit; validating an
+ * invalid requested viewport belongs to the caller, not this calculation. */
+function nativeFitBounds(channel: Channel, n: number) {
+  const native = channel.hfdMeasurement!,
+    spacing = 1 / native.sampleRate,
+    requestedLeft = effectiveHfdCropStart(native) / native.sampleRate,
+    requestedRight = native.stopInclusive / native.sampleRate;
+  let left = 0,
+    right = 2,
+    foundLeft = false;
+  for (let i = 0; i < n; i++) {
+    const time = i * spacing;
+    if (!foundLeft && time >= requestedLeft) {
+      left = time;
+      foundLeft = true;
+    }
+    if (time >= requestedRight) {
+      right = time;
+      break;
+    }
+  }
+  return { minMs: left * 1000, maxMs: right * 1000 };
 }
 
 interface Prepared {
@@ -293,12 +321,17 @@ export function analyzeTimeResponses(
     channels: curves,
     warnings: unique(curves.flatMap((c) => c.warnings)),
   };
-  const bounds = prepared.flatMap((p) => (p?.windowBounds ? [p.windowBounds] : []));
-  if (bounds.length)
-    result.windowBounds = {
-      minMs: Math.min(...bounds.map((b) => b.minMs)),
-      maxMs: Math.max(...bounds.map((b) => b.maxMs)),
-    };
+  if (channels[reference]?.hfdMeasurement) {
+    if (prepared[reference]?.windowBounds)
+      result.windowBounds = nativeFitBounds(channels[reference], n);
+  } else {
+    const bounds = prepared.flatMap((p) => (p?.windowBounds ? [p.windowBounds] : []));
+    if (bounds.length)
+      result.windowBounds = {
+        minMs: Math.min(...bounds.map((b) => b.minMs)),
+        maxMs: Math.max(...bounds.map((b) => b.maxMs)),
+      };
+  }
   if (options.sum) {
     const included = channels.flatMap((c, i) => (c.includeInSum === false ? [] : [i])),
       available = included.filter((i) => prepared[i] && spectra[i]),

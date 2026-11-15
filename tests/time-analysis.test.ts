@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { channelResponse, presetResponse } from '../src/domain/dsp';
 import { FS, newFilter, newProject, type Channel, type Measurement } from '../src/domain/model';
 import { analyzeTimeResponses } from '../src/domain/time-analysis';
+import { fitTimeSeries } from '../src/domain/time-series';
 import {
   useHfdNative,
   updateHfdMeasurement,
@@ -25,6 +26,18 @@ function channel(samples = [1, 0], rate = FS): Channel {
   return c;
 }
 const samples = (x: ArrayLike<number> | undefined) => Array.from(x ?? []);
+function nativeFitChannel(start: number, stopInclusive: number): Channel {
+  const c = channel(
+    Array.from({ length: 128 }, (_, i) => (i === 20 ? 1 : 0)),
+    48000,
+  );
+  c.hfdMeasurement = {
+    ...defaultsHfdMeasurementOptions(48000),
+    localStart: start,
+    stopInclusive,
+  };
+  return c;
+}
 function near(actual: ArrayLike<number>, expected: ArrayLike<number>, precision = 10) {
   expect(actual.length).toBe(expected.length);
   for (let i = 0; i < actual.length; i++) expect(actual[i]).toBeCloseTo(expected[i], precision);
@@ -325,5 +338,104 @@ describe('recovered native timed synthesis', () => {
     expect(samples(analysis.sum!.step!.samples).every((n) => n === 0)).toBe(true);
     c.hfdMeasurement = { ...defaultsHfdMeasurementOptions(), fftLength: 2048 };
     expect(() => analyzeTimeResponses([c], { measured: true })).toThrow('65536');
+  });
+
+  it('matches the captured shared10/48000 Fit request at grid11 without shifting the timed peak', () => {
+    const c = nativeFitChannel(30, 65535);
+    Object.assign(c.hfdMeasurement!, { sharedStart: 10, sharedGroupId: 1, phaseStart: 12 });
+    const before = structuredClone(c),
+      analysis = analyzeTimeResponses([c], { measured: true }),
+      impulse = analysis.channels[0].impulse!;
+    // Native01 saved zoomleft=.000229166666666667s and zoomright=1.3653125s.
+    expect(analysis.windowBounds).toEqual({ minMs: 0.22916666666666666, maxMs: 1365.3125 });
+    expect(analysis.windowBounds!.minMs).not.toBe((10 / 48000) * 1000);
+    expect(impulse.samples.length).toBe(65536);
+    expect(samples(impulse.samples).indexOf(Math.max(...samples(impulse.samples)))).toBe(10);
+    expect(impulse.samples[10]).toBeCloseTo(1, 12);
+    expect(c).toEqual(before);
+
+    c.hfdMeasurement!.stopInclusive = 127;
+    const shorter = analyzeTimeResponses([c], { measured: true });
+    expect(shorter.windowBounds).toEqual({ minMs: 0.22916666666666666, maxMs: 2.6458333333333335 });
+    near(
+      shorter.channels[0].impulse!.samples,
+      nativeDft(c.measurement!.impulse!.slice(10), 256, 48000),
+    );
+  });
+
+  it.each([
+    [1, 0.020833333333333332],
+    [11, 0.22916666666666666],
+    [12, 0.25],
+    [30, 0.625],
+    [64, 1.3333333333333333],
+    [127, 2.6458333333333335],
+    [65535, 1365.3125],
+  ])(
+    'keeps grid-exact native start%d rather than applying a universal one-sample increment',
+    (start, minMs) => {
+      const analysis = analyzeTimeResponses([nativeFitChannel(start, 65535)], {
+        measured: true,
+        length: 4,
+      });
+      expect(analysis.windowBounds).toEqual({ minMs, maxMs: 1365.3125 });
+    },
+  );
+
+  it('uses only the selected native reference bounds even when another channel has a wider window', () => {
+    const selected = nativeFitChannel(10, 127),
+      other = nativeFitChannel(0, 65535),
+      before = structuredClone([selected, other]);
+    const first = analyzeTimeResponses([selected, other], { measured: true, referenceChannel: 0 });
+    expect(first.windowBounds).toEqual({ minMs: 0.22916666666666666, maxMs: 2.6458333333333335 });
+    expect(first.channels.map((c) => c.impulse!.samples.length)).toEqual([256, 256]);
+    const second = analyzeTimeResponses([selected, other], { measured: true, referenceChannel: 1 });
+    expect(second.windowBounds).toEqual({ minMs: 0, maxMs: 1365.3125 });
+    expect(second.channels.map((c) => c.impulse!.samples.length)).toEqual([65536, 65536]);
+    expect([selected, other]).toEqual(before);
+  });
+
+  it('retains the two-second right default when stop64 is outside the64-point grid, even for a cropped view', () => {
+    const analysis = analyzeTimeResponses([nativeFitChannel(1, 64)], {
+      measured: true,
+      length: 8,
+    });
+    expect(analysis.windowBounds).toEqual({ minMs: 0.020833333333333332, maxMs: 2000 });
+    expect(analysis.channels[0].impulse!.samples.length).toBe(8);
+    expect(analysis.channels[0].warnings.join(' ')).toContain(
+      'cropped after full native synthesis',
+    );
+  });
+
+  it.each([
+    [-10, 127, 0, 2.6458333333333335],
+    [12, 10, 0, 0.22916666666666666],
+    [100, 64, 0, 2000],
+    [-10, -1, 0, 0],
+  ])(
+    'preserves bounded native scan defaults for start%d/stop%d without sorting the request',
+    (start, stop, minMs, maxMs) => {
+      const c = nativeFitChannel(start, stop),
+        before = structuredClone(c),
+        analysis = analyzeTimeResponses([c], { measured: true });
+      expect(analysis.windowBounds).toEqual({ minMs, maxMs });
+      expect(c).toEqual(before);
+      if (minMs === maxMs)
+        expect(() => fitTimeSeries([analysis.channels[0].impulse!], analysis.windowBounds)).toThrow(
+          'Invalid time fit bounds',
+        );
+    },
+  );
+
+  it('does not borrow another native channel crop when the selected reference has no measured impulse', () => {
+    const absent = newProject().presets[0].channels[0];
+    absent.hfdMeasurement = defaultsHfdMeasurementOptions();
+    const analysis = analyzeTimeResponses([absent, nativeFitChannel(10, 127)], {
+      measured: true,
+      referenceChannel: 0,
+    });
+    expect(analysis.channels[0].source).toBe('unavailable');
+    expect(analysis.channels[1].source).toBe('measured-impulse');
+    expect(analysis.windowBounds).toBeUndefined();
   });
 });

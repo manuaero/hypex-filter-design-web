@@ -95,7 +95,21 @@ Read/Clear and the shared MCP namespace.
 
 Firmware files can be inspected and staged per role. The source includes a bounded reference program engine and strict recovery journal for simulation. A journal records exact source content, known before-images, unknown preservation gaps, actual attempts and reconnect results.
 
-Physical firmware programming remains disabled until a qualified adapter proves bootloader identity/correlation, descriptor family, preservation, timeout behavior and recovery. A complete reconstructed packet plan or a successful simulated two-pass stream does not establish that adapter. No vendor firmware bundle or original firmware image is distributed here.
+Physical firmware programming remains disabled pending the actual same-unit
+loader descriptor/report profile, runtime-to-loader correlation, transition and
+reply behavior, target memory effects and post-reset/recovery contract. The
+native host's fifth-character `B` serial exception is a class filter, not a
+mandatory loader descriptor or per-unit binding. Its broad discovery IDs must
+not be presented as a proved FA503 loader VID/PID allowlist. A complete packet
+plan or successful simulated two-pass stream does not establish a physical
+adapter; newer-host tolerance of a missing entry ACK does not prove safe replay.
+
+The inspected native update path has no automatic complete original PIC32
+program backup. Adding one would be an extra precaution, not a native parity
+requirement or automatic obligation for the user. Ordinary settings/filter and
+external-memory backups do not establish complete firmware rollback. No vendor
+firmware bundle or original firmware image is distributed here. See the
+[firmware workflow](FIRMWARE_RUNTIME.md) for the remaining evidence boundary.
 
 ## Authentication boundary
 

@@ -91,6 +91,32 @@ of this reader. Runtime reports establish neither the installed-image SHA-256
 nor descriptor/bootloader family proof. Those gaps remain separate from
 recognizing a local file.
 
+## Why physical programming remains unavailable
+
+The v35 static audit compared native HFD 5.2.4.24 and 5.3.1.32 discovery and
+update paths. Their serial admission rule treats a fifth-character `B` as a
+class-filter exception. It does not require that character, compare a serial
+suffix with the selected runtime device, or establish a same-unit transition.
+The native discovery list is also not a verified FA503 bootloader VID/PID table.
+Reported major 99 is host loader-mode classification, not sufficient identity
+or a complete loader read/write dialect.
+
+A physical adapter still needs an actual same-unit loader descriptor/report
+profile, a trustworthy runtime-to-loader binding, and established entry,
+reply-correlation, memory-effect and post-reset/recovery behavior. The newer
+host tolerates an absent entry acknowledgement; that does not prove a safe
+resend or target idempotence. Lost/late replies and command 41 cancellation
+remain unresolved. Normal runtime reads and successful reference two-pass
+simulation do not establish these contracts.
+
+The inspected native update path does not first back up the complete original
+PIC32 program. Such a backup would be an additional precaution, not an automatic
+native-workflow or user requirement. Its absence is not the missing identity
+or transition proof. Existing settings, external-memory and filter backups do
+not establish an original-program backup or complete firmware rollback. Any
+preservation claim needs evidence for the affected target memory ranges and
+checks available after reconnect.
+
 ## MCP
 
 The existing `fusion_device_read` namespace shares the same controller/cache:

@@ -2,6 +2,147 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V35 native graph and Fit truncated checkpoint
+
+The development-source suite passed **2,465 of 2,465 tests across 178 files** with
+`maxWorkers: 2` and unchanged test timeouts. One existing test timed out in the
+first complete run, then passed in isolation; the subsequent complete run
+passed. These are development-source results, not a substitute for checking the
+public export.
+
+Fresh public-checkout verification completed on **2026-11-15**, using Node.js
+24.22.1. The full suite used two workers with no timeout changes or omitted
+cases. Its sole skip was the optional exact installed-PDF identity test because
+the public export omits the vendor PDF; synthetic manual/fallback tests ran.
+
+| Check                                         | V35 result                                                                                                                                   |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Development-source full suite                 | 2,465 passed, zero failures; 178 files, two workers.                                                                                         |
+| Fresh public-checkout suite                   | **2,464 passed, 1 skipped, 0 failed; 2,465 total across 178 files.**                                                                         |
+| Fresh public-checkout typecheck               | Passed.                                                                                                                                      |
+| Fresh public-checkout production build        | Next production build and Worker packaging passed.                                                                                           |
+| Static assets                                 | 24 assets totaling 1,894,394 bytes.                                                                                                          |
+| Packaged Worker                               | 3,093,484 bytes.                                                                                                                             |
+| Optional manual                               | Vendor PDF absent; compiled client and Worker report `bundled: false`, `optional: true`.                                                     |
+| Actual packaged Worker                        | Home returned 200 and absent manual returned 404 in an isolated runtime without `process`.                                                   |
+| Source and built privacy scans                | Zero matches in each checked category: private hosting IDs, token/key shapes, local user paths, actual serial candidates and private labels. |
+| Generated Next environment file               | Unchanged by the build.                                                                                                                      |
+| Final complete workspace/selection comparison | Passed: both complete projects and selection exact at revision 28; roles Offline, persistence Ready.                                         |
+
+Worker SHA-256:
+`75528f15b4db49d2377c275ac29085eb7ba7f8087dedc93db3c8a44c2fdaa5a7`.
+The privacy scans are bounded pattern checks, not an exhaustive secret audit.
+The Worker/client checks establish build fallback and routing behavior, not
+browser download completion, a live hosted deployment or device compatibility.
+
+Commands run from the public checkout:
+
+```sh
+node node_modules/typescript/bin/tsc --noEmit --incremental false
+node node_modules/vitest/vitest.mjs run --maxWorkers=2 --reporter=default --reporter=json --outputFile=../hypex-filter-design-web-public-v35.tests.json
+node node_modules/next/dist/bin/next build
+node scripts/build-worker.mjs
+```
+
+### Independent native graph observations
+
+Classic HFD 5.2.4.24 was exercised with an owned synthetic project while a
+verified exclusive handle held the amplifier interface. Native HFD remained
+offline: no Take or audio capture and no bridge or other amplifier setting
+operation was performed. Screenshots and saved native checkpoints were compared
+with the browser domain calculations.
+
+At a 48 kHz measurement rate, entering 417 microseconds stored phase-start sample
+20, and entering 250 microseconds stored sample 12. Extracted native phase traces
+matched the calculated curves within approximately four degrees. The phase-sum
+fixture supports the mean direction of unit phase vectors, rather than an
+amplitude-weighted phase result. Hiding a channel curve did not change the sum.
+Turning sharing off changed exactly six fields: the shared start and group for
+all three channels of the selected preset. Turning it back on changed those same
+six fields, including the unloaded channel. The local crop, phase start, other
+presets, coefficients and DAT bytes were preserved by that sharing change.
+
+Independent pixel extraction calibrated each saved native time axis from its
+visible tick labels and measured gridline centers. The shared views predict a
+raw CH1 arrival at 0.416667 ms and black timed arrivals at 0.208333 and 0.625 ms.
+Fresh unshared views predict overlapping raw/first timed arrivals at 0.416667 ms
+and a later timed arrival at 0.833333 ms. The measured positions were:
+
+| Native view                            | Raw CH1 arrival (ms) | Black timed arrivals (ms) | Timing tolerance |
+| -------------------------------------- | -------------------- | ------------------------- | ---------------- |
+| Shared, before/after Step zoom history | 0.417525             | 0.209227, 0.624921        | ±3.71 µs         |
+| Fresh unshared                         | 0.416184             | 0.416184, 0.833566        | ±5.38 µs         |
+| Wider unshared                         | 0.417387             | 0.417387, 0.833457        | ±8.03 µs         |
+| Unshared, before Truncate              | 0.416502             | 0.416502, 0.834324        | ±5.82 µs         |
+
+All arrivals were within two pixels plus printed-label rounding of their
+predictions. Coincident red/black curves and clipped first peaks do not provide
+independent height measurements; the later impulse peak measured approximately
+0.5. The actual saved imports before and after phase-start sample 20→12 predict
+identical timed arrival indices. The requested native timed screenshots all show
+the 250-microsecond state: **there is no matched native phase-only before/after
+Impulse pair in this evidence**.
+
+Step screenshots support only the early visible levels: grey/black values near
+0.999–1.001 before the second timed arrival, then a rise to approximately
+1.492–1.506 near 0.625 ms; the red original Step is approximately 0.252 then
+1.250. The later flat black trace partly overlaps a major grid line. Reversing
+the Step-only zoom restored the exact plot pixels. These short windows do not
+verify a terminal sum of 3, every FFT-length endpoint convention or full-record
+DC behavior. The pre-Truncate screenshot is not a post-Truncate oracle.
+
+The resulting implementation corrects **Fit truncated** to scan the selected
+reference channel's floating-point time grid instead of combining channel crop
+bounds or directly dividing integer indices. For example, binary64 grid spacing
+can select sample 11 for a requested start of 10 at 48 kHz. The native scan's
+bounded defaults and selected-reference behavior have focused tests.
+
+Actual Studio Fit buttons also passed nine browser acceptance assertions in an
+isolated origin with hardware, audio and filesystem access blocked. Native saved
+fixtures on Left and Right produced ranges of 0.2291667–1365.3125 ms and
+0.2291667–2.6458333 ms respectively. With linked edits enabled, the opposite
+complete project and processing values were preserved; both complete projects
+and saved zoom values matched canonically after reload, with storage Ready.
+The shared MCP time-analysis command returned the same bounds. Canonical value
+comparison avoids treating JSON object-key order as a state change. These are
+browser/offline fixture checks, separate from the independent single-amplifier
+read-only evidence; they do not qualify two physical amplifiers.
+
+The native sharing checkbox left stale plot pixels until a project reopen, and
+reopen reset the Impulse X range despite retaining its saved Y range. The web app
+deliberately recomputes immediately after a shared-crop change. These observations
+do not establish complete native viewport restoration or require reproducing a
+stale raster in the browser.
+
+### Fresh one-amplifier read-only backup
+
+After native HFD closed and the exclusive handle was released, the actual
+Backups UI captured preset 1 from the single physical FA503 at
+**2026-11-15 13:40:58 UTC**. Its SHA-256 exactly matched the original recorded
+baseline. This was a read-only amplifier operation with a local backup-store
+write; it did not replace a workspace project or send an amplifier setter. It
+verifies one 4 KiB IIR preset sector, not complete FIR, EQ, configuration,
+firmware or acoustic state. The subsequent 37-assertion read-only validation
+passed: both complete projects and selection exactly matched their pre-check
+state, document revision remained 28, both connection slots were empty and
+persistence was Ready.
+
+### Firmware implementation boundary
+
+A separate read-only static audit compared native HFD 5.2.4.24 and 5.3.1.32
+loader discovery and update paths. The serial `B` exception and discovery list
+are class admission rules, not same-unit loader correlation or a proved loader
+VID/PID allowlist. Loader transition/reply behavior, memory effects and safe
+post-reset recovery remain unproved. The native updater has no automatic
+complete original PIC32 program backup; an optional additional backup does not
+replace those missing contracts or establish rollback. See the
+[firmware evidence boundary](FIRMWARE_RUNTIME.md#why-physical-programming-remains-unavailable).
+
+A production firmware programming adapter is still missing and disabled. The
+native graph comparison and successful read-only backup do not complete all
+features or physical qualification. The dated v34 public results below are
+unchanged historical evidence.
+
 ## V34 runtime identity checkpoint
 
 The development source checkpoint passed **2,450 tests in 178 files**, global
@@ -56,9 +197,11 @@ persistence was Ready with no unsaved changes.
 
 Browser firmware file selection was blocked by the browser-control extension's
 file-URL permission; no stage was created. Staging through that picker and
-browser download completion remain unverified. A second physical amplifier was
-unavailable, and native offline HFD GUI comparison still awaits verified USB
-absence. Production firmware programming remains unimplemented. See the
+browser download completion remain unverified. At this v34 checkpoint, a second
+physical amplifier was unavailable and native offline HFD GUI comparison still
+awaited verified USB absence. The v35 exclusive-interface native graph evidence
+above supersedes that comparison prerequisite; it does not qualify two-device
+operation. Production firmware programming remains unimplemented. See the
 [runtime workflow](FIRMWARE_RUNTIME.md) for the supported read-only boundary.
 
 ## Reproduce software checks
@@ -176,10 +319,11 @@ stricter scan. Previously fetched copies or cached old commit views cannot be
 recalled by a branch update. Vendor files, private hosting metadata and local
 recovery artifacts remain excluded.
 
-Browser download completion, independent native GUI comparisons, physical
-OEM mixer writes, paired physical operation and other qualification limits
-remain open. Source and simulation coverage must not be described as exhaustive
-verified HFD parity.
+At the v33 checkpoint, browser download completion, independent native GUI
+comparisons, physical OEM mixer writes and paired physical operation remained
+open. V35 adds the bounded native graph comparison above; the other limits and
+further native comparisons remain open. Source and simulation coverage must not
+be described as exhaustive verified HFD parity.
 
 ## Evidence categories
 

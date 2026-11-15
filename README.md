@@ -29,7 +29,7 @@ The app works offline for design tasks. No amplifier or agent connection is need
 - A compact graph editor with a persistent parameter inspector, advanced signal-chain editing, channel links, gain, delay, polarity and response sums.
 - Nine-band input EQ, independent live EQ activation, three-bank transfer and explicit EQ upload.
 - Input/output FIR placement, text coefficient import, retained bypass state and original-data exports.
-- Impulse, Step, Magnitude and Phase views; measurement import, window/crop controls, smoothing, project microphone correction and optional browser audio capture.
+- Impulse, Step, Magnitude and Phase views; measurement import, window/crop controls, selected-reference Fit truncated bounds, smoothing, project microphone correction and optional browser audio capture.
 - Role-aware device settings, shared amplifier-mode reviews, limiter editing, device defaults, Device templates, diagnostics and recovery journals.
 - A conditional native OEM digital User mixer with independent per-preset Left/Right drafts, quantized previews, explicit coordinated Save and retained operation records.
 - Browser project persistence, a project library, granted-directory Open/Save, reviewed recovery and bounded large-file transfers.
@@ -47,7 +47,7 @@ Directory saves preserve unrelated files and keep verified before-images, but a 
 
 Opening Save stages a fixed role, design revision and initial device session without I/O. In Auto mode, the first resolve reads matched physical settings and all three EQ banks for an initially connected commercial FA503; it does not send setters or replace staged design EQ. JSON downloads and native folder/ZIP saves use that detached artifact. Design only and initially offline exports preserve the frozen design, including downloads after later edits. A failed connected capture needs an explicit retry with a new capture ID or a Design only choice; it never silently substitutes old metadata.
 
-Save artifacts last for this page lifetime and are bounded to eight IDs, 80 million retained text characters and 640 MB across projects/files. Prepared directory journals durably retain their own exact bytes, so their replay and filesystem commit do not recapture hardware. One actual FA503 on firmware 5.7/core 5.1 completed read-only capture through the Save UI and MCP, with hash-verified JSON bytes delivered through a file-transfer chunk. Both workspace projects and selection remained unchanged, and no amplifier setter was sent. Browser download delivery, paired physical capture and independent HFD GUI equivalence remain unverified; see [verification](docs/VERIFICATION.md).
+Save artifacts last for this page lifetime and are bounded to eight IDs, 80 million retained text characters and 640 MB across projects/files. Prepared directory journals durably retain their own exact bytes, so their replay and filesystem commit do not recapture hardware. One actual FA503 on firmware 5.7/core 5.1 completed read-only capture through the Save UI and MCP, with hash-verified JSON bytes delivered through a file-transfer chunk. Both workspace projects and selection remained unchanged, and no amplifier setter was sent. Browser download delivery and paired physical capture remain unverified. A separate v35 offline native HFD graph comparison now supports the tested phase, visibility, shared-crop and Fit truncated behavior; it does not establish complete HFD equivalence. See [verification](docs/VERIFICATION.md).
 
 ## Use an MCP client
 
@@ -69,7 +69,7 @@ pnpm test
 pnpm build
 ```
 
-The v34 public-checkout checks passed: **2,449 tests passed and one optional-PDF test skipped across 178 files**, with typecheck and production build passing. See [verification](docs/VERIFICATION.md) for the evidence and hardware qualification limits.
+The v35 public checkout passed **2,464 tests plus one optional-PDF skip: 2,465 total across 178 files**, with two workers, unchanged timeouts, typecheck and production builds passing. V35 corrects selected-reference floating-grid Fit truncated bounds, supported by independent native graph comparisons and actual Studio/MCP browser checks. These checks qualify the tested behavior, not complete HFD or hardware parity. The development-source first full run had one timeout; that test passed in isolation and the full rerun passed. See [verification](docs/VERIFICATION.md) for exact results, historical v34 numbers and remaining limits.
 
 The build produces the static application in `out/` and a packaged optional hosted Worker in `dist/server/index.js`. Hosted authentication, database and object-storage bindings require separate deployment configuration. The local app and local MCP server do not require that hosting platform.
 
