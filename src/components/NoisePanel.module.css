@@ -1,0 +1,76 @@
+.panel {
+  min-width: 0;
+  border: 1px solid #354932;
+  border-radius: 6px;
+  padding: 10px;
+  background: #19231c;
+}
+.heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.heading h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 550;
+}
+.actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+}
+.actions button {
+  padding: 4px 9px;
+  min-height: 27px;
+  font-size: 10px;
+}
+.roles {
+  display: grid;
+  gap: 0;
+}
+.role {
+  display: grid;
+  grid-template-columns: minmax(70px, 1fr) minmax(110px, 1.8fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-top: 1px solid #2c3b2c;
+}
+.identity {
+  min-width: 0;
+}
+.identity strong {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+}
+.identity span {
+  display: block;
+  color: #819779;
+  font-size: 9px;
+  overflow-wrap: anywhere;
+  line-height: 13px;
+}
+.state {
+  min-width: 0;
+  font-size: 10px;
+  line-height: 14px;
+  color: #aec39f;
+}
+.state small {
+  display: block;
+  color: #d5ad85;
+  font-size: 9px;
+  line-height: 13px;
+  overflow-wrap: anywhere;
+}
+.note {
+  margin: 6px 0 0;
+  font-size: 9px;
+  line-height: 14px;
+  color: #819779;
+}

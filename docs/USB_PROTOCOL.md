@@ -1,0 +1,60 @@
+# USB protocol overview
+
+The current live-session implementation targets Hypex FA503 / DSP3-213 core 5.1. Protocol structures and native behavior were established through static inspection, numerical fixtures, simulated transactions and limited physical checks. That evidence is not a blanket guarantee for another product or firmware family.
+
+This overview documents implementation boundaries. It is not a recipe for sending arbitrary packets to a connected speaker system. Use validated application workflows.
+
+## Transport and identity
+
+Normal traffic uses WebHID report ID 0 with a 64-byte payload. Payload byte 0 is the command; it is not the separate HID report-ID prefix. Read-only identification checks the configuration/product/core data, amplifier configuration and stable device identity before a role is admitted.
+
+The transport serializes requests and checks command, payload length and report ID. A timeout, disconnect or unexpected response faults the interface. It does not blindly retry a setter or allow a late reply to satisfy the next command.
+
+Left and Right have independent sessions. The same physical identity must not be assigned twice. EEPROM serial, USB descriptor serial, product name and DSP filename are distinct values. A product label or EEPROM serial alone is not firmware-family proof; ordinary WebHID does not expose every descriptor field required by a firmware/reconnect adapter.
+
+## Record families
+
+| Record/command family  | Current use                                                                                                          |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `03`                   | DSP design filename/name data.                                                                                       |
+| `05`                   | Runtime and writable control/settings record; status telemetry and one-shot write triggers have different ownership. |
+| `06`                   | Product/core/firmware/capability information.                                                                        |
+| `66`                   | Amplifier/configuration/limiter record, with reserved and manufacturing fields preserved.                            |
+| `67`                   | Captured per-preset digital mixer values. Capture support does not establish a user mixer setter.                    |
+| Memory/page operations | Bounded backup, IIR/EQ/FIR images, programming and verification through explicitly allowed ranges.                   |
+
+Codecs preserve unowned fields instead of rebuilding a record from UI defaults. Unknown stored enum values remain visible and are not automatically normalized on mount.
+
+### Important shared values
+
+The common input-source IDs are 0 Auto, 1 XLR, 2 RCA, 3 Sub, 4 S/PDIF, 5 AES, 6 Optical and 7 Future. Availability is model/mode dependent. Future is a native selection whose actual firmware behavior remains unqualified.
+
+In the normal FA503 status payload, byte 51 bit 0 is signal detected, bit 1 is password protected and bit 2 is password matched. Signal alone must not be interpreted as password protection. OEM permissions combine native runtime policy, settings-entry gates and item permissions; a saved template flag never authorizes a live device write.
+
+Master/Slave modes have native dependent-field effects. Slave mode clears wake-on-line, signal detection and fixed startup volume and selects Standby. Master mode clears the three preset source/volume locks. The mode review includes those consequences and rebases unrelated fresh runtime, source, LED and security fields.
+
+## DSP representations
+
+The supported processing design rate is 93,750 Hz. Output paths contain fifteen biquads, with separate metadata and stored coefficient provenance. Native saved caches can represent different calculation stages; imports retain that distinction rather than blindly applying channel gain twice.
+
+Input EQ has three independent nine-band banks. Captured physical EQ is separate from staged design EQ. FIR placement/capacity and enable flags are also separate from whether a tap cache is loaded. Native folders preserve original measurement samples and resources alongside XML; browser-only processing state uses a validated sidecar.
+
+## Operation safety and recovery
+
+Each workflow defines its owned fields, permissions, before-images, order and verification. Read-only preflight is distinct from an actual wire attempt. Paired operations check intended targets before writes and retain an independent role ledger when an operation becomes partial.
+
+Backups preserve exact bytes and hashes; they are not permission grants. Some operations intentionally mute, while a reviewed mode change does not add an unrequested mute or DSP restart. Failure handling must follow that operation’s contract, without generic rollback, failure-mute or retry behavior.
+
+Connected drivers make bridge, limiter, defaults, restore, Device templates and power operations consequential. Those recent workflows have simulation coverage; they were not qualified by applying bridge/configuration changes to the connected speaker drivers.
+
+## Firmware boundary
+
+Firmware files can be inspected and staged per role. The source includes a bounded reference program engine and strict recovery journal for simulation. A journal records exact source content, known before-images, unknown preservation gaps, actual attempts and reconnect results.
+
+Physical firmware programming remains disabled until a qualified adapter proves bootloader identity/correlation, descriptor family, preservation, timeout behavior and recovery. A complete reconstructed packet plan or a successful simulated two-pass stream does not establish that adapter. No vendor firmware bundle or original firmware image is distributed here.
+
+## Authentication boundary
+
+Password/email operations use explicit encodings, fresh permission/identity checks and secret-free default status. Manual support-code recovery separates reviewed challenge installation from submission of a vendor-supplied code. It does not derive codes locally or automatically contact vendor infrastructure. Physical recovery and automatic request transport remain unqualified.
+
+See [verification](VERIFICATION.md) for evidence categories and [security](../SECURITY.md) before sharing logs or recovery exports.

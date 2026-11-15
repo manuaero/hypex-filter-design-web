@@ -1,0 +1,45 @@
+.menu {
+  position: relative;
+}
+.menu summary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  list-style: none;
+  white-space: nowrap;
+}
+.menu summary::-webkit-details-marker {
+  display: none;
+}
+.options {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  min-width: 225px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  background: var(--panel, #1c211e);
+  border: 1px solid var(--border, #394039);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px #0008;
+}
+.options label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+}
+.options input {
+  width: auto;
+}
+.current {
+  color: var(--text, #e9eddf);
+  font-weight: 600;
+}
+.sum {
+  padding-top: 10px;
+  border-top: 1px solid var(--border, #394039);
+}

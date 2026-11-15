@@ -1,0 +1,233 @@
+.panel {
+  padding: 14px;
+  margin-bottom: 12px;
+  min-width: 0;
+}
+.heading,
+.toolbar,
+.actions,
+.identity,
+.reviewHeading,
+.confirmation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.heading,
+.reviewHeading,
+.confirmation {
+  justify-content: space-between;
+}
+.panel h2,
+.panel h3,
+.panel p {
+  margin: 0;
+}
+.panel h2 {
+  font-size: 13px;
+}
+.panel h3 {
+  font-size: 11px;
+}
+.panel p,
+.identity {
+  font-size: 10px;
+  line-height: 1.5;
+}
+.identity {
+  margin-top: 7px;
+  color: #9bad90;
+  overflow-wrap: anywhere;
+}
+.identity strong {
+  color: #d4e3c9;
+}
+.toolbar button,
+.toolbar select,
+.actions button {
+  font-size: 11px;
+  padding: 5px 8px;
+  min-height: 30px;
+}
+.toolbar label,
+.expertToggle,
+.confirmation label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.muted {
+  color: #96a78d;
+}
+.warning,
+.error {
+  color: #ebc58c;
+  overflow-wrap: anywhere;
+}
+.status,
+.error {
+  margin-top: 9px !important;
+}
+.editor {
+  margin-top: 10px;
+}
+.channelTable,
+.coefficientTable,
+.reviewTable {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 11px;
+}
+.channelTable th,
+.channelTable td,
+.coefficientTable th,
+.coefficientTable td,
+.reviewTable th,
+.reviewTable td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #35432f;
+  overflow-wrap: anywhere;
+  vertical-align: middle;
+}
+.channelTable thead,
+.coefficientTable thead,
+.reviewTable thead {
+  color: #a3b797;
+}
+.channelTable th:first-child,
+.coefficientTable th:first-child {
+  width: 14%;
+}
+.channelTable th:last-child {
+  width: 28%;
+}
+.panel :global(.numeric) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(90px, 110px);
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.channelTable :global(.numeric) {
+  display: block;
+}
+.channelTable :global(.numeric > span) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.timing {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 24px;
+  padding: 10px 8px;
+}
+.coefficientField {
+  display: block;
+}
+.coefficientField input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid #485d3d;
+  border-radius: 4px;
+  padding: 6px 7px;
+  background: #101b0e;
+  color: #dbe9d2;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.coefficientField input:focus {
+  outline: 1px solid #a9c789;
+}
+.coefficientField small {
+  display: block;
+  font-size: 9px;
+  color: #8fa681;
+  margin-top: 3px;
+}
+.help {
+  margin-top: 8px !important;
+}
+.review {
+  margin-top: 12px;
+  padding: 11px;
+  border: 1px solid #637849;
+  border-radius: 5px;
+  background: #192415;
+}
+.reviewIdentities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin: 8px 0;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.reviewScroll {
+  overflow-x: auto;
+  margin: 9px 0;
+  border: 1px solid #35482d;
+}
+.reviewTable {
+  font-size: 10px;
+}
+.reviewTable th,
+.reviewTable td {
+  padding: 5px 6px;
+}
+.reviewTable p {
+  font-size: 9px;
+  line-height: 1.4;
+}
+.reviewTable thead {
+  position: sticky;
+  top: 0;
+  background: #26371e;
+}
+.confirmation {
+  padding-top: 4px;
+}
+.outcomes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.outcome {
+  border: 1px solid #3d4c33;
+  border-radius: 4px;
+  padding: 9px;
+  font-size: 10px;
+}
+.outcome strong,
+.outcome span {
+  display: block;
+  margin-bottom: 4px;
+}
+@media (max-width: 700px) {
+  .panel {
+    padding: 10px;
+  }
+  .timing {
+    grid-template-columns: 1fr;
+  }
+  .channelTable th,
+  .channelTable td,
+  .coefficientTable th,
+  .coefficientTable td {
+    padding: 5px 4px;
+  }
+  .review {
+    padding: 8px;
+  }
+}

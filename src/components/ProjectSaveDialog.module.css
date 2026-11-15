@@ -1,0 +1,206 @@
+.dialog {
+  position: fixed;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  width: min(520px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 24px);
+  margin: 0;
+  padding: 0;
+  color: #e5ede8;
+  background: #19221e;
+  border: 1px solid #405148;
+  border-radius: 12px;
+  box-shadow: 0 20px 90px #0009;
+}
+.dialog::backdrop {
+  background: #050c09b8;
+}
+.shell {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 28px);
+  min-width: 0;
+}
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid #ffffff12;
+}
+.header h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+.header p {
+  margin: 0;
+  color: #a0b4a8;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.header > button {
+  flex-shrink: 0;
+  padding: 3px 8px;
+}
+.body {
+  padding: 14px 18px;
+  overflow: auto;
+  min-height: 0;
+  display: grid;
+  gap: 12px;
+}
+.target {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #ffffff16;
+  border-radius: 8px;
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+.target legend {
+  padding: 0 4px;
+  color: #bbd0c1;
+  font-size: 11px;
+}
+.target > label,
+.recovery label {
+  display: grid;
+  gap: 5px;
+  color: #b4c7bc;
+  font-size: 11px;
+}
+.target select,
+.target input:not([type='radio']),
+.recovery select {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  padding: 7px 8px;
+  font: inherit;
+  color: #e5ede8;
+  border: 1px solid #ffffff26;
+  border-radius: 5px;
+  background: #111a16;
+}
+.mode,
+.actions,
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mode {
+  gap: 18px;
+  font-size: 12px;
+}
+.mode label,
+.confirm {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.primary {
+  background: #3f6650;
+  border-color: #6f9c7c;
+}
+.destination {
+  margin: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.review {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.review strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.review small {
+  display: block;
+  color: #a0b4a8;
+  font-size: 10px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+.fileList {
+  max-height: 200px;
+  overflow: auto;
+  border: 1px solid #ffffff15;
+  border-radius: 5px;
+}
+.fileList table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+  table-layout: fixed;
+}
+.fileList th {
+  color: #9eb4a6;
+  text-align: left;
+}
+.fileList th:first-child {
+  width: 46%;
+}
+.fileList th,
+.fileList td {
+  padding: 7px;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid #ffffff0b;
+}
+.note {
+  margin: 0;
+  color: #9eb4a6;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.confirm {
+  font-size: 11px;
+}
+.error {
+  margin: 0;
+  padding: 9px;
+  color: #f0b7a7;
+  background: #612f253d;
+  border-radius: 5px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.recovery {
+  border-top: 1px solid #ffffff15;
+  padding-top: 10px;
+}
+.recovery summary {
+  font-size: 11px;
+  color: #aec4b6;
+  cursor: pointer;
+}
+.recovery label {
+  margin: 10px 0;
+}
+.downloads {
+  display: grid;
+  gap: 5px;
+}
+.downloads button {
+  overflow-wrap: anywhere;
+  text-align: left;
+  font-size: 10px;
+}
+.footer {
+  padding: 12px 18px;
+  border-top: 1px solid #ffffff12;
+  flex-shrink: 0;
+}
+.footer button:last-child {
+  margin-left: auto;
+}
+.dialog button:disabled {
+  opacity: 0.45;
+}

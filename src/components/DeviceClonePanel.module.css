@@ -1,0 +1,252 @@
+.panel {
+  padding: 12px;
+  margin-bottom: 12px;
+  min-width: 0;
+  display: grid;
+  gap: 9px;
+}
+.panel h2,
+.panel h3,
+.panel p {
+  margin: 0;
+}
+.panel h2 {
+  font-size: 13px;
+}
+.panel h3 {
+  font-size: 11px;
+}
+.panel p,
+.identities,
+.roleHeader span,
+.reviewSources,
+.reviewHeader > span {
+  font-size: 10px;
+  line-height: 1.45;
+}
+.header,
+.toolbar,
+.identities,
+.target,
+.roleHeader,
+.mode,
+.reviewHeader,
+.reviewSources,
+.confirmation,
+.exports,
+.historyRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px 10px;
+}
+.header,
+.reviewHeader,
+.confirmation,
+.historyRow {
+  justify-content: space-between;
+}
+.target,
+.mode,
+.confirmation label {
+  font-size: 11px;
+}
+.panel button,
+.panel select {
+  font: inherit;
+  font-size: 11px;
+  min-height: 28px;
+  padding: 4px 7px;
+}
+.target select {
+  min-width: 100px;
+}
+.hint,
+.roleHeader span,
+.identities,
+.reviewSources,
+.reviewHeader > span {
+  color: #9eaf94;
+}
+.identities strong,
+.reviewSources strong {
+  color: #d8e8ce;
+}
+.identities,
+.reviewSources,
+.roleHeader {
+  overflow-wrap: anywhere;
+}
+.editors {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 10px;
+}
+.role {
+  min-width: 0;
+  border: 1px solid #3e5036;
+  border-radius: 5px;
+  padding: 9px;
+  display: grid;
+  gap: 7px;
+}
+.roleHeader {
+  align-items: start;
+  justify-content: space-between;
+}
+.roleHeader span {
+  max-width: 100%;
+}
+.mode {
+  justify-content: space-between;
+}
+.overrides,
+.comparison {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+.overrides th,
+.overrides td,
+.comparison th,
+.comparison td {
+  text-align: left;
+  border-bottom: 1px solid #34482b;
+  padding: 5px 6px;
+  overflow-wrap: anywhere;
+  vertical-align: middle;
+}
+.overrides thead,
+.comparison thead {
+  color: #a9bd9c;
+}
+.overrides th:first-child {
+  width: 12%;
+}
+.overrides th:nth-child(2) {
+  width: 35%;
+}
+.overrides td:nth-child(n + 3) {
+  text-align: center;
+}
+.overrides select {
+  width: 100%;
+  min-width: 0;
+}
+.exports button {
+  font-size: 10px;
+}
+.review {
+  border: 1px solid #6c8156;
+  background: #192615;
+  border-radius: 5px;
+  padding: 10px;
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+.reviewHeader > span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.reviewSources {
+  align-items: start;
+}
+.reviewSources > span {
+  flex: 1 1 230px;
+}
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.tabs button[aria-selected='true'] {
+  background: #485f35;
+  color: #e5f3db;
+  border-color: #93ad78;
+}
+.details {
+  max-height: 240px;
+  overflow: auto;
+  min-width: 0;
+  border: 1px solid #3e5036;
+}
+.comparison th {
+  width: 32%;
+}
+.comparison th span {
+  display: block;
+  color: #9caf8e;
+  font-size: 9px;
+}
+.comparison small {
+  display: block;
+  margin-top: 3px;
+  color: #d9b890;
+}
+.confirmation {
+  gap: 10px;
+}
+.confirmation label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1 1 260px;
+}
+.warnings {
+  font-size: 10px;
+  line-height: 1.5;
+  max-height: 100px;
+  overflow: auto;
+}
+.warning,
+.error {
+  font-size: 11px !important;
+  color: #ebc18a;
+  overflow-wrap: anywhere;
+}
+.outcome {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid #4a613c;
+  padding-top: 9px;
+}
+.resultScroll {
+  max-height: 180px;
+  overflow: auto;
+}
+.history {
+  font-size: 11px;
+  border-top: 1px solid #3e5036;
+  padding-top: 8px;
+}
+.history > p {
+  margin: 8px 0;
+}
+.historyRow {
+  padding: 6px 0;
+  border-bottom: 1px solid #34482b;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.historyRow > span {
+  flex: 1 1 220px;
+}
+@media (max-width: 600px) {
+  .comparison th {
+    width: 34%;
+  }
+  .comparison th,
+  .comparison td {
+    padding: 5px 4px;
+    font-size: 9px;
+  }
+  .confirmation .toolbar {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .details {
+    max-height: 210px;
+  }
+}
