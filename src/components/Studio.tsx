@@ -64,6 +64,10 @@ import { createDeviceDefaultsController } from '../application/device-defaults';
 import { createDeviceCloneController, deviceCloneSnapshotPage } from '../application/device-clone';
 import { createCloneWorkspace } from '../application/clone-workspace';
 import { createAmplifierModesController } from '../application/amplifier-modes';
+import {
+  createNativeProjectSaveController,
+  type NativeProjectSaveController,
+} from '../application/native-project-save';
 import AmplifierConfiguration from './AmplifierConfiguration';
 import DeviceClonePanel from './DeviceClonePanel';
 import { exportNativeCloneProject, nativeCloneProjectFiles } from '../domain/clone-project';
@@ -226,6 +230,7 @@ export default function Studio() {
   );
   const authorityLifetime = useRef(0);
   const fileTransfers = useMemo(() => createFileTransfers(), []);
+  const nativeSaveRef = useRef<NativeProjectSaveController | undefined>(undefined);
   const plotController = useMemo(() => createPlotViewController(), []);
   const nativeImpulseView = useMemo(
     () =>
@@ -251,6 +256,10 @@ export default function Studio() {
       createProjectDirectoryWriter({
         getProject: (slot) => useWorkspace.getState().documents[slot],
         getRevision: () => useWorkspace.getState().documentRevision ?? 0,
+        captureExport: (binding, project) => {
+          if (!nativeSaveRef.current) throw new Error('Project Save capture is unavailable');
+          return nativeSaveRef.current.ticket(binding, project);
+        },
       }),
     [],
   );
@@ -405,12 +414,25 @@ export default function Studio() {
       return;
     }
     const current = useWorkspace.getState();
+    const principal = (projectSourceContext.current ??= workspaceAuthority.localContext('ui'));
+    let capture;
+    try {
+      capture = nativeProjectSave.stage(
+        { target: current.slot, expectedRevision: current.documentRevision ?? 0, mode: 'auto' },
+        principal,
+      );
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Project Save could not be staged');
+      return;
+    }
     const captured = {
       binding: {
         slot: current.slot,
         expectedRevision: current.documentRevision ?? 0,
         requestId: crypto.randomUUID(),
-        principal: (projectSourceContext.current ??= workspaceAuthority.localContext('ui')),
+        principal,
+        exportId: capture.id,
+        metadata: 'auto' as const,
       },
       project: structuredClone(current.documents[current.slot]),
     };
@@ -420,8 +442,69 @@ export default function Studio() {
   function closeProjectSave() {
     if (directoryWriter.getSnapshot().busy)
       throw new Error('Finish the current folder operation before closing its review');
+    const captured = saveDialogRef.current;
+    if (
+      captured?.binding.exportId &&
+      nativeProjectSave
+        .getSnapshot()
+        .captures.some((entry) => entry.id === captured.binding.exportId)
+    )
+      nativeProjectSave.release(captured.binding.exportId, captured.binding.principal);
     saveDialogRef.current = undefined;
     setSaveDialog(undefined);
+  }
+  function replaceProjectSaveCapture(mode: 'auto' | 'design') {
+    const captured = saveDialogRef.current;
+    if (!captured || directoryWriter.getSnapshot().busy) return;
+    try {
+      if (
+        captured.binding.exportId &&
+        nativeProjectSave
+          .getSnapshot()
+          .captures.some((entry) => entry.id === captured.binding.exportId)
+      )
+        nativeProjectSave.release(captured.binding.exportId, captured.binding.principal);
+      const next = nativeProjectSave.stage(
+        {
+          target: captured.binding.slot,
+          expectedRevision: captured.binding.expectedRevision,
+          mode,
+        },
+        captured.binding.principal,
+      );
+      const replacement: SaveDialogCapture = {
+        project: captured.project,
+        binding: {
+          ...captured.binding,
+          requestId: crypto.randomUUID(),
+          exportId: next.id,
+          metadata: mode,
+        },
+      };
+      saveDialogRef.current = replacement;
+      setSaveDialog(replacement);
+      return replacement;
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Project Save could not be staged');
+    }
+  }
+  const saveDesignOnly = () => {
+    replaceProjectSaveCapture('design');
+  };
+  const retryProjectSaveRead = async () => {
+    const replacement = replaceProjectSaveCapture('auto');
+    if (replacement) await resolveProjectSave(replacement);
+  };
+  async function resolveProjectSave(captured: SaveDialogCapture) {
+    if (!captured.binding.exportId)
+      return { project: captured.project, files: projectFiles(captured.project) };
+    const artifact = await nativeProjectSave.resolve(
+        captured.binding.exportId,
+        captured.binding.principal,
+      ),
+      role = artifact.roles.find((entry) => entry.slot === captured.binding.slot);
+    if (!role) throw new Error('The captured project Save role is unavailable');
+    return role;
   }
   function showLegacyRecordReview(review: DirectoryLegacyReview): boolean {
     if (
@@ -750,6 +833,34 @@ export default function Studio() {
     pendingFile = useRef<((text: string, name: string) => void) | null>(null),
     liveRef = useRef(live);
   liveRef.current = live;
+  const nativeProjectSave = useMemo(
+    () =>
+      createNativeProjectSaveController({
+        state: useWorkspace.getState,
+        binding: (slot) => liveRef.current[slot],
+        operate,
+      }),
+    [],
+  );
+  nativeSaveRef.current = nativeProjectSave;
+  const nativeSaveSnapshot = useSyncExternalStore(
+    nativeProjectSave.subscribe,
+    nativeProjectSave.getSnapshot,
+    nativeProjectSave.getSnapshot,
+  );
+  const nativeSaveLifetime = useRef(0);
+  useEffect(() => {
+    const lifetime = ++nativeSaveLifetime.current;
+    return () => {
+      queueMicrotask(() => {
+        if (nativeSaveLifetime.current === lifetime) nativeProjectSave.dispose();
+      });
+    };
+  }, [nativeProjectSave]);
+  const saveCapture = nativeSaveSnapshot.captures.find(
+      (capture) => capture.id === saveDialog?.binding.exportId,
+    ),
+    saveCaptureRole = saveCapture?.roles.find((role) => role.slot === saveDialog?.binding.slot);
   const noiseController = useMemo(
     () => createNoiseController({ connections: () => liveRef.current, operate }),
     [],
@@ -1611,6 +1722,7 @@ export default function Studio() {
     deviceDefaults,
     deviceClone,
     amplifierModes,
+    nativeProjectSave,
     nativeLimiter,
     eqClipboard: {
       get: () => (eqClipboard.current ? structuredClone(eqClipboard.current) : undefined),
@@ -1646,6 +1758,7 @@ export default function Studio() {
       deviceDefaults: deviceDefaultsSnapshotPage(defaultsSnapshot),
       deviceClone: deviceCloneSnapshotPage(cloneSnapshot),
       amplifierModes: modesSnapshot,
+      projectSaveCaptures: nativeSaveSnapshot,
       nativeLimiter: nativeLimiterSnapshotPage(nativeLimiterSnapshot),
       workspaceAuthority: workspaceAuthority.getSnapshot(),
       noise: noiseController.getSnapshot(),
@@ -3911,10 +4024,26 @@ export default function Studio() {
       </footer>
       {saveDialog && (
         <ProjectSaveDialog
+          key={saveDialog.binding.exportId ?? saveDialog.binding.requestId}
           writer={directoryWriter}
           captureBinding={() => saveDialog.binding}
           projectName={saveDialog.project.name}
           initialLegacyReview={saveDialog.legacyReview}
+          exportPreparation={
+            saveCapture && saveCaptureRole
+              ? {
+                  phase: saveCapture.phase,
+                  slot: saveCaptureRole.slot,
+                  source: saveCaptureRole.source,
+                  serial: saveCaptureRole.identity?.serial,
+                  capturedAt: saveCaptureRole.capturedAt,
+                  error: saveCaptureRole.error ?? saveCapture.error,
+                  onDesignOnly: saveCaptureRole.source === 'connected' ? saveDesignOnly : undefined,
+                  onRetry: retryProjectSaveRead,
+                  onCancelRead: closeProjectSave,
+                }
+              : undefined
+          }
           onError={setError}
           onClose={closeProjectSave}
           onSaved={(receipt) =>
@@ -3922,18 +4051,17 @@ export default function Studio() {
               `${receipt.slot === 'left' ? 'Left' : 'Right'} project saved and verified in ${receipt.folderName}.${receipt.workspaceChanged ? ' Newer edits still need a folder save.' : ''}`,
             )
           }
-          onDownloadJson={() =>
+          onDownloadJson={async () => {
+            const artifact = await resolveProjectSave(saveDialog);
             download(
-              `${saveDialog.project.name}.fusion.json`,
-              JSON.stringify(saveDialog.project, null, 2),
-            )
-          }
-          onDownloadZip={() =>
-            downloadBytes(
-              `${saveDialog.project.name}.zip`,
-              zipFiles(projectFiles(saveDialog.project)),
-            )
-          }
+              `${artifact.project.name}.fusion.json`,
+              JSON.stringify(artifact.project, null, 2),
+            );
+          }}
+          onDownloadZip={async () => {
+            const artifact = await resolveProjectSave(saveDialog);
+            downloadBytes(`${artifact.project.name}.zip`, zipFiles([...artifact.files]));
+          }}
         />
       )}
       {(Object.entries(progress).length > 0 || uploadReport.length > 0) && (

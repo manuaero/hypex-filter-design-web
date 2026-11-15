@@ -1,6 +1,7 @@
 import type { Slot, Project } from '../domain/model';
 import type { ExecutionPrincipal } from './execution-context';
 import type { TransferBlobFile } from './file-transfers';
+import type { ProjectFile } from '../domain/project-io';
 
 export interface WritableProjectFileHandle {
   readonly kind: 'file';
@@ -28,6 +29,14 @@ export interface DirectorySaveBinding {
   expectedRevision: number;
   requestId: string;
   principal: ExecutionPrincipal;
+  exportId?: string;
+  metadata?: 'auto' | 'design';
+}
+export interface DirectoryExportTicket {
+  resolve(): Promise<{ project: Project; files: readonly ProjectFile[] }>;
+  assertCurrent(): void;
+  /** Release only implicit capture stages owned by this ticket. */
+  dispose?(): void;
 }
 export type DirectorySaveInput = DirectorySaveBinding &
   (
@@ -56,6 +65,8 @@ export interface DirectorySaveProposal {
   id: string;
   slot: Slot;
   expectedRevision: number;
+  exportId?: string;
+  metadata?: 'auto' | 'design';
   mode: 'save' | 'save-as';
   rootId: string;
   folderName: string;
@@ -101,6 +112,8 @@ export interface DirectoryWriterSnapshot {
 export interface ProjectDirectoryWriterOptions {
   getProject(slot: Slot): Project;
   getRevision(): number;
+  /** Synchronous capture only; resolve is deferred until after durable replay/grant checks. */
+  captureExport?(binding: Readonly<DirectorySaveBinding>, project: Project): DirectoryExportTicket;
   backend?: DirectoryWriterBackend;
   now?: () => number;
   id?: () => string;
@@ -137,6 +150,8 @@ export interface DirectoryWriterJournal {
   requestId: string;
   slot: Slot;
   expectedRevision: number;
+  exportId?: string;
+  metadata?: 'auto' | 'design';
   mode: 'save' | 'save-as';
   rootId: string;
   folderName: string;
@@ -307,6 +322,8 @@ export function createProjectDirectoryWriter(
       id: save.id,
       slot: save.slot,
       expectedRevision: save.expectedRevision,
+      ...(save.exportId !== undefined ? { exportId: save.exportId } : {}),
+      ...(save.metadata !== undefined ? { metadata: save.metadata } : {}),
       mode: save.mode,
       rootId: save.rootId,
       folderName: save.folderName,
@@ -1102,6 +1119,8 @@ export function createProjectDirectoryWriter(
         requestId: idValue(input.requestId),
         principal: actor(input.principal),
         mode: input.mode,
+        ...(input.exportId !== undefined ? { exportId: idValue(input.exportId) } : {}),
+        ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
         ...(input.mode === 'save-as'
           ? { rootId: idValue(input.rootId), folderName: input.folderName }
           : {}),
@@ -1110,176 +1129,229 @@ export function createProjectDirectoryWriter(
         !['left', 'right'].includes(binding.slot) ||
         !['save', 'save-as'].includes(binding.mode) ||
         !Number.isSafeInteger(binding.expectedRevision) ||
-        binding.expectedRevision < 0
+        binding.expectedRevision < 0 ||
+        (binding.metadata !== undefined && !['auto', 'design'].includes(binding.metadata))
       )
         throw new DirectorySaveError('invalid-request', 'Invalid explicit save binding');
       const captured =
         options.getRevision() === binding.expectedRevision
           ? projectSchema.parse(options.getProject(binding.slot))
           : undefined;
-      await ready(true);
-      data = await read(true);
-      const priorArchive = data.archives.find(
-        (a) => a.owner === binding.principal.owner && a.requestId === binding.requestId,
-      );
-      const prior =
-        priorArchive?.receipt ??
-        data.saves.find(
-          (s) => s.owner === binding.principal.owner && s.requestId === binding.requestId,
-        );
-      if (prior) {
-        if (
-          prior.slot !== binding.slot ||
-          prior.expectedRevision !== binding.expectedRevision ||
-          prior.mode !== binding.mode ||
-          (binding.mode === 'save-as' &&
-            (prior.rootId !== binding.rootId ||
-              directoryNameKey(prior.folderName) !== directoryNameKey(binding.folderName!)))
-        )
-          throw new DirectorySaveError('invalid-request', 'Request ID belongs to a different save');
-        return priorArchive
-          ? archivedReceipt(priorArchive)
-          : proposal(prior as DirectoryWriterJournal);
-      }
-      // A new save uses live root-capability validation; an old archived request never touches it.
-      data = await read();
-      if (!captured)
-        throw new DirectorySaveError(
-          'stale-workspace',
-          'The design changed before this save could be captured',
-        );
-      const association = data.associations[binding.slot],
-        destination =
-          binding.mode === 'save-as'
-            ? { rootId: binding.rootId!, folderName: binding.folderName! }
-            : association;
-      if (!destination || (binding.mode === 'save' && association?.projectKey !== keyFor(captured)))
-        throw new DirectorySaveError(
-          'invalid-request',
-          'Use Save As to associate this project with a granted destination',
-        );
+      let exportTicket: DirectoryExportTicket | undefined, ticketFailure: unknown;
+      // Capture the original session synchronously, but preserve zero-I/O replay
+      // even when a formerly connected target is now missing or a ticket expired.
       try {
-        assertSaveName(destination.folderName);
-      } catch {
-        throw new DirectorySaveError(
-          'invalid-request',
-          'Choose one native-compatible project folder name',
-        );
+        if (captured && options.captureExport)
+          exportTicket = options.captureExport(binding, captured);
+      } catch (error) {
+        ticketFailure = error;
       }
-      const root = data.roots.find((r) => r.id === destination.rootId);
-      if (!root || !(await hasDirectoryWritePermission(root.handle)))
-        throw new DirectorySaveError(
-          'needs-human-grant',
-          'A human must grant read/write access before saving',
+      try {
+        await ready(true);
+        data = await read(true);
+        const priorArchive = data.archives.find(
+          (a) => a.owner === binding.principal.owner && a.requestId === binding.requestId,
         );
-      const existing = await findChildDirectory(root.handle, destination.folderName),
-        folderName = existing?.name ?? destination.folderName;
-      if (
-        data.saves.some(
-          (s) =>
-            s.rootId === root.id &&
-            directoryNameKey(s.folderName) === directoryNameKey(folderName) &&
-            ['writing', 'partial', 'recovering'].includes(s.phase),
-        )
-      )
-        throw new DirectorySaveError(
-          'conflict',
-          'Retry or recover the unfinished save for this folder first',
-        );
-      const exported = projectFiles(captured);
-      if (exported.reduce((sum, f) => sum + f.content.length, 0) > MAX_UI_TEXT_CHARACTERS)
-        throw new DirectorySaveError(
-          'invalid-request',
-          'Project folder exceeds the existing 80m character import budget',
-        );
-      const handles = existing
-          ? await matchingProjectFiles(
-              existing,
-              exported.map((f) => f.path),
-            )
-          : new Map<string, WritableProjectFileHandle>(),
-        files: DirectoryWriterJournal['files'] = [];
-      const stagedSizes: { size: number }[] = [];
-      for (const f of exported) {
-        assertSaveName(f.path);
-        const handle = handles.get(directoryNameKey(f.path)),
-          after = new Blob([f.content]),
-          original = handle ? await handle.getFile() : undefined;
-        assertFileByteBudget([...stagedSizes, after, ...(original ? [original] : [])]);
-        stagedSizes.push({ size: after.size }, ...(original ? [{ size: original.size }] : []));
-        const before = original ? await ownDirectoryBlob(original) : null;
-        const sha256 = await hash(after),
-          beforeSha256 = before ? await hash(before) : undefined;
-        files.push({
-          path: handle?.name ?? f.path,
-          action: before
-            ? sha256 === beforeSha256 && after.size === before.size
-              ? 'unchanged'
-              : 'replace'
-            : 'create',
-          bytes: after.size,
-          sha256,
-          ...(before ? { beforeBytes: before.size, beforeSha256 } : {}),
-          state: 'pending',
-          recovery: 'pending',
-          before,
-          after,
-        });
-      }
-      assertFileByteBudget(files.flatMap((f) => (f.before ? [f.before, f.after] : [f.after])));
-      const journal: DirectoryWriterJournal = {
-        id: newId(),
-        owner: binding.principal.owner,
-        scope: binding.principal.scope,
-        requestId: binding.requestId,
-        slot: binding.slot,
-        expectedRevision: binding.expectedRevision,
-        mode: binding.mode,
-        rootId: root.id,
-        folderName,
-        folderExisted: !!existing,
-        projectKey: keyFor(captured),
-        phase: 'prepared',
-        createdAt: now(),
-        overwriteConfirmed: false,
-        folderHandle: existing,
-        files,
-      };
-      let preparedId = journal.id;
-      await persist((next) => {
-        const existingArchive = next.archives.find(
-          (a) => a.owner === journal.owner && a.requestId === journal.requestId,
-        );
-        const existing =
-          existingArchive?.receipt ??
-          next.saves.find((s) => s.owner === journal.owner && s.requestId === journal.requestId);
-        if (existing) {
+        const prior =
+          priorArchive?.receipt ??
+          data.saves.find(
+            (s) => s.owner === binding.principal.owner && s.requestId === binding.requestId,
+          );
+        if (prior) {
           if (
-            existing.slot !== journal.slot ||
-            existing.expectedRevision !== journal.expectedRevision ||
-            existing.mode !== journal.mode ||
-            (journal.mode === 'save-as' &&
-              (existing.rootId !== journal.rootId ||
-                directoryNameKey(existing.folderName) !== directoryNameKey(journal.folderName)))
+            prior.slot !== binding.slot ||
+            prior.expectedRevision !== binding.expectedRevision ||
+            prior.exportId !== binding.exportId ||
+            prior.metadata !== binding.metadata ||
+            prior.mode !== binding.mode ||
+            (binding.mode === 'save-as' &&
+              (prior.rootId !== binding.rootId ||
+                directoryNameKey(prior.folderName) !== directoryNameKey(binding.folderName!)))
           )
             throw new DirectorySaveError(
               'invalid-request',
               'Request ID belongs to a different save',
             );
-          preparedId = existing.id;
-          return;
+          return priorArchive
+            ? archivedReceipt(priorArchive)
+            : proposal(prior as DirectoryWriterJournal);
         }
-        const older = next.saves
-          .filter((s) => s.owner === journal.owner && s.phase === 'prepared')
-          .sort((a, b) => b.createdAt - a.createdAt)
-          .slice(7);
-        next.saves = next.saves.filter((s) => !older.some((old) => old.id === s.id));
-        next.saves.push(journal);
-      }, journal.id);
-      const savedArchive = archived(preparedId, binding.principal);
-      return savedArchive
-        ? archivedReceipt(savedArchive)
-        : proposal(data.saves.find((s) => s.id === preparedId)!);
+        // A new save uses live root-capability validation; an old archived request never touches it.
+        data = await read();
+        if (!captured)
+          throw new DirectorySaveError(
+            'stale-workspace',
+            'The design changed before this save could be captured',
+          );
+        const association = data.associations[binding.slot],
+          destination =
+            binding.mode === 'save-as'
+              ? { rootId: binding.rootId!, folderName: binding.folderName! }
+              : association;
+        if (
+          !destination ||
+          (binding.mode === 'save' && association?.projectKey !== keyFor(captured))
+        )
+          throw new DirectorySaveError(
+            'invalid-request',
+            'Use Save As to associate this project with a granted destination',
+          );
+        try {
+          assertSaveName(destination.folderName);
+        } catch {
+          throw new DirectorySaveError(
+            'invalid-request',
+            'Choose one native-compatible project folder name',
+          );
+        }
+        const root = data.roots.find((r) => r.id === destination.rootId);
+        if (!root || !(await hasDirectoryWritePermission(root.handle)))
+          throw new DirectorySaveError(
+            'needs-human-grant',
+            'A human must grant read/write access before saving',
+          );
+        const existing = await findChildDirectory(root.handle, destination.folderName),
+          folderName = existing?.name ?? destination.folderName;
+        if (
+          data.saves.some(
+            (s) =>
+              s.rootId === root.id &&
+              directoryNameKey(s.folderName) === directoryNameKey(folderName) &&
+              ['writing', 'partial', 'recovering'].includes(s.phase),
+          )
+        )
+          throw new DirectorySaveError(
+            'conflict',
+            'Retry or recover the unfinished save for this folder first',
+          );
+        if (ticketFailure) throw ticketFailure;
+        const resolved = exportTicket ? await exportTicket.resolve() : undefined;
+        if (resolved) {
+          const validated = projectSchema.parse(resolved.project),
+            original = structuredClone(captured);
+          delete validated.hfdCloneTemplate;
+          delete original.hfdCloneTemplate;
+          if (JSON.stringify(validated) !== JSON.stringify(original))
+            throw new DirectorySaveError(
+              'invalid-request',
+              'Save capture changed staged design data',
+            );
+        }
+        exportTicket?.assertCurrent();
+        const exported = resolved?.files ?? projectFiles(captured);
+        if (
+          !Array.isArray(exported) ||
+          exported.length < 2 ||
+          exported.length > 2000 ||
+          exported.some(
+            (file) => !file || typeof file.path !== 'string' || typeof file.content !== 'string',
+          )
+        )
+          throw new DirectorySaveError(
+            'invalid-request',
+            'Save capture returned an invalid file set',
+          );
+        if (exported.reduce((sum, f) => sum + f.content.length, 0) > MAX_UI_TEXT_CHARACTERS)
+          throw new DirectorySaveError(
+            'invalid-request',
+            'Project folder exceeds the existing 80m character import budget',
+          );
+        const handles = existing
+            ? await matchingProjectFiles(
+                existing,
+                exported.map((f) => f.path),
+              )
+            : new Map<string, WritableProjectFileHandle>(),
+          files: DirectoryWriterJournal['files'] = [];
+        const stagedSizes: { size: number }[] = [];
+        for (const f of exported) {
+          assertSaveName(f.path);
+          const handle = handles.get(directoryNameKey(f.path)),
+            after = new Blob([f.content]),
+            original = handle ? await handle.getFile() : undefined;
+          assertFileByteBudget([...stagedSizes, after, ...(original ? [original] : [])]);
+          stagedSizes.push({ size: after.size }, ...(original ? [{ size: original.size }] : []));
+          const before = original ? await ownDirectoryBlob(original) : null;
+          const sha256 = await hash(after),
+            beforeSha256 = before ? await hash(before) : undefined;
+          files.push({
+            path: handle?.name ?? f.path,
+            action: before
+              ? sha256 === beforeSha256 && after.size === before.size
+                ? 'unchanged'
+                : 'replace'
+              : 'create',
+            bytes: after.size,
+            sha256,
+            ...(before ? { beforeBytes: before.size, beforeSha256 } : {}),
+            state: 'pending',
+            recovery: 'pending',
+            before,
+            after,
+          });
+        }
+        assertFileByteBudget(files.flatMap((f) => (f.before ? [f.before, f.after] : [f.after])));
+        const journal: DirectoryWriterJournal = {
+          id: newId(),
+          owner: binding.principal.owner,
+          scope: binding.principal.scope,
+          requestId: binding.requestId,
+          slot: binding.slot,
+          expectedRevision: binding.expectedRevision,
+          ...(binding.exportId !== undefined ? { exportId: binding.exportId } : {}),
+          ...(binding.metadata !== undefined ? { metadata: binding.metadata } : {}),
+          mode: binding.mode,
+          rootId: root.id,
+          folderName,
+          folderExisted: !!existing,
+          projectKey: keyFor(captured),
+          phase: 'prepared',
+          createdAt: now(),
+          overwriteConfirmed: false,
+          folderHandle: existing,
+          files,
+        };
+        let preparedId = journal.id;
+        await persist((next) => {
+          exportTicket?.assertCurrent();
+          const existingArchive = next.archives.find(
+            (a) => a.owner === journal.owner && a.requestId === journal.requestId,
+          );
+          const existing =
+            existingArchive?.receipt ??
+            next.saves.find((s) => s.owner === journal.owner && s.requestId === journal.requestId);
+          if (existing) {
+            if (
+              existing.slot !== journal.slot ||
+              existing.expectedRevision !== journal.expectedRevision ||
+              existing.exportId !== journal.exportId ||
+              existing.metadata !== journal.metadata ||
+              existing.mode !== journal.mode ||
+              (journal.mode === 'save-as' &&
+                (existing.rootId !== journal.rootId ||
+                  directoryNameKey(existing.folderName) !== directoryNameKey(journal.folderName)))
+            )
+              throw new DirectorySaveError(
+                'invalid-request',
+                'Request ID belongs to a different save',
+              );
+            preparedId = existing.id;
+            return;
+          }
+          const older = next.saves
+            .filter((s) => s.owner === journal.owner && s.phase === 'prepared')
+            .sort((a, b) => b.createdAt - a.createdAt)
+            .slice(7);
+          next.saves = next.saves.filter((s) => !older.some((old) => old.id === s.id));
+          next.saves.push(journal);
+        }, journal.id);
+        const savedArchive = archived(preparedId, binding.principal);
+        return savedArchive
+          ? archivedReceipt(savedArchive)
+          : proposal(data.saves.find((s) => s.id === preparedId)!);
+      } finally {
+        exportTicket?.dispose?.();
+      }
     },
     commit: (id, p, review) => perform(id, p, false, false, review?.allowOverwrite === true),
     async retry(id, p) {

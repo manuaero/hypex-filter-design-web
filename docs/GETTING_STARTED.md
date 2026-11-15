@@ -29,14 +29,29 @@ Project JSON preserves browser-specific state. Native folder export writes `Conf
 
 The library stores browser-owned project snapshots. A granted source directory instead opens fresh filesystem content. A human must grant directory access explicitly; agents can use existing grants but cannot choose arbitrary operating-system paths or silently invoke a picker.
 
+The Save dialog stages an immutable request before any read. Choose:
+
+- **Auto**: an initially connected supported commercial FA503 supplies fresh settings and three physical EQ banks through matched read-only snapshots. An initially offline role uses its frozen design.
+- **Design only**: export the frozen design without device reads, even when an amplifier is connected.
+
+Connected capture preserves staged EQ and crossover/FIR designs. It adds physical metadata only to the detached save artifact, not to the workspace. Fields unavailable from the supported wire profile are explicitly marked fresh-host defaults; they are not presented as retained state from a running Windows application.
+
+JSON, native folder and ZIP actions use the same resolved artifact. Resolving a successful capture again performs no additional device reads. Offline/design-only downloads remain the original snapshot after later design edits. Initially connected captures instead reject stale designs, a replaced session or changed identity; no other connected amplifier is substituted.
+
 For directory Save/Save As:
 
-1. Capture the intended role and design revision.
+1. Stage the intended role, design revision and Auto/Design only choice.
 2. Grant a read/write directory and select a direct-child project folder.
 3. Prepare and inspect the create/replace/unchanged file list.
 4. Save the reviewed files and inspect the verified result.
 
 Before-images and desired bytes are retained for recovery. Existing unrelated files are preserved. New files introduced by a save are listed and retained during recovery; no whole-folder rollback is promised. Partial or uncertain saves must be resolved with their original request rather than replaced by an unrelated new request.
+
+A failed **capture** has not written project files or changed the amplifier. Use the explicit capture retry to create a new ID, or choose Design only. This is distinct from retrying an uncertain **filesystem commit**, which must retain the original journal/request. Editing the design after a folder review does not arm that review to save the new data; prepare a new review.
+
+Up to eight page-local capture IDs can be retained, with a shared 80-million-character / 640-MB budget for detached projects and file text. Release an unused capture instead of relying on silent eviction. A prepared directory journal is separately durable and keeps its exact files after the page-local capture is released.
+
+One physical FA503 on firmware 5.7/core 5.1 has completed this read-only capture through the actual Save UI and MCP path. MCP delivered the JSON artifact with a verified byte hash. Browser download delivery is still unverified: a successful capture or download-anchor action does not establish that the browser saved a file. Physical Both capture and independent HFD GUI comparison remain open.
 
 Completed recovery records can be explicitly archived after review, removing local recovery bytes while retaining a historical receipt. Exporting a ZIP does not prove that an external backup was durably stored. Review that trade-off before removing recovery data.
 

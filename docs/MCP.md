@@ -2,7 +2,7 @@
 
 Agents use the same controllers and validation as the human interface. Normal users can work entirely through visible controls; the optional command console is a development aid.
 
-The current registry contains **86 commands**, including shared amplifier-mode review. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
+The current registry contains **87 commands**, including shared amplifier-mode review and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
 
 ## Pair a local client
 
@@ -81,7 +81,7 @@ That design edit does not upload the section. Inspect state and use Undo when ap
 | Purpose                      | Representative commands                                                                                                                                                                            |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | State, selection and history | `fusion_state`, `fusion_select`, `fusion_view`, `fusion_history`                                                                                                                                   |
-| Projects and storage         | `fusion_project_new`, `fusion_project_import`, `fusion_project_export`, `fusion_workspace_storage`, `fusion_project_sources`, `fusion_project_directory`                                           |
+| Projects and storage         | `fusion_project_new`, `fusion_project_import`, `fusion_project_export`, `fusion_project_save`, `fusion_workspace_storage`, `fusion_project_sources`, `fusion_project_directory`                    |
 | Filters and channels         | `fusion_filter_palette`, `fusion_preview_filter`, `fusion_filter_add`, `fusion_filter_set`, `fusion_channel_set`, `fusion_channel_link`, `fusion_biquad_exchange`                                  |
 | EQ and FIR                   | `fusion_eq_set`, `fusion_eq_bank`, `fusion_eq_read`, `fusion_eq_upload`, `fusion_fir_set`, `fusion_fir_read`, `fusion_fir_upload`                                                                  |
 | Measurements and analysis    | `fusion_hfd_measurement`, `fusion_microphone`, `fusion_analyze`, `fusion_time_analyze`, `fusion_audio`                                                                                             |
@@ -92,6 +92,59 @@ That design edit does not upload the section. Inspect state and use Undo when ap
 | Help                         | `fusion_help`                                                                                                                                                                                      |
 
 Some older clients cache tool names. Existing validated compatibility namespaces expose selected newer operations; use the server’s current schema rather than guessing nested arguments. Firmware inspection and authentication actions are available through `fusion_device_read` namespaces. Physical firmware programming remains disabled.
+
+## Native Save artifacts
+
+`fusion_project_save` shares the human Save controller:
+
+| Action    | Behavior                                                                                                                                                                           |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stage`   | Bind an explicit `target`, `expectedRevision` and `mode: "auto"` or `"design"` synchronously, without I/O.                                                                         |
+| `status`  | Return cached owner-admitted capture summaries, not raw projects or file text.                                                                                                     |
+| `resolve` | Resolve the capture `id`; the first connected Auto resolve performs matched read-only metadata/EQ capture. Successful subsequent resolves reuse the artifact with zero device I/O. |
+| `release` | Release the `id` and invalidate any late result. No hardware setter or session close is sent.                                                                                      |
+
+Auto captures use the initially bound session and identity. The current physical profile is commercial FA503 / DSP3-213 core 5.1. Design mode and initially offline Auto roles use frozen document exports without a hardware busy gate. A Both request publishes detached results only if every selected role succeeds and all connected-capture role/revision/session fences remain valid. Nothing is published into the workspace.
+
+Stage using the document revision obtained from current state:
+
+```json
+{
+  "name": "fusion_project_save",
+  "arguments": {
+    "action": "stage",
+    "target": "left",
+    "expectedRevision": 7,
+    "mode": "auto"
+  }
+}
+```
+
+Use the returned ID rather than inventing one. To obtain a chunked export:
+
+```json
+{
+  "name": "fusion_file_export",
+  "arguments": {
+    "operation": {
+      "workflow": "native-project-save",
+      "parameters": {
+        "id": "<returned capture ID>",
+        "slot": "left",
+        "format": "zip"
+      }
+    }
+  }
+}
+```
+
+Formats are `json`, `hfd-xml`, `folder` and `zip`. The slot must belong to that capture. Folder Prepare also accepts `exportId` to reuse the artifact and optional `metadata: "auto" | "design"`. Without an export ID, a new Prepare captures its original role/session before awaits and resolves only after durable replay and directory-grant checks. Existing prepared/archived request replay, Commit, Retry and Recover use retained files without recapturing hardware.
+
+Ordinary `fusion_project_export` and ordinary project file-export workflows remain document snapshots without device reads. Use the explicit Native Save workflow when fresh connected metadata is wanted. A failed capture must be released and staged under a new ID, or replaced by an explicit Design only choice; it does not silently fall back. Offline/design-only artifacts retain their frozen JSON after later edits.
+
+Capture IDs and artifacts are page-local: at most eight IDs and an aggregate 80 million text characters / 640 MB for detached projects and resolved file text. Live IDs are not silently evicted. Prepared directory journals have separate durable storage and exact receipt replay. Do not treat a page-local capture ID as a durable journal receipt or allocate a new filesystem request to bypass an uncertain commit.
+
+The actual MCP `stage` → `resolve` → file export → chunk read → `release` path has been checked against one physical FA503 on firmware 5.7/core 5.1. A 65,467-byte JSON artifact was delivered in one hash-verified chunk, containing all three nine-band physical EQ banks. No device setter was sent and the workspace projects/selection stayed exact. This verifies that read/export path, not paired hardware behavior, browser download completion or independent HFD GUI equivalence.
 
 ## Reviews, identities and receipts
 

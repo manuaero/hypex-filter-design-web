@@ -225,6 +225,13 @@ it('header Save captures its exact role, revision and download snapshot while la
   const binding = seen.save!.captureBinding();
   expect(binding).toMatchObject({ slot: 'left', expectedRevision: 0 });
   expect(binding.principal.owner).toBe('workspace:11111111-1111-4111-8111-111111111111');
+  const execute = createToolExecutor(seen.adapter!);
+  expect(
+    await execute('fusion_project_save', { action: 'status' }, binding.principal),
+  ).toMatchObject({
+    ok: true,
+    saves: { captures: [{ id: binding.exportId, target: 'left', phase: 'staged' }] },
+  });
   await act(async () => seen.adapter!.choose({ slot: 'right' }));
   await act(async () =>
     state().editAt(['left'], (p) => {
@@ -233,7 +240,20 @@ it('header Save captures its exact role, revision and download snapshot while la
   );
   expect(seen.save!.captureBinding()).toEqual(binding);
   expect(seen.save?.projectName).toBe('Left');
-  seen.save!.onDownloadJson!();
+  await act(async () => {
+    await seen.save!.onDownloadJson!();
+  });
+  expect(
+    await execute(
+      'fusion_project_save',
+      { action: 'resolve', id: binding.exportId },
+      binding.principal,
+    ),
+  ).toMatchObject({
+    ok: true,
+    id: binding.exportId,
+    roles: [{ slot: 'left' }],
+  });
   expect(download).toHaveBeenCalledExactlyOnceWith(
     'Left.fusion.json',
     JSON.stringify(initial, null, 2),

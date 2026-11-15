@@ -849,3 +849,296 @@ it('a supplied external review retains its original record and UI binding when c
   expect(f.adoptLegacy).toHaveBeenCalledExactlyOnceWith(f.review.id, legacyUi, { confirm: true });
   expect(f.capturedProps.captureBinding).toHaveBeenCalledTimes(1);
 });
+
+it('shows live preparation status for the frozen Save role without reading on mount or replacing its export callbacks', async () => {
+  const f = fixture(),
+    original = vi.fn(async () => {}),
+    replacement = vi.fn(async () => {}),
+    designOnly = vi.fn(),
+    p = props(f, {
+      onDownloadZip: original,
+      exportPreparation: {
+        phase: 'staged',
+        slot: 'left',
+        source: 'connected',
+        serial: 'SYNTHETIC-LEFT',
+        onDesignOnly: designOnly,
+      },
+    });
+  await mount(p);
+  const source = () => host.querySelector('section[aria-label="Save source"]')!;
+  expect(source().textContent).toContain('Left · Current amplifier settings');
+  expect(source().textContent).toContain('SYNTHETIC-LEFT');
+  expect(source().textContent).toContain('read automatically when you save or download');
+  expect(f.prepare).not.toHaveBeenCalled();
+  expect(original).not.toHaveBeenCalled();
+  expect(designOnly).not.toHaveBeenCalled();
+  await mount({
+    ...p,
+    projectName: 'Right navigation',
+    captureBinding: () => ({
+      slot: 'right',
+      expectedRevision: 8,
+      requestId: 'right-request',
+      principal,
+    }),
+    onDownloadZip: replacement,
+    exportPreparation: {
+      phase: 'ready',
+      slot: 'left',
+      source: 'connected',
+      serial: 'SYNTHETIC-LEFT',
+      capturedAt: '2026-11-15T12:00:00Z',
+    },
+  });
+  expect(host.textContent).toContain('Left · Original design');
+  expect(source().querySelector('time')?.dateTime).toBe('2026-11-15T12:00:00Z');
+  expect(source().textContent).toContain('Staged filters and design EQ are retained separately');
+  await click('Download HFD ZIP');
+  expect(original).toHaveBeenCalledOnce();
+  expect(replacement).not.toHaveBeenCalled();
+  expect(p.onSaved).not.toHaveBeenCalled();
+});
+
+it('presents capture failure without a successful export and requires an explicit design-only fallback', async () => {
+  const f = fixture(),
+    designOnly = vi.fn(),
+    p = props(f, {
+      exportPreparation: {
+        phase: 'error',
+        slot: 'left',
+        source: 'connected',
+        serial: 'SYNTHETIC-LEFT',
+        error: 'Physical EQ read was not complete',
+        onDesignOnly: designOnly,
+      },
+    });
+  await mount(p);
+  expect(host.querySelector('section[aria-label="Save source"] [role="alert"]')?.textContent).toBe(
+    'Physical EQ read was not complete',
+  );
+  expect(designOnly).not.toHaveBeenCalled();
+  expect(f.prepare).not.toHaveBeenCalled();
+  expect(f.commit).not.toHaveBeenCalled();
+  expect(p.onSaved).not.toHaveBeenCalled();
+  await click('Save design only');
+  expect(designOnly).toHaveBeenCalledExactlyOnceWith();
+  expect(f.prepare).not.toHaveBeenCalled();
+  expect(p.onSaved).not.toHaveBeenCalled();
+});
+
+it('does not offer a source fallback after a prepared journal, even after its destination review is invalidated', async () => {
+  const f = fixture(),
+    designOnly = vi.fn(),
+    p = props(f, {
+      exportPreparation: {
+        phase: 'staged',
+        slot: 'left',
+        source: 'connected',
+        onDesignOnly: designOnly,
+      },
+    });
+  await mount(p);
+  expect(button('Save design only')).toBeDefined();
+  await click('Review save');
+  expect(button('Save design only')).toBeUndefined();
+  await text('A different folder');
+  expect(host.querySelector('section[aria-label="Prepared folder save"]')).toBeNull();
+  expect(button('Save design only')).toBeUndefined();
+  expect(designOnly).not.toHaveBeenCalled();
+});
+
+it('awaits a frozen async download, blocks duplicates and lets Cancel read run while only UI-local work is busy', async () => {
+  const f = fixture(),
+    pending = deferred<void>(),
+    download = vi.fn(() => pending.promise),
+    cancel = vi.fn(),
+    p = props(f, {
+      onDownloadJson: download,
+      exportPreparation: {
+        phase: 'staged',
+        slot: 'left',
+        source: 'connected',
+        onCancelRead: cancel,
+      },
+    });
+  await mount(p);
+  await act(async () => {
+    const action = button('Download JSON');
+    action.click();
+    action.click();
+  });
+  expect(download).toHaveBeenCalledOnce();
+  await mount({ ...p, exportPreparation: { ...p.exportPreparation!, phase: 'capturing' } });
+  expect(host.querySelector('[role="status"]')?.textContent).toContain('Reading Left amplifier');
+  expect(button('Cancel read').disabled).toBe(false);
+  expect(button('Download JSON').disabled).toBe(true);
+  await click('Cancel read');
+  expect(cancel).toHaveBeenCalledExactlyOnceWith();
+  expect(button('Canceling read…').disabled).toBe(true);
+  expect(p.onSaved).not.toHaveBeenCalled();
+  await act(async () => pending.resolve());
+  expect(f.commit).not.toHaveBeenCalled();
+  expect(p.onSaved).not.toHaveBeenCalled();
+});
+
+it('reports asynchronous download rejection and never claims a folder save or starts a writer operation', async () => {
+  const f = fixture(),
+    download = vi.fn(async () => {
+      throw new Error('Fresh capture was canceled');
+    }),
+    p = props(f, { onDownloadZip: download });
+  await mount(p);
+  await click('Download HFD ZIP');
+  expect(p.onError).toHaveBeenCalledWith('Fresh capture was canceled');
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe('Fresh capture was canceled');
+  expect(f.prepare).not.toHaveBeenCalled();
+  expect(f.commit).not.toHaveBeenCalled();
+  expect(p.onSaved).not.toHaveBeenCalled();
+  expect(button('Download HFD ZIP').disabled).toBe(false);
+});
+
+it('disables read cancellation during writer mutations or uncertainty and hides current-source controls in history', async () => {
+  const f = fixture(),
+    cancel = vi.fn(),
+    designOnly = vi.fn(),
+    p = props(f, {
+      exportPreparation: {
+        phase: 'capturing',
+        slot: 'left',
+        source: 'connected',
+        onCancelRead: cancel,
+        onDesignOnly: designOnly,
+      },
+    });
+  await mount(p);
+  await act(async () => f.publish({ busy: true }));
+  expect(button('Cancel read').disabled).toBe(true);
+  await click('Cancel read');
+  expect(cancel).not.toHaveBeenCalled();
+  await act(async () => f.publish({ busy: false }));
+  await mount({ ...p, exportPreparation: { ...p.exportPreparation!, phase: 'staged' } });
+  f.commit.mockRejectedValueOnce(
+    new DirectorySaveError('persistence', 'Save result is unconfirmed'),
+  );
+  await click('Review save');
+  await approve();
+  await click('Save reviewed files');
+  await mount({ ...p, exportPreparation: { ...p.exportPreparation!, phase: 'capturing' } });
+  expect(button('Cancel read').disabled).toBe(true);
+  expect(button('Save design only')).toBeUndefined();
+  expect(cancel).not.toHaveBeenCalled();
+});
+
+it('shows design-only provenance without implying a fresh read and rejects mismatched source roles', async () => {
+  const f = fixture(),
+    download = vi.fn(),
+    fallback = vi.fn(),
+    p = props(f, {
+      onDownloadJson: download,
+      exportPreparation: {
+        phase: 'staged',
+        slot: 'left',
+        source: 'design',
+        onDesignOnly: fallback,
+      },
+    });
+  await mount(p);
+  expect(host.querySelector('section[aria-label="Save source"]')?.textContent).toContain(
+    'Any retained device metadata is a saved snapshot',
+  );
+  expect(button('Save design only')).toBeUndefined();
+  await mount({
+    ...p,
+    exportPreparation: {
+      phase: 'staged',
+      slot: 'right',
+      source: 'connected',
+      serial: 'DO-NOT-RETARGET',
+      onDesignOnly: fallback,
+    },
+  });
+  expect(
+    host.querySelector('section[aria-label="Save source"] [role="alert"]')?.textContent,
+  ).toContain('another role');
+  expect(host.textContent).not.toContain('DO-NOT-RETARGET');
+  expect(button('Download JSON').disabled).toBe(true);
+  expect(host.querySelector('fieldset')!.disabled).toBe(true);
+  await click('Download JSON');
+  expect(download).not.toHaveBeenCalled();
+  expect(fallback).not.toHaveBeenCalled();
+});
+
+it('never offers current-source fallback or read cancellation while viewing a retained historical record', async () => {
+  const f = legacyFixture(),
+    fallback = vi.fn(),
+    cancel = vi.fn();
+  await mount({
+    ...f.capturedProps,
+    initialLegacyReview: f.review,
+    exportPreparation: {
+      phase: 'capturing',
+      slot: 'right',
+      source: 'connected',
+      onDesignOnly: fallback,
+      onCancelRead: cancel,
+    },
+  });
+  expect(host.querySelector('section[aria-label="Save source"]')).toBeNull();
+  expect(button('Save design only')).toBeUndefined();
+  expect(button('Cancel read')).toBeUndefined();
+  expect(fallback).not.toHaveBeenCalled();
+  expect(cancel).not.toHaveBeenCalled();
+});
+
+it('ignores a late rejected export after the dialog unmounts without reporting a save or updating its parent', async () => {
+  const f = fixture();
+  let reject!: (error: Error) => void;
+  const pending = new Promise<void>((_resolve, no) => {
+      reject = no;
+    }),
+    p = props(f, { onDownloadJson: () => pending });
+  await mount(p);
+  await click('Download JSON');
+  await act(async () => root.unmount());
+  await act(async () => reject(new Error('Late canceled capture')));
+  expect(p.onError).not.toHaveBeenCalled();
+  expect(p.onSaved).not.toHaveBeenCalled();
+  expect(f.prepare).not.toHaveBeenCalled();
+  expect(f.commit).not.toHaveBeenCalled();
+});
+
+it('offers an explicit one-shot new-stage retry callback for a connected read error without downloads or writer operations', async () => {
+  const f = fixture(),
+    retry = vi.fn(),
+    json = vi.fn(),
+    zip = vi.fn(),
+    p = props(f, {
+      onDownloadJson: json,
+      onDownloadZip: zip,
+      exportPreparation: {
+        phase: 'error',
+        slot: 'left',
+        source: 'connected',
+        error: 'Read failed',
+        onRetry: retry,
+      },
+    });
+  await mount(p);
+  expect(retry).not.toHaveBeenCalled();
+  await act(async () => {
+    const action = button('Retry device read');
+    action.click();
+    action.click();
+  });
+  expect(retry).toHaveBeenCalledExactlyOnceWith();
+  expect(json).not.toHaveBeenCalled();
+  expect(zip).not.toHaveBeenCalled();
+  expect(f.prepare).not.toHaveBeenCalled();
+  expect(f.commit).not.toHaveBeenCalled();
+  expect(p.onSaved).not.toHaveBeenCalled();
+  await mount({ ...p, exportPreparation: { ...p.exportPreparation!, phase: 'staged' } });
+  expect(button('Retry device read')).toBeUndefined();
+  await mount({ ...p, exportPreparation: { ...p.exportPreparation!, source: 'design' } });
+  expect(button('Retry device read')).toBeUndefined();
+});

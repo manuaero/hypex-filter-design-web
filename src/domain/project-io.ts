@@ -1,4 +1,5 @@
 import { type Project } from './model';
+import { downloadBrowserBlob } from './browser-download';
 import {
   parseProject,
   exportHfd,
@@ -319,10 +320,5 @@ export function zipFiles(files: ProjectFile[]): Uint8Array {
   return result;
 }
 export function downloadBytes(name: string, bytes: Uint8Array, type = 'application/zip') {
-  const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type })),
-    a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadBrowserBlob(name, new Blob([new Uint8Array(bytes)], { type }));
 }

@@ -18,9 +18,9 @@ pnpm exec vitest run tests/amplifier-modes.test.ts
 
 Record source revision, exact commands and results for a release. Final source-wide totals/build results belong to that frozen release; this document does not substitute a prior total for a new run.
 
-## Exported-source release results
+## V31 initial public-source baseline
 
-The clean public export was verified on Windows on 2026-11-15 using Node.js 24.22.1 and pnpm 11.25.0. The initial public Git revision is assigned at publication. No private repository history, hosting bindings, vendor PDF or vendor firmware is included.
+The initial clean public export was verified on Windows on 2026-11-15 using Node.js 24.22.1 and pnpm 11.25.0. These results describe the v31 baseline, not the later Native Save increment. No private repository history, hosting bindings, vendor PDF or vendor firmware is included.
 
 | Check                          | Result                                                                                                                             |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -45,6 +45,41 @@ The one intentional skip is `accepts the optional exact installed PDF bytes when
 
 The Worker check evaluated the actual built bundle in isolation, without a real hosted account or browser actor. The client check evaluated the actual compiled help-registry initializer. They establish build-time fallback behavior, not completed browser PDF download or physical hardware acceptance. Raw machine reports are retained outside the public source export.
 
+## V32 Native Save release checks
+
+The shared Native Save implementation adds read-only connected settings/EQ capture, detached artifacts, durable directory integration and an 87-command registry. Its focused software/simulation regressions cover stale targets, atomic Both results, offline frozen JSON, budgets, release, cache reuse and receipt replay. The one-amplifier evidence below qualifies a specific read/export path; full compatibility remains open.
+
+The actual public checkout was checked on Windows on **2026-11-15**, using Node.js 24.22.1 and pnpm 11.25.0. Source was synced without private history, hosting metadata or vendor assets; the existing public documentation, MIT license and screenshot were preserved. Dependencies and lockfile were unchanged, so no reinstall was required.
+
+| Check                                      | V32 result                                                                              |
+| ------------------------------------------ | --------------------------------------------------------------------------------------- |
+| Fresh public-checkout complete suite/count | **2,253 passed, 1 skipped, 0 failed; 2,254 total tests across 166 files.**              |
+| Fresh public-checkout typecheck            | Passed.                                                                                 |
+| Fresh public-checkout production build     | Passed; 24 static assets totaling 1,825,705 bytes and a 2,996,375-byte packaged Worker. |
+| Actual Save UI capture                     | Passed for one physical FA503, firmware 5.7/core 5.1, using read-only capture.          |
+| Actual MCP capture/export delivery         | Passed: 65,467 JSON bytes in one hash-verified transfer chunk.                          |
+| Browser download completion                | Unverified; no download event was observed.                                             |
+| Two-amplifier physical capture             | Unverified; paired capture has simulation coverage only.                                |
+| Independent native HFD GUI equivalence     | Unverified.                                                                             |
+
+Commands run against the synced public checkout:
+
+```sh
+pnpm exec vitest run --reporter=dot --reporter=json --outputFile=../hypex-filter-design-web-public-v32.tests.json
+pnpm typecheck
+pnpm build
+```
+
+The one skip remains the optional exact vendor-PDF identity test. Synthetic PDF and no-manual fallback tests ran. The actual compiled client and Worker again report `bundled: false`, `optional: true`; the actual packaged Worker returns 200 for the home asset and 404 for the omitted manual in an isolated process-free runtime. Source privacy scans and relative-link checks passed. Raw reports and hash manifests stay outside the repository. These are the v32 public results; the earlier v31 table remains historical baseline evidence.
+
+### One-amplifier read/export evidence
+
+The actual Save UI and corrected shared MCP path successfully captured a commercial FA503 on firmware 5.7/core 5.1. MCP exercised stage, resolve, JSON file export, chunk read and release. The delivered local artifact contained 65,467 bytes and its hash matched the transfer chunk; three physical EQ banks each contained nine bands.
+
+DSP was On, bridge was Off and no errors or warnings were reported. Both complete workspace projects and the selection matched their initial state after the read/export. The browser amplifier connection was closed afterward. No settings, power, filter, bridge, firmware, audio or credential setter was issued. Device identity, DSP filename, project names and raw hashes are deliberately omitted here.
+
+The browser's download-anchor action produced no observed download event. Its internal Downloads page was unavailable under the browser-control policy, so browser file delivery is not claimed. This is separate from the MCP bytes that were delivered and verified. A successful read/export also does not establish a fresh independent HFD GUI comparison or behavior with two physical amplifiers.
+
 ## Evidence categories
 
 | Category                      | What it establishes                                                                                  | What it does not establish                                       |
@@ -60,6 +95,8 @@ The Worker check evaluated the actual built bundle in isolation, without a real 
 The automated suite covers filter coefficients, native/legacy metadata, measurement/calibration/time analysis, EQ/FIR behavior, fixed-target asynchronous imports, large chunked files, workspace persistence and Undo, directory save/recovery/archive, canonical actor admission, permissions, authentication and manual support-code flow, limiter/defaults/Device template plans and partial ledgers.
 
 Mode-service tests specifically cover native dependent fields, owned-field baseline changes, fresh permissions, unrelated-field preservation, blocked-before-send versus lost-ACK outcomes, and absence of added mute/restart/retry behavior. Firmware-journal tests cover strict durability, full allowed before-images, immutable source/recovery binding, capacity, corrupt data, CAS, readback loss and receipt replay. Their existence does not enable physical firmware updates.
+
+Native Save uses matched read-only metadata/EQ snapshots for the supported commercial FA503 profile. Tests distinguish physical EQ from staged design EQ, compare JSON/native-folder artifacts, preserve original offline JSON after later edits, reject a stale/failing paired target without workspace publication, and retain exact files across directory replay. Capture IDs are bounded and page-local; durable prepared journals have separate retention. Fresh-host default provenance is explicit rather than a claim to retained Windows state.
 
 Browser checks have exercised compact layouts, graph/inspector context, numeric gestures, independent role selection, project reload/Undo, shared controller outcomes, granted-directory simulation and large file-transfer resumption. Recent configuration/limiter/Defaults/Device template UI acceptance used isolated simulated panels with no real USB/audio/filesystem writes.
 
@@ -80,7 +117,7 @@ Remaining qualification includes:
 - Conditional accessories, four-output DSP3-224 workflows and other hardware families.
 - Fresh native comparisons for remaining detailed display/interaction behavior.
 
-Known software limitations also remain, including a conditional/OEM custom digital mixer weight editor, ordinary connected Save integration with fresh physical metadata, and historical non-directory owner migration. File formats and grouped source coverage must not be advertised as exhaustive HFD parity.
+Known software limitations also remain, including a conditional/OEM custom digital mixer weight editor and historical non-directory owner migration. Ordinary connected Save now has a supported-profile implementation and one actual FA503 read/export check; browser download completion, paired physical capture, independent native comparison and other profiles remain open. File formats and grouped source coverage must not be advertised as exhaustive HFD parity.
 
 ## Report reproducible evidence
 

@@ -40,6 +40,16 @@ Response plots use browser rendering and bounded numerical data. WebGL is not re
 
 An editable crossover design is distinct from a captured physical Device template. Physical settings and three EQ banks retain their provenance instead of silently becoming the staged design EQ. Draft Device template overrides are excluded from captured-template export.
 
+## Native Save capture
+
+`application/native-project-save.ts` supplies one detached artifact to the Save dialog, explicit MCP save actions, chunked downloads and directory Prepare. Staging captures roles, document references/revision, sessions and identities synchronously without I/O. Auto resolution reads fresh physical metadata/EQ only for roles connected at staging; Design mode remains a pure frozen export.
+
+The supported commercial FA503 capture reads matched snapshots of serialized settings, selected FIR filenames and the three physical EQ metadata pages. It does not read or substitute hardware IIR/FIR coefficient designs. Captured physical metadata goes into the detached project’s Device template while staged EQ stays unchanged. Explicit fresh-host defaults identify fields absent from the wire profile instead of borrowing unrelated Windows host state.
+
+Connected roles use sorted session reservations, all-settled reads and final all-target/revision/session checks. A failing or replaced Right target cannot publish a Left artifact or update either workspace document. A successful artifact is immutable and cached; subsequent resolution is historical zero-I/O reuse. Initially offline/design-only exports preserve their staged JSON even after later design edits.
+
+The controller retains at most eight IDs and budgets detached projects plus resolved file text against 80 million characters and 640 MB. Both roles count separately. Failures retain bounded summaries rather than large partial artifacts; release/dispose invalidates late work without closing a user-owned device. These artifacts are page-local and distinct from durable directory journals.
+
 ## State, history and durable commits
 
 The workspace has independent Left/Right projects, a selection and a monotonic document revision. Hydration gates edits. Asynchronous imports bind their role, preset, channel and expected revision before awaiting a picker, read or analysis. They cannot retarget themselves to a later selection.
@@ -59,6 +69,8 @@ Browser ownership is an application boundary, not encryption against other scrip
 ## Filesystem adaptation
 
 Source Open reads fresh data from a granted directory. Directory Save creates an immutable reviewed export, materializes independent before-image bytes and durably verifies its journal before overwriting files. It preserves unknown files and verifies each completed file.
+
+The directory writer’s synchronous `captureExport` ticket fixes the initial source but defers resolution until after existing-receipt and destination/grant checks. It can reuse an explicit `exportId`; implicit tickets are released after preparation/failure. Only physical-template metadata may differ from the staged design. `exportId` and metadata mode are part of immutable request replay identity. Commit, Retry and Recover use the journal’s retained artifact bytes and never refresh the connected amplifier. A later design edit cannot retarget an already reviewed overwrite.
 
 Same-origin Web Locks and fresh journal compare-and-swap coordinate this application’s writers. They do not lock HFD or another operating-system process. A pre-close comparison narrows the external-edit window, but there is no filesystem-wide compare-and-swap or atomic multi-file commit.
 

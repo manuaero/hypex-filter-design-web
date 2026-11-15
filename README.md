@@ -32,7 +32,8 @@ The app works offline for design tasks. No amplifier or agent connection is need
 - Impulse, Step, Magnitude and Phase views; measurement import, window/crop controls, smoothing, project microphone correction and optional browser audio capture.
 - Role-aware device settings, shared amplifier-mode reviews, limiter editing, device defaults, Device templates, diagnostics and recovery journals.
 - Browser project persistence, a project library, granted-directory Open/Save, reviewed recovery and bounded large-file transfers.
-- A local MCP server and optional authenticated hosted bridge. The current registry exposes **86 commands**; the running server’s `tools/list` is authoritative.
+- A shared Native Save artifact for JSON, native folders and ZIPs, with fresh read-only physical settings/EQ capture for supported connected targets and an explicit Design only option.
+- A local MCP server and optional authenticated hosted bridge. The current registry exposes **87 commands**; the running server’s `tools/list` is authoritative.
 
 Filter and measurement edits update the design directly. Validated numeric settings commit on Enter or blur where appropriate. Consequential changes use adjacent **Apply**, **Save**, **Update** or **Upload** actions. The developer command console is optional; normal editing never requires a generic Run command.
 
@@ -41,6 +42,10 @@ Filter and measurement edits update the design directly. Validated numeric setti
 Workspace data lives in this browser origin’s IndexedDB storage. A different hostname, port, browser profile or hosted origin has different data and grants. Export project JSON, native project folders and recovery files before changing origin, clearing browser data or moving computers. A project Save is distinct from a hardware Upload.
 
 Directory saves preserve unrelated files and keep verified before-images, but a multi-file directory save is not an atomic filesystem transaction. An unconfirmed hardware result is also not proof that nothing changed. Inspect its ledger before proceeding.
+
+Opening Save stages a fixed role, design revision and initial device session without I/O. In Auto mode, the first resolve reads matched physical settings and all three EQ banks for an initially connected commercial FA503; it does not send setters or replace staged design EQ. JSON downloads and native folder/ZIP saves use that detached artifact. Design only and initially offline exports preserve the frozen design, including downloads after later edits. A failed connected capture needs an explicit retry with a new capture ID or a Design only choice; it never silently substitutes old metadata.
+
+Save artifacts last for this page lifetime and are bounded to eight IDs, 80 million retained text characters and 640 MB across projects/files. Prepared directory journals durably retain their own exact bytes, so their replay and filesystem commit do not recapture hardware. One actual FA503 on firmware 5.7/core 5.1 completed read-only capture through the Save UI and MCP, with hash-verified JSON bytes delivered through a file-transfer chunk. Both workspace projects and selection remained unchanged, and no amplifier setter was sent. Browser download delivery, paired physical capture and independent HFD GUI equivalence remain unverified; see [verification](docs/VERIFICATION.md).
 
 ## Use an MCP client
 
@@ -61,6 +66,8 @@ pnpm typecheck
 pnpm test
 pnpm build
 ```
+
+The v32 public-checkout checks passed: **2,253 tests passed and one optional-PDF test skipped across 166 files**, with typecheck and production build passing. See [verification](docs/VERIFICATION.md) for the evidence and hardware qualification limits.
 
 The build produces the static application in `out/` and a packaged optional hosted Worker in `dist/server/index.js`. Hosted authentication, database and object-storage bindings require separate deployment configuration. The local app and local MCP server do not require that hosting platform.
 

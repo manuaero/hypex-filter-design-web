@@ -39,6 +39,18 @@ The supported processing design rate is 93,750 Hz. Output paths contain fifteen 
 
 Input EQ has three independent nine-band banks. Captured physical EQ is separate from staged design EQ. FIR placement/capacity and enable flags are also separate from whether a tap cache is loaded. Native folders preserve original measurement samples and resources alongside XML; browser-only processing state uses a validated sidecar.
 
+## Connected Native Save
+
+For commercial FA503 module 9 / DSP3-213 core 5.1, the read-only Save path compares two metadata snapshots, selected-placement FIR filename fields and exactly three 256-byte physical EQ pages. A final metadata pass follows the repeated EQ/name reads. Relevant identity/settings changes or a failed required read reject the capture. A protected source can be read without granting permission for any write.
+
+This path reads the data needed for serialized device information; it does not turn IIR/FIR flash into editable designs or capture an original firmware image. Non-wire host values are marked as explicit fresh-host defaults. They do not claim continuity with retained state in another running application.
+
+Save staging sends nothing. Initial connected resolution sends only validated reads, with no amplifier setter, backup write or workspace metadata update. A paired request returns all detached results together or no artifact. Successful cached resolution and durable folder-request replay send no further reads. A missing/replaced target never silently becomes an offline save; that alternative requires an explicit Design only choice.
+
+JSON and native files share the captured artifact, including a sidecar rebound to the emitted physical metadata. Staged EQ remains independent, ordinary offline exporters retain their prior contract, and existing prepared filesystem overwrites are never armed to a later selection or refreshed capture.
+
+One actual FA503 on firmware 5.7/core 5.1 completed the read-only Save UI and MCP capture/export path, including three physical nine-band EQ banks and hash-verified JSON delivery. DSP was On, bridge was Off and no errors or warnings were reported. The amplifier was disconnected after the reads, without settings, power, filter, bridge, firmware, audio or credential setters. This does not establish independent HFD GUI equivalence, browser download completion or physical paired capture.
+
 ## Operation safety and recovery
 
 Each workflow defines its owned fields, permissions, before-images, order and verification. Read-only preflight is distinct from an actual wire attempt. Paired operations check intended targets before writes and retain an independent role ledger when an operation becomes partial.

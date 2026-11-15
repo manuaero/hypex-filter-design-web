@@ -53,6 +53,12 @@ import {
 } from './device-settings';
 import { saveConfigurationBackup } from './storage';
 import {
+  captureNativeSaveTemplate,
+  nativeSaveFilenameAddresses,
+  nativeSaveStatusMask,
+  type NativeSaveSnapshot,
+} from './native-save-capture';
+import {
   verifyDeviceDefaultsStep,
   deviceDefaultsStatusMask,
   type DeviceDefaultsSnapshot as DefaultsHardwareSnapshot,
@@ -1004,6 +1010,138 @@ export class PanelSession {
     )
       throw new Error('Clone source changed during Reload; no metadata was replaced');
     return { ...snapshot, mixerConfiguration: mixerConfiguration.slice(), productStrings };
+  }
+  /** Connected native Save reads only physical info, selected FIR names and
+   * the three EQ parameter pages. The caller owns one exclusive reservation.
+   * Two complete matching reads detect changes; no atomic device-snapshot or
+   * persisted Windows-host-state claim is made. No setter or backup-store write. */
+  async captureNativeSaveSnapshotInternal(
+    expected: Pick<Identity, 'serial' | 'product' | 'core' | 'firmware'>,
+  ): Promise<NativeSaveSnapshot> {
+    const target = {
+      serial: expected?.serial,
+      product: expected?.product,
+      core: expected?.core,
+      firmware: expected?.firmware,
+    };
+    if (
+      typeof target.serial !== 'string' ||
+      !target.serial.length ||
+      target.serial.length > 200 ||
+      /[^\x20-\x7e]/.test(target.serial) ||
+      target.product !== 22 ||
+      target.core !== '5.1' ||
+      typeof target.firmware !== 'string' ||
+      !/^\d+\.\d+$/.test(target.firmware)
+    )
+      throw new Error('Native Save requires an explicit captured FA503 identity');
+    const read = async (address: number, length: number, selector: 0 | 1) => {
+      const result = new Uint8Array(length);
+      for (let offset = 0; offset < length; offset += 32) {
+        const count = Math.min(32, length - offset),
+          reply = await this.transport.exchange(
+            packet(0x65, count, ...addr(address + offset), selector),
+          );
+        if (reply.length !== 64 || reply[0] !== 0x65 || reply[1] !== count)
+          throw new Error('Incomplete or unexpected native Save metadata read');
+        result.set(reply.slice(2, 2 + count), offset);
+      }
+      return result;
+    };
+    const readData = async (status: Uint8Array) => {
+      const filenames: NativeSaveSnapshot['filenames'] = [],
+        eqPages: NativeSaveSnapshot['eqPages'] = [];
+      for (const address of nativeSaveFilenameAddresses(status))
+        filenames.push({ address, bytes: await read(address, 32, 0) });
+      for (const preset of [1, 2, 3] as const) {
+        const address = 0x24000 + preset * 4096;
+        eqPages.push({ preset, address, bytes: await read(address, 256, 1) });
+      }
+      return { filenames, eqPages };
+    };
+    const readPass = async (previous?: NativeSaveSnapshot): Promise<NativeSaveSnapshot> => {
+      // Finish the second data read before the final identity/settings fence.
+      // Placement is rechecked below, so a changed selection cannot substitute
+      // a different filename set or be mistaken for an uninitialised resource.
+      const repeated = previous ? await readData(previous.status) : undefined;
+      const configuration = (await this.transport.exchange(packet(6, 1))).slice(),
+        deviceConfiguration = (await this.transport.exchange(packet(0x66, 0))).slice();
+      decodeHardwareOverview(configuration, deviceConfiguration);
+      if (configuration[5] !== 3 || configuration[12] !== 3 || deviceConfiguration[11] !== 9)
+        throw new Error('Native Save requires a commercial three-channel / three-preset FA503');
+      const status = (await this.statusInternal()).raw.slice(),
+        dspName = (await this.transport.exchange(packet(3, 8))).slice(),
+        serial = await read(0x100, 32, 0),
+        view = new DataView(
+          configuration.buffer,
+          configuration.byteOffset,
+          configuration.byteLength,
+        ),
+        actualSerial = new TextDecoder('latin1').decode(serial).replace(/\0.*$/s, '').trim(),
+        identity = {
+          serial: actualSerial,
+          product: configuration[1],
+          core: `${configuration[2]}.${configuration[3]}`,
+          firmware: `${view.getUint16(15, true)}.${view.getUint16(17, true)}`,
+        };
+      if (
+        identity.serial !== target.serial ||
+        identity.product !== target.product ||
+        identity.core !== target.core ||
+        identity.firmware !== target.firmware
+      )
+        throw new Error('Native Save amplifier identity or firmware changed');
+      const productStrings = {
+          hypexName: await read(0x120, 32, 0),
+          oemName: await read(0x140, 32, 0),
+        },
+        mixerConfiguration = (await this.transport.exchange(packet(0x67, 0))).slice();
+      if (previous && (previous.status[31] ^ status[31]) & 7)
+        throw new Error('Native Save FIR placement changed during capture');
+      const { filenames, eqPages } = repeated ?? (await readData(status));
+      const snapshot = {
+        identity,
+        status,
+        configuration,
+        deviceConfiguration,
+        dspName,
+        serial,
+        productStrings,
+        mixerConfiguration,
+        filenames,
+        eqPages,
+      };
+      // Shared pure mapper checks every required packet, selected name and EQ
+      // CRC, including the documented non-wire defaults and encoding limits.
+      captureNativeSaveTemplate(snapshot);
+      return snapshot;
+    };
+    const before = await readPass(),
+      after = await readPass(before),
+      mask = nativeSaveStatusMask(),
+      same = (a: Uint8Array, b: Uint8Array) => hex(a) === hex(b);
+    if (
+      before.status.some((value, i) => ((value ^ after.status[i]) & mask[i]) !== 0) ||
+      !same(before.configuration, after.configuration) ||
+      !same(before.deviceConfiguration.slice(2), after.deviceConfiguration.slice(2)) ||
+      !same(before.dspName.slice(2, 32), after.dspName.slice(2, 32)) ||
+      !same(before.serial, after.serial) ||
+      !same(before.productStrings.hypexName, after.productStrings.hypexName) ||
+      !same(before.productStrings.oemName, after.productStrings.oemName) ||
+      !same(before.mixerConfiguration.slice(2, 38), after.mixerConfiguration.slice(2, 38)) ||
+      before.filenames.length !== after.filenames.length ||
+      before.filenames.some(
+        (value, i) =>
+          value.address !== after.filenames[i]?.address ||
+          !same(value.bytes, after.filenames[i].bytes),
+      ) ||
+      before.eqPages.some(
+        (value, i) =>
+          value.address !== after.eqPages[i]?.address || !same(value.bytes, after.eqPages[i].bytes),
+      )
+    )
+      throw new Error('Native Save source changed during capture; no metadata was returned');
+    return before;
   }
   async writeCloneReportInternal(step: {
     id: 'mute' | 'settings' | 'configuration' | 'display' | 'activation';

@@ -17,6 +17,7 @@ import type {
   DirectoryLegacyReview,
 } from '../application/workspace-directory';
 import styles from './ProjectSaveDialog.module.css';
+import type { Slot } from '../domain/model';
 
 export type WritableProjectDirectoryPicker = (options: {
   mode: 'readwrite';
@@ -30,8 +31,19 @@ export interface ProjectSaveDialogProps {
   onError: (message: string) => void;
   onSaved: (receipt: DirectorySaveReceipt) => void;
   onClose: () => void;
-  onDownloadJson?: () => void;
-  onDownloadZip?: () => void;
+  onDownloadJson?: () => void | Promise<void>;
+  onDownloadZip?: () => void | Promise<void>;
+  exportPreparation?: {
+    phase: 'staged' | 'capturing' | 'ready' | 'error';
+    slot: Slot;
+    source: 'connected' | 'design';
+    serial?: string;
+    capturedAt?: string;
+    error?: string;
+    onRetry?: () => void;
+    onDesignOnly?: () => void;
+    onCancelRead?: () => void;
+  };
   picker?: WritableProjectDirectoryPicker;
 }
 const role = (slot: 'left' | 'right') => (slot === 'left' ? 'Left' : 'Right');
@@ -60,6 +72,7 @@ export default function ProjectSaveDialog({
   onDownloadZip,
   picker,
   initialLegacyReview,
+  exportPreparation,
 }: ProjectSaveDialogProps) {
   const state = useSyncExternalStore(writer.subscribe, writer.getSnapshot, writer.getSnapshot);
   const [captured] = useState(() => {
@@ -100,17 +113,27 @@ export default function ProjectSaveDialog({
     [legacyConfirmed, setLegacyConfirmed] = useState(false),
     [legacyNotice, setLegacyNotice] = useState(''),
     [reviewingHistory, setReviewingHistory] = useState(!!initialLegacyReview);
+  const [cancelingRead, setCancelingRead] = useState(false);
   const modal = useRef<HTMLDialogElement>(null),
     legacyPanel = useRef<HTMLElement>(null),
     mounted = useRef(true),
     flight = useRef(false),
     requestId = useRef(binding?.requestId ?? ''),
+    sourceChoiceLocked = useRef(!!initialLegacyReview),
     ready = state.hydrated && state.phase === 'ready',
-    busy = localBusy || state.busy,
+    sourceMatches = !exportPreparation || exportPreparation.slot === binding?.slot,
+    reading = !reviewingHistory && sourceMatches && exportPreparation?.phase === 'capturing',
+    busy = localBusy || state.busy || reading,
     frozenTarget = locked(proposal) || uncertain,
     chosenMode = mode ?? (association ? 'save' : 'save-as'),
     rootId = rootChoice || association?.rootId || state.roots[0]?.id || '',
     folderName = folderChoice ?? association?.folderName ?? captured.name;
+  useEffect(() => {
+    if (proposal) sourceChoiceLocked.current = true;
+  }, [proposal]);
+  useEffect(() => {
+    if (!reading) setCancelingRead(false);
+  }, [reading]);
   useEffect(() => {
     mounted.current = true;
     if (modal.current?.showModal) modal.current.showModal();
@@ -173,7 +196,7 @@ export default function ProjectSaveDialog({
     if (result.phase === 'complete' && result.verified) onSaved(result);
   };
   const prepare = () => {
-    if (!binding) return;
+    if (!binding || !sourceMatches || reading) return;
     // Completing Save As establishes an association, but must not silently turn
     // this captured request into a different Save operation on the next render.
     setMode(chosenMode);
@@ -278,6 +301,131 @@ export default function ProjectSaveDialog({
           </button>
         </header>
         <div className={styles.body}>
+          {exportPreparation && !reviewingHistory && (
+            <section className={styles.source} aria-label="Save source">
+              <div className={styles.sourceHeading}>
+                <h3>Save source</h3>
+                <span>
+                  {binding ? role(binding.slot) : role(exportPreparation.slot)} ·{' '}
+                  {exportPreparation.source === 'connected'
+                    ? 'Current amplifier settings'
+                    : 'Design only'}
+                </span>
+                {sourceMatches && exportPreparation.serial && (
+                  <span>{exportPreparation.serial}</span>
+                )}
+              </div>
+              {!sourceMatches ? (
+                <p role="alert" className={styles.error}>
+                  The save source belongs to another role. Close this dialog and open Save again.
+                </p>
+              ) : (
+                <>
+                  {exportPreparation.phase === 'staged' && (
+                    <p className={styles.note}>
+                      {exportPreparation.source === 'connected'
+                        ? 'Current amplifier settings and physical EQ will be read automatically when you save or download. No upload is sent.'
+                        : 'No amplifier read is needed. Any retained device metadata is a saved snapshot.'}
+                    </p>
+                  )}
+                  {reading && (
+                    <p role="status" aria-live="polite" className={styles.note}>
+                      Reading {role(exportPreparation.slot)} amplifier settings and physical EQ…
+                    </p>
+                  )}
+                  {exportPreparation.phase === 'ready' && (
+                    <p role="status" className={styles.note}>
+                      {exportPreparation.source === 'connected' ? (
+                        <>
+                          Amplifier settings and physical EQ captured
+                          {exportPreparation.capturedAt ? (
+                            <>
+                              {' '}
+                              at{' '}
+                              <time dateTime={exportPreparation.capturedAt}>
+                                {exportPreparation.capturedAt}
+                              </time>
+                            </>
+                          ) : (
+                            ''
+                          )}
+                          .
+                        </>
+                      ) : (
+                        'Design-only export prepared. No amplifier data was read.'
+                      )}
+                    </p>
+                  )}
+                  {exportPreparation.phase === 'error' && (
+                    <p role="alert" className={styles.error}>
+                      {exportPreparation.error ??
+                        'Current amplifier data could not be captured. No fresh export was prepared.'}
+                    </p>
+                  )}
+                  <p className={styles.note}>
+                    Staged filters and design EQ are retained separately from amplifier metadata.
+                  </p>
+                  <div className={styles.actions}>
+                    {reading && exportPreparation.onCancelRead && (
+                      <button
+                        type="button"
+                        disabled={state.busy || frozenTarget || cancelingRead}
+                        onClick={() => {
+                          if (state.busy || frozenTarget || cancelingRead) return;
+                          setCancelingRead(true);
+                          try {
+                            exportPreparation.onCancelRead?.();
+                          } catch (error) {
+                            setCancelingRead(false);
+                            setFailure(message(error));
+                            onError(message(error));
+                          }
+                        }}
+                      >
+                        {cancelingRead ? 'Canceling read…' : 'Cancel read'}
+                      </button>
+                    )}
+                    {exportPreparation.source === 'connected' &&
+                      exportPreparation.phase === 'error' &&
+                      exportPreparation.onRetry &&
+                      !proposal &&
+                      !uncertain &&
+                      !sourceChoiceLocked.current && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            void perform(async () => {
+                              exportPreparation.onRetry?.();
+                            })
+                          }
+                        >
+                          Retry device read
+                        </button>
+                      )}
+                    {exportPreparation.source === 'connected' &&
+                      exportPreparation.onDesignOnly &&
+                      !reading &&
+                      !proposal &&
+                      !uncertain &&
+                      !sourceChoiceLocked.current && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            void perform(async () => {
+                              exportPreparation.onDesignOnly?.();
+                            })
+                          }
+                        >
+                          Save design only
+                        </button>
+                      )}
+                  </div>
+                </>
+              )}
+            </section>
+          )}
           {(captured.error || failure || state.error) && (
             <p className={styles.error} role="alert">
               {captured.error || failure || state.error}
@@ -294,7 +442,7 @@ export default function ProjectSaveDialog({
           )}
           {!reviewingHistory && (
             <fieldset
-              disabled={busy || !ready || !binding || frozenTarget}
+              disabled={busy || !ready || !binding || !sourceMatches || frozenTarget}
               className={styles.target}
             >
               <legend>Folder destination</legend>
@@ -837,12 +985,28 @@ export default function ProjectSaveDialog({
         </div>
         <footer className={styles.footer}>
           {captured.json && !reviewingHistory && (
-            <button type="button" disabled={busy} onClick={captured.json}>
+            <button
+              type="button"
+              disabled={busy || !sourceMatches}
+              onClick={() =>
+                void perform(async () => {
+                  await captured.json?.();
+                })
+              }
+            >
               Download JSON
             </button>
           )}
           {captured.zip && !reviewingHistory && (
-            <button type="button" disabled={busy} onClick={captured.zip}>
+            <button
+              type="button"
+              disabled={busy || !sourceMatches}
+              onClick={() =>
+                void perform(async () => {
+                  await captured.zip?.();
+                })
+              }
+            >
               Download HFD ZIP
             </button>
           )}

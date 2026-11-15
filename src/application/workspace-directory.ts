@@ -181,6 +181,8 @@ function recordViews(state: DirectoryWriterEnvelope, writer: ProjectDirectoryWri
       id: s.id,
       slot: s.slot,
       expectedRevision: s.expectedRevision,
+      ...(s.exportId !== undefined ? { exportId: s.exportId } : {}),
+      ...(s.metadata !== undefined ? { metadata: s.metadata } : {}),
       mode: s.mode,
       rootId: s.rootId,
       folderName: s.folderName,
@@ -213,6 +215,8 @@ function recordViews(state: DirectoryWriterEnvelope, writer: ProjectDirectoryWri
       projectKey: r.projectKey,
       slot: p.slot,
       expectedRevision: p.expectedRevision,
+      ...(p.exportId !== undefined ? { exportId: p.exportId } : {}),
+      ...(p.metadata !== undefined ? { metadata: p.metadata } : {}),
       mode: p.mode,
       rootId: p.rootId,
       folderName: p.folderName,
@@ -451,6 +455,8 @@ export function createWorkspaceDirectoryWriter(
         if (
           prior.slot !== input.slot ||
           prior.expectedRevision !== input.expectedRevision ||
+          prior.exportId !== input.exportId ||
+          prior.metadata !== input.metadata ||
           prior.mode !== input.mode ||
           (input.mode === 'save-as' &&
             (prior.rootId !== input.rootId ||

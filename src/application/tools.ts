@@ -128,6 +128,7 @@ import {
   prepareFileImport,
   prepareFileExport,
 } from './file-workflows';
+import type { NativeProjectSaveController } from './native-project-save';
 import {
   type PanelSession,
   type Identity,
@@ -200,6 +201,7 @@ export interface ToolAdapter {
   deviceClone?: DeviceCloneController;
   nativeLimiter?: NativeLimiterController;
   amplifierModes?: AmplifierModesController;
+  nativeProjectSave?: NativeProjectSaveController;
   descriptorVerifier?: UsbDescriptorVerifier;
   sources?: ProjectSources;
   directoryWriter?: ProjectDirectoryWriter & Partial<DirectoryLegacyAccess>;
@@ -702,6 +704,8 @@ const directoryCommand = z.discriminatedUnion('action', [
       mode: z.enum(['save', 'save-as']),
       rootId: z.string().min(1).max(256).optional(),
       folderName: z.string().min(1).max(255).optional(),
+      exportId: z.string().min(1).max(256).optional(),
+      metadata: z.enum(['auto', 'design']).optional(),
     })
     .strict()
     .superRefine((p, context) => {
@@ -849,6 +853,18 @@ const schemas = {
     })
     .strict(),
   fusion_project_files: z.object({ slot }).strict(),
+  fusion_project_save: z.discriminatedUnion('action', [
+    z.object({ action: z.literal('status') }).strict(),
+    z
+      .object({
+        action: z.literal('stage'),
+        target,
+        expectedRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+        mode: z.enum(['auto', 'design']).default('auto'),
+      })
+      .strict(),
+    z.object({ action: z.enum(['resolve', 'release']), id: z.string().min(1).max(256) }).strict(),
+  ]),
   fusion_library_list: z.object({ includeRemoved: z.boolean().default(false) }).strict(),
   fusion_library_save: z.object({ slot }).strict(),
   fusion_library_open: z.object({ target, id: z.string() }).strict(),
@@ -1534,6 +1550,8 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     'Import an HFD Config.xml and its associated impulse DAT files from a list of relative paths and text contents.',
   fusion_project_files:
     'Return Config.xml, impulse DAT files and the lossless browser project for saving as an HFD project folder.',
+  fusion_project_save:
+    'Prepare the same frozen project Save artifact used by the human Save dialog. stage binds explicit Left, Right or Both roles, design revision, device sessions and identities without I/O. mode:auto includes fresh settings and three physical EQ banks for initially connected roles; mode:design is an explicit design-only choice. resolve performs matched double reads and publishes all selected roles together, with no amplifier setters or workspace edits. Failed or replaced targets never silently fall back to old metadata. status is cached; release cancels late publication. Successful resolve reuses immutable captured bytes without another device read. Pass exportId to folder Prepare, or export through fusion_file_export workflow native-project-save with this id, explicit slot and format json/hfd-xml/folder/zip. Keep the page open; artifacts are bounded and page-local, while prepared folder journals retain their own exact recovery bytes.',
   fusion_library_list: 'List locally saved project snapshots and optional removed snapshots.',
   fusion_library_save:
     'Save a complete project snapshot, including measurements, in the local browser library.',
@@ -1657,6 +1675,12 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
 };
 TOOL_DESCRIPTIONS.fusion_configuration_backup =
   'Save exact device configuration and status for recovery before limiter edits.';
+TOOL_DESCRIPTIONS.fusion_project_directory = TOOL_DESCRIPTIONS.fusion_project_directory.replace(
+  'never prompts for filesystem permissions or calls the amplifier.',
+  'never prompts for filesystem permissions. New Prepare requests default to read-only capture of fresh native settings and three EQ banks for an initially connected target. metadata:design explicitly saves the design without reading hardware; exportId reuses an owned frozen Save artifact. Captures bind the initial session/identity and fail on replacement or stale design. Prepared-request replay, Commit, Retry and Recover use retained files and never recapture the amplifier.',
+);
+TOOL_DESCRIPTIONS.fusion_file_export +=
+  ' The explicit native-project-save workflow resolves an owned Save artifact by id and slot; it may perform its first read-only settings/EQ capture. All ordinary project export workflows remain document snapshots without hardware calls.';
 TOOL_DESCRIPTIONS.fusion_configuration_backups =
   'List locally saved device configuration recovery images.';
 TOOL_DESCRIPTIONS.fusion_configuration_restore =
@@ -1952,6 +1976,37 @@ export function createToolExecutor(adapter: ToolAdapter) {
           const p = schemas.fusion_project_files.parse(a);
           return { ok: true, files: projectFiles(state.documents[p.slot]) };
         }
+        case 'fusion_project_save': {
+          const p = schemas.fusion_project_save.parse(a),
+            saves = adapter.nativeProjectSave;
+          if (!context)
+            throw new Error('Project Save capture requires trusted workspace admission');
+          if (!saves) throw new Error('Project Save capture is unavailable in this client');
+          if (p.action === 'status') return { ok: true, saves: saves.status(context) };
+          if (p.action === 'stage') {
+            const { action: _action, ...input } = p;
+            return { ok: true, capture: saves.stage(input, context) };
+          }
+          if (p.action === 'release') {
+            saves.release(p.id, context);
+            return { ok: true, saves: saves.status(context) };
+          }
+          const artifact = await saves.resolve(p.id, context);
+          return {
+            ok: true,
+            id: artifact.id,
+            expectedRevision: artifact.expectedRevision,
+            roles: artifact.roles.map((role) => ({
+              slot: role.slot,
+              source: role.source,
+              identity: role.identity,
+              capturedAt: role.capturedAt,
+              fileCount: role.files.length,
+              paths: role.files.slice(0, 20).map((file) => file.path),
+              omittedFiles: Math.max(0, role.files.length - 20),
+            })),
+          };
+        }
         case 'fusion_library_list': {
           const p = schemas.fusion_library_list.parse(a);
           return {
@@ -2197,6 +2252,8 @@ export function createToolExecutor(adapter: ToolAdapter) {
               expectedRevision: p.expectedRevision,
               requestId: p.requestId,
               principal,
+              ...(p.exportId ? { exportId: p.exportId } : {}),
+              ...(p.metadata ? { metadata: p.metadata } : {}),
             };
             return {
               ok: true,
@@ -2431,7 +2488,24 @@ export function createToolExecutor(adapter: ToolAdapter) {
             { files, actor } = fileAccess();
           const blobs = await prepareFileExport(
             p.operation,
-            { documents: state.documents },
+            {
+              documents: state.documents,
+              ...(adapter.nativeProjectSave
+                ? {
+                    nativeSave: async (id: string, slot: Slot) => {
+                      const staged = adapter
+                        .nativeProjectSave!.status(actor)
+                        .captures.find((entry) => entry.id === id);
+                      if (!staged?.roles.some((entry) => entry.slot === slot))
+                        throw new Error('That role is not part of this Save artifact');
+                      const artifact = await adapter.nativeProjectSave!.resolve(id, actor),
+                        role = artifact.roles.find((entry) => entry.slot === slot);
+                      if (!role) throw new Error('That role is not part of this Save artifact');
+                      return { project: role.project, files: role.files };
+                    },
+                  }
+                : {}),
+            },
             p.operation.workflow === 'workspace-recovery'
               ? (adapter.persistence?.recovery() ?? null)
               : null,

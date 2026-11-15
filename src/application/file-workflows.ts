@@ -8,7 +8,12 @@ import {
   exportHfd,
   projectSchema,
 } from '../domain/files';
-import { importProjectFolder, projectFiles } from '../domain/project-io';
+import {
+  importProjectFolder,
+  projectFiles,
+  zipFiles,
+  type ProjectFile,
+} from '../domain/project-io';
 import { exportNativeCloneProject, nativeCloneProjectFiles } from '../domain/clone-project';
 import { parseImpulse, decodeWav, spectrum } from '../domain/measurement';
 import {
@@ -74,6 +79,11 @@ export const ExportWorkflowSchema = z.discriminatedUnion('workflow', [
   variant('project-folder', { slot }),
   variant('project-clone-hfd-xml', { slot }),
   variant('project-clone-folder', { slot }),
+  variant('native-project-save', {
+    id: z.string().min(1).max(256),
+    slot,
+    format: z.enum(['json', 'hfd-xml', 'folder', 'zip']),
+  }),
   variant('measurement-frequency', selection),
   variant('measurement-impulse', selection),
   variant('fir', { slot, preset, channel: z.number().int().min(0).max(3) }),
@@ -98,6 +108,11 @@ export interface PreparedFileImport {
 }
 export interface FileExportSnapshot {
   documents: Record<Slot, Project>;
+  /** Explicit saved-artifact access. Ordinary exports never acquire a device. */
+  nativeSave?: (
+    id: string,
+    slot: Slot,
+  ) => Promise<{ project: Project; files: readonly ProjectFile[] }>;
 }
 
 const roles = (value: 'left' | 'right' | 'both'): Slot[] =>
@@ -393,7 +408,8 @@ function linesBlob(count: number, line: (index: number) => string): Blob {
   return new Blob(parts, { type: 'text/plain' });
 }
 
-/** Capture exports in browser-owned Blobs. Backup reads never access an amplifier. */
+/** Capture exports in browser-owned Blobs. Only the explicit native-project-save
+ * workflow can resolve a staged read-only device capture through its trusted port. */
 export async function prepareFileExport(
   input: unknown,
   snapshot: FileExportSnapshot,
@@ -401,7 +417,46 @@ export async function prepareFileExport(
 ): Promise<TransferBlobFile[]> {
   const request = ExportWorkflowSchema.parse(input);
   let files: TransferBlobFile[];
-  if (request.workflow === 'workspace-recovery') {
+  if (request.workflow === 'native-project-save') {
+    if (!snapshot.nativeSave) throw new Error('Native project Save capture is unavailable');
+    const p = request.parameters,
+      artifact = await snapshot.nativeSave(p.id, p.slot),
+      project = artifact.project;
+    projectSchema.parse(project);
+    // Validate all paths and budgets before making any archive. Use the exact
+    // captured native files, including their correctly rebound browser sidecar.
+    const captured = checkedFiles(
+      artifact.files.map((file) => ({
+        path: file.path,
+        blob: new Blob([file.content], {
+          type: /\.xml$/i.test(file.path)
+            ? 'application/xml'
+            : /\.json$/i.test(file.path)
+              ? 'application/json'
+              : 'text/plain',
+        }),
+      })),
+    );
+    if (p.format === 'json')
+      files = [
+        { path: `${filenamePart(project.name, 'project')}.fusion.json`, blob: jsonBlob(project) },
+      ];
+    else if (p.format === 'folder') files = captured;
+    else if (p.format === 'zip')
+      files = [
+        {
+          path: `${filenamePart(project.name, 'project')}.zip`,
+          blob: new Blob([new Uint8Array(zipFiles([...artifact.files])).buffer], {
+            type: 'application/zip',
+          }),
+        },
+      ];
+    else {
+      const config = captured.find((file) => file.path === 'Config.xml');
+      if (!config) throw new Error('The captured native project has no Config.xml');
+      files = [{ path: `${filenamePart(project.name, 'project')}-edited.xml`, blob: config.blob }];
+    }
+  } else if (request.workflow === 'workspace-recovery') {
     if (recovery === null) throw new Error('Workspace recovery export is unavailable');
     files = [
       {

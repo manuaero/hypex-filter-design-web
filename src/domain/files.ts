@@ -1,4 +1,5 @@
 import { HFD_TEMPLATE } from './hfd-template';
+import { downloadBrowserBlob } from './browser-download';
 import { spectrum, validateMeasurement, MAX_MEASUREMENT_SPECTRUM_POINTS } from './measurement';
 import { designHfd } from './hfd-math';
 import { parseImpulse } from './measurement';
@@ -1005,10 +1006,5 @@ export function parseMeasurement(text: string, name: string): Measurement {
   };
 }
 export function download(name: string, content: string, type = 'application/json') {
-  const url = URL.createObjectURL(new Blob([content], { type })),
-    a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadBrowserBlob(name, new Blob([content], { type }));
 }

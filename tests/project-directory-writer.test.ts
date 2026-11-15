@@ -7,6 +7,7 @@ import {
   type DirectoryWriterEnvelope,
   type WritableProjectDirectoryHandle,
   type WritableProjectFileHandle,
+  type ProjectDirectoryWriterOptions,
 } from '../src/application/project-directory-writer';
 import {
   assertDirectoryWriterWrite,
@@ -21,6 +22,9 @@ import { spectrum, processMeasurement } from '../src/domain/measurement';
 import { loadProjectMicrophone } from '../src/domain/hfd-microphone';
 import { clearNativeFir, selectNativeFirPlacement } from '../src/domain/fir-editing';
 import { projectSchema } from '../src/domain/files';
+import { nativeCloneFixture } from './fixtures/native-clone';
+import { nativeCloneProjectFiles } from '../src/domain/clone-project';
+import { createNativeProjectSaveController } from '../src/application/native-project-save';
 
 beforeAll(() => {
   globalThis.Blob = NodeBlob as unknown as typeof Blob;
@@ -263,10 +267,11 @@ function setup() {
   let revision = 7,
     sequence = 0;
   const locks = new Set<string>();
-  const create = () =>
+  const create = (captureExport?: ProjectDirectoryWriterOptions['captureExport']) =>
     createProjectDirectoryWriter({
       getProject: (slot) => documents[slot],
       getRevision: () => revision,
+      captureExport,
       backend: store.api,
       hash: hashDirectoryBlob,
       now: () => 10000,
@@ -310,6 +315,203 @@ async function initialize(f: ReturnType<typeof setup>) {
 async function expectedFiles(project: Project) {
   return new Map(projectFiles(project).map((f) => [f.path, bytes(f.content)]));
 }
+
+it('captures native Save exports only for new granted requests and preserves exact receipt replay plus immutable metadata binding', async () => {
+  const f = setup(),
+    before = structuredClone(f.documents),
+    captured = structuredClone(f.documents.left);
+  captured.hfdCloneTemplate = nativeCloneFixture();
+  captured.hfdCloneTemplate.eqBanks[0][0].frequency = 1234;
+  let unavailable = false,
+    resolves = 0,
+    disposals = 0;
+  const create = vi.fn<NonNullable<ProjectDirectoryWriterOptions['captureExport']>>(
+    (_binding, _project) => {
+      if (unavailable) throw new Error('Capture ticket no longer exists');
+      return {
+        resolve: async () => {
+          resolves++;
+          return { project: captured, files: nativeCloneProjectFiles(captured) };
+        },
+        assertCurrent: () => {},
+        dispose: () => {
+          disposals++;
+        },
+      };
+    },
+  );
+  const writer = f.create(create);
+  await writer.hydrate();
+  const rootId = await writer.registerDirectory(f.root),
+    input = {
+      ...f.binding('native-request'),
+      mode: 'save-as' as const,
+      rootId,
+      folderName: 'Native saved',
+      exportId: 'export-ticket',
+      metadata: 'auto' as const,
+    };
+  const proposal = await writer.prepare(input);
+  expect(proposal).toMatchObject({ exportId: 'export-ticket', metadata: 'auto' });
+  expect(resolves).toBe(1);
+  expect(disposals).toBe(1);
+  expect(f.env.events).toEqual([]);
+  expect(f.store.value!.saves[0]).toMatchObject({ exportId: 'export-ticket', metadata: 'auto' });
+  await writer.commit(proposal.id, actor);
+  const folder = f.root.children.get('Native saved') as FakeDirectory;
+  const reopened = importProjectFolder(
+    [...folder.children.values()]
+      .filter((file): file is FakeFile => file.kind === 'file')
+      .map((file) => ({ path: file.name, content: new TextDecoder().decode(file.data) })),
+  );
+  expect(reopened.hfdCloneTemplate!.eqBanks[0][0].frequency).toBe(1234);
+  expect(reopened.presets[0].inputEq).toEqual(before.left.presets[0].inputEq);
+  expect(f.documents).toEqual(before);
+  unavailable = true;
+  const reads = f.env.reads,
+    events = f.env.events.length;
+  expect((await writer.prepare(input)).phase).toBe('complete');
+  expect(resolves).toBe(1);
+  expect(f.env.reads).toBe(reads);
+  expect(f.env.events).toHaveLength(events);
+  await expect(writer.prepare({ ...input, exportId: 'different-ticket' })).rejects.toMatchObject({
+    code: 'invalid-request',
+  });
+  await expect(writer.prepare({ ...input, metadata: 'design' })).rejects.toMatchObject({
+    code: 'invalid-request',
+  });
+  const review = await writer.reviewArchive(proposal.id, actor);
+  await writer.archive(review.id, actor, { confirm: true, removeLocalRecovery: true });
+  expect((await writer.prepare(input)).archived).toBe(true);
+  expect(resolves).toBe(1);
+});
+
+it('a missing directory grant prevents capture resolve and always disposes the implicit ticket', async () => {
+  const f = setup(),
+    resolve = vi.fn(async () => ({
+      project: f.documents.left,
+      files: projectFiles(f.documents.left),
+    })),
+    dispose = vi.fn(),
+    writer = f.create(() => ({ resolve, assertCurrent: () => {}, dispose }));
+  await writer.hydrate();
+  const rootId = await writer.registerDirectory(f.root);
+  f.env.permission = 'denied';
+  await expect(
+    writer.prepare({ ...f.binding('grant-first'), mode: 'save-as', rootId, folderName: 'Denied' }),
+  ).rejects.toMatchObject({ code: 'needs-human-grant' });
+  expect(resolve).not.toHaveBeenCalled();
+  expect(dispose).toHaveBeenCalledOnce();
+  expect(f.env.events).toEqual([]);
+});
+
+it('keeps the initial offline prepare snapshot when edits happen during asynchronous grant checks and marks newer edits unsaved', async () => {
+  const f = setup(),
+    original = structuredClone(f.documents.left),
+    principal = {
+      owner: 'workspace:11111111-1111-4111-8111-111111111111',
+      scope: 'ui:offline-save',
+    },
+    controller = createNativeProjectSaveController({
+      state: () => ({ documents: f.documents, documentRevision: f.revision }),
+      binding: () => undefined,
+    }),
+    writer = f.create((binding, project) => controller.ticket(binding, project));
+  await writer.hydrate();
+  const rootId = await writer.registerDirectory(f.root);
+  vi.spyOn(f.root, 'queryPermission').mockImplementationOnce(async () => {
+    f.bump();
+    f.documents.left = source('Later offline design');
+    return 'granted';
+  });
+  const proposal = await writer.prepare({
+    ...f.binding('frozen-offline'),
+    principal,
+    mode: 'save-as',
+    rootId,
+    folderName: 'Frozen offline',
+  });
+  expect(proposal.workspaceChanged).toBe(true);
+  const saved = f.store.value!.saves[0],
+    sidecar = JSON.parse(
+      await saved.files.find((file) => file.path === 'FusionProject.json')!.after.text(),
+    );
+  expect(sidecar.project).toEqual(original);
+  expect(controller.getSnapshot().captures).toHaveLength(0);
+  await expect(writer.commit(proposal.id, principal)).rejects.toMatchObject({
+    code: 'stale-workspace',
+  });
+  expect(f.env.events).toEqual([]);
+});
+
+it('rejects capture changes to staged data and stale capture before journal publication or filesystem mutation', async () => {
+  for (const kind of ['staged-data', 'stale'] as const) {
+    const f = setup(),
+      dispose = vi.fn(),
+      writer = f.create(() => ({
+        resolve: async () => {
+          const project = structuredClone(f.documents.left);
+          if (kind === 'staged-data') project.presets[0].inputEq[0].gain = 9;
+          else f.bump();
+          return { project, files: projectFiles(project) };
+        },
+        assertCurrent: () => {
+          if (kind === 'stale') throw new Error('Capture became stale');
+        },
+        dispose,
+      }));
+    await writer.hydrate();
+    const rootId = await writer.registerDirectory(f.root);
+    await expect(
+      writer.prepare({ ...f.binding(kind), mode: 'save-as', rootId, folderName: 'Rejected' }),
+    ).rejects.toThrow();
+    expect(f.store.value!.saves).toEqual([]);
+    expect(f.env.events).toEqual([]);
+    expect(dispose).toHaveBeenCalledOnce();
+  }
+});
+
+it('disposes every implicit ticket after preparation or failure so ordinary repeated saves do not retain captures', async () => {
+  const f = setup();
+  let active = 0,
+    fail = false;
+  const writer = f.create((_binding, project) => {
+    active++;
+    return {
+      resolve: async () => {
+        if (fail) throw new Error('Capture failed');
+        return { project, files: projectFiles(project) };
+      },
+      assertCurrent: () => {},
+      dispose: () => {
+        active--;
+      },
+    };
+  });
+  await writer.hydrate();
+  const rootId = await writer.registerDirectory(f.root);
+  for (let index = 0; index < 12; index++) {
+    await writer.prepare({
+      ...f.binding(`implicit-${index}`),
+      mode: 'save-as',
+      rootId,
+      folderName: `Saved-${index}`,
+      metadata: 'design',
+    });
+    expect(active).toBe(0);
+  }
+  fail = true;
+  await expect(
+    writer.prepare({
+      ...f.binding('failed-implicit'),
+      mode: 'save-as',
+      rootId,
+      folderName: 'Failed',
+    }),
+  ).rejects.toThrow(/Capture failed/);
+  expect(active).toBe(0);
+  expect(f.env.events).toEqual([]);
+});
 function fileIn(folder: FakeDirectory, name: string) {
   return [...folder.children.values()].find(
     (f) => f.kind === 'file' && directoryNameKey(f.name) === directoryNameKey(name),
