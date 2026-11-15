@@ -4,8 +4,16 @@ import { readFileSync } from 'node:fs';
 import { HFD_TEMPLATE } from '../src/domain/hfd-template';
 import { importHfd, exportHfd, resolveGainCache } from '../src/domain/files';
 import { newProject, newFilter } from '../src/domain/model';
-import { effectiveSections, encodeChannel, design } from '../src/domain/dsp';
+import {
+  effectiveSections,
+  encodeChannel,
+  design,
+  channelResponse,
+  response,
+} from '../src/domain/dsp';
+import { filterMarkerAnchor, selectedSectionResponse } from '../src/domain/plot-layers';
 import manualNative from './fixtures/hfd-gui-manual-filter-coefficients.json';
+import nativeLifecycle from './fixtures/hfd-gui-v37-filter-lifecycle.json';
 const document = (xml: string) => new DOMParser().parseFromString(xml, 'application/xml');
 const serialize = (doc: Document) => new XMLSerializer().serializeToString(doc);
 
@@ -34,17 +42,21 @@ it.each(manualNative.cases)(
         f1: Number(fixture.coefficients.a1),
         f2: Number(fixture.coefficients.a2),
       };
-    // For AsymShelf F1/Q1 are zeros, F2/Q2 are poles. Shelf2 retains
-    // the latent second pair but must use its own kind and signed gain.
+    // For AsymShelf F1/Q1 are zeros, F2/Q2 are poles. Other native types
+    // can retain a latent secondary pair and an inactive Unknown shelf mode.
     expect(filter).toMatchObject({
       kind: fixture.kind,
-      frequency: fixture.kind === 'asymmetric' ? 800 : 1500,
-      q: fixture.kind === 'asymmetric' ? 0.7 : 0.65,
-      frequency2: 400,
-      q2: 1.3,
+      frequency: Number(fixture.parameters.f1),
+      q: Number(fixture.parameters.q1),
+      frequency2: Number(fixture.parameters.f2),
+      q2: Number(fixture.parameters.q2),
       gain: Number(fixture.parameters.gain),
       enabled: true,
-      shelfDirection: fixture.direction,
+      ...(fixture.parameters.shelfhl === 'stLowShelf'
+        ? { shelfDirection: 'low' }
+        : fixture.parameters.shelfhl === 'stHighShelf'
+          ? { shelfDirection: 'high' }
+          : {}),
     });
     expect(channel.gain).toBe(0);
     expect(channel.additionalGain ?? 0).toBe(0);
@@ -69,8 +81,134 @@ it.each(manualNative.cases)(
         fixture.q24WireWords,
       );
     }
+    if ('nativeLiteralMarker' in fixture)
+      expect(filterMarkerAnchor(filter)).toEqual(fixture.nativeLiteralMarker);
   },
 );
+
+function importNativeLifecycle(
+  fixture: (typeof nativeLifecycle.states)[number],
+  configuration?: { gain?: string; additionalGain?: string; invert?: boolean },
+) {
+  const doc = document(HFD_TEMPLATE),
+    node = doc.querySelector('preset[index="1"] processobj[processtype="ptBiQuad"][groupid="1"]')!;
+  node.setAttribute('enabled', String(fixture.enabled));
+  for (const [key, value] of Object.entries({ ...fixture.parameters, ...fixture.coefficients }))
+    node.querySelector(`:scope > ${key}`)!.setAttribute('value', value);
+  const gainNode = doc.querySelector(
+    'preset[index="1"] processobj[processtype="ptGain"][groupid="1"]',
+  )!;
+  if (configuration?.gain !== undefined)
+    gainNode.querySelector('gain')!.setAttribute('value', configuration.gain);
+  if (configuration?.additionalGain !== undefined)
+    gainNode.querySelector('additionalgain')!.setAttribute('value', configuration.additionalGain);
+  if (configuration?.invert !== undefined)
+    gainNode.querySelector('invert')!.setAttribute('value', String(configuration.invert));
+  return importHfd(serialize(doc), 'Native filter lifecycle');
+}
+
+it('retains native enable, Delete and fresh-Add state through parsing, compilation and XML export', () => {
+  for (const fixture of nativeLifecycle.states) {
+    const project = importNativeLifecycle(fixture),
+      channel = project.presets[0].channels[0],
+      filter = channel.filters[0],
+      native = {
+        b0: Number(fixture.coefficients.b0),
+        b1: Number(fixture.coefficients.b1),
+        b2: Number(fixture.coefficients.b2),
+        f1: Number(fixture.coefficients.a1),
+        f2: Number(fixture.coefficients.a2),
+      },
+      retained = {
+        sourceId: '13',
+        kind: fixture.kind,
+        enabled: fixture.enabled,
+        frequency: Number(fixture.parameters.f1),
+        frequency2: Number(fixture.parameters.f2),
+        q: Number(fixture.parameters.q1),
+        q2: Number(fixture.parameters.q2),
+        gain: Number(fixture.parameters.gain),
+        coefficients: native,
+      };
+    // Native Delete is an enabled Unity slot retaining its latent parameters.
+    // Disabled LP2 keeps designed coefficients; active compilation bypasses it.
+    expect(filter, fixture.state).toMatchObject(retained);
+    expect(channel.coefficientCache).toBe('base');
+    const bytes = encodeChannel(channel),
+      view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    expect(Array.from({ length: 5 }, (_, i) => view.getInt32(4 + i * 4, true))).toEqual(
+      fixture.activeQ24WireWords,
+    );
+    const reopened = importHfd(exportHfd(project), 'Reopened native lifecycle');
+    expect(reopened.presets[0].channels[0].filters[0], fixture.state).toMatchObject(retained);
+  }
+});
+
+it('keeps disabled-section analysis and fresh native zero-Peak caches distinct from channel processing', () => {
+  const disabled = nativeLifecycle.states.find((fixture) => fixture.state === 'disabled LP2')!,
+    project = importNativeLifecycle(disabled),
+    channel = project.presets[0].channels[0],
+    filter = channel.filters[0],
+    before = structuredClone(project),
+    selected = selectedSectionResponse(filter, 720);
+  expect(20 * Math.log10(Math.hypot(...selected))).toBeCloseTo(disabled.marker.doubleDb, 10);
+  expect(filterMarkerAnchor(filter)).toEqual({
+    frequency: disabled.marker.frequency,
+    db: disabled.marker.db,
+  });
+  expect(channelResponse(channel, 720)).toEqual([1, 0]);
+  expect(project).toEqual(before);
+
+  const fresh = nativeLifecycle.states.find(
+      (fixture) => fixture.state === 'freshly added zero-gain Peak',
+    )!,
+    added = importNativeLifecycle(fresh).presets[0].channels[0].filters[0],
+    originalCache = design(added),
+    rebuilt = structuredClone(added);
+  delete rebuilt.coefficients;
+  delete rebuilt.provenance;
+  const regenerated = design(rebuilt);
+  // Actual native Add saved Unity directly. An explicitly regenerated zero-gain
+  // Peak has cancelling poles/zeros instead; preserve the imported cache while
+  // testing equal transfer, rather than forcing false coefficient identity.
+  expect(originalCache).toEqual({ b0: 1, b1: 0, b2: 0, f1: 0, f2: 0 });
+  expect(regenerated).not.toEqual(originalCache);
+  for (const frequency of [20, fresh.marker.frequency, 720, 2000, 20000]) {
+    const [real, imaginary] = response(regenerated, frequency);
+    expect(real).toBeCloseTo(1, 11);
+    expect(imaginary).toBeCloseTo(0, 11);
+  }
+  expect(added.coefficients).toEqual(originalCache);
+});
+
+it('keeps genuine non-unit, inverted and near-unit native cache ambiguity guarded', () => {
+  const fresh = nativeLifecycle.states.find(
+    (fixture) => fixture.state === 'freshly added zero-gain Peak',
+  )!;
+  for (const configuration of [
+    { gain: '-6' },
+    { invert: true },
+    { gain: '0.00000000001' },
+    { additionalGain: '-0.00000000001' },
+  ]) {
+    const project = importNativeLifecycle(fresh, configuration),
+      channel = project.presets[0].channels[0];
+    expect(channel.coefficientCache, JSON.stringify(configuration)).toBe('unresolved');
+    expect(channel.filters[0].coefficients).toEqual({
+      b0: 1,
+      b1: 0,
+      b2: 0,
+      f1: 0,
+      f2: 0,
+    });
+    expect(() => encodeChannel(channel)).toThrow('Resolve');
+    // XML design export is distinct from hardware compilation; the existing
+    // unresolved-upload guard must remain on encodeChannel, not a new file gate.
+    expect(
+      10 ** ((channel.gain + (channel.additionalGain ?? 0)) / 20) * (channel.invert ? -1 : 1),
+    ).not.toBe(1);
+  }
+});
 
 it('accepts HFD’s screenshot-created offline FA503 and rejects other offline models', () => {
   const p = importHfd(HFD_TEMPLATE, 'Blank');

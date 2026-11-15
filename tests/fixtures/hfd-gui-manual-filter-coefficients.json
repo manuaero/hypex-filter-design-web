@@ -1,5 +1,5 @@
 {
-  "source": "HFD 5.2.4.24; classic screenshot-operated synthetic offline FA503, saved native Config.xml",
+  "source": "HFD 5.2.4.24; classic screenshot-operated synthetic offline FA503, V36 and V37 saved native coefficient literals",
   "scope": "Saved decimal coefficient literals. Expected Q24 words are nearest-even encodings of those literals, not physical amplifier readback.",
   "cases": [
     {
@@ -97,6 +97,114 @@
         "zconst": "0.51476630393965"
       },
       "q24WireWords": [7186197, -15710054, 8636345, -14730042, 31394769]
+    },
+    {
+      "name": "boost/cut +7.5 dB",
+      "kind": "peak",
+      "parameters": {
+        "filtertype": "ftBoostCut",
+        "f1": "2300",
+        "f2": "988.101806640625",
+        "q1": "1.15",
+        "q2": "0.7",
+        "gain": "7.5",
+        "shelfhl": "stUnknown"
+      },
+      "coefficients": {
+        "b0": "1.09247603795187",
+        "b1": "-1.86528064992647",
+        "b2": "0.794998327675381",
+        "a1": "1.85236017184606",
+        "a2": "-0.874553956539528",
+        "sconst": "1",
+        "zconst": "1.09247603795187"
+      },
+      "q24WireWords": [13337859, -31294216, 18328706, -14672581, 31077447],
+      "nativeLiteralMarker": {
+        "frequency": 2300.0,
+        "db": 7.500008583068848
+      }
+    },
+    {
+      "name": "boost/cut -7.5 dB",
+      "kind": "peak",
+      "parameters": {
+        "filtertype": "ftBoostCut",
+        "f1": "2300",
+        "f2": "988.101806640625",
+        "q1": "1.15",
+        "q2": "0.7",
+        "gain": "-7.5",
+        "shelfhl": "stUnknown"
+      },
+      "coefficients": {
+        "b0": "0.915351884399004",
+        "b1": "-1.69556137388496",
+        "b2": "0.800524612127062",
+        "a1": "1.7073881578432",
+        "a2": "-0.727703217331717",
+        "sconst": "1",
+        "zconst": "0.915351884399004"
+      },
+      "q24WireWords": [13430574, -28446799, 15357056, -12208834, 28645220],
+      "nativeLiteralMarker": {
+        "frequency": 2300.0,
+        "db": -7.500008583068848
+      }
+    },
+    {
+      "name": "boost/cut zero gain after edit",
+      "kind": "peak",
+      "parameters": {
+        "filtertype": "ftBoostCut",
+        "f1": "2300",
+        "f2": "988.101806640625",
+        "q1": "1.15",
+        "q2": "0.7",
+        "gain": "0",
+        "shelfhl": "stUnknown"
+      },
+      "coefficients": {
+        "b0": "1",
+        "b1": "-1.85236017184606",
+        "b2": "0.874553956539528",
+        "a1": "1.85236017184606",
+        "a2": "-0.874553956539528",
+        "sconst": "1",
+        "zconst": "1"
+      },
+      "q24WireWords": [14672581, -31077447, 16777216, -14672581, 31077447],
+      "nativeLiteralMarker": {
+        "frequency": 2300.0,
+        "db": 0.0
+      }
+    },
+    {
+      "name": "low-pass 2 real-pole Q 0.4",
+      "kind": "lowpass2",
+      "parameters": {
+        "filtertype": "ftLowPass2",
+        "f1": "720",
+        "f2": "988.101806640625",
+        "q1": "0.4",
+        "q2": "0.7",
+        "gain": "0",
+        "shelfhl": "stUnknown"
+      },
+      "coefficients": {
+        "b0": "0.00218985334083258",
+        "b1": "0",
+        "b2": "0",
+        "a1": "1.88416237410376",
+        "a2": "-0.886355508349538",
+        "sconst": "20465611.6860989",
+        "zconst": "0.00218985334083258"
+      },
+      "q24WireWords": [0, 0, 36740, -14870578, 31610999],
+      "nativeLiteralMarker": {
+        "frequency": 720.0,
+        "db": -7.970118999481201
+      }
     }
   ]
 }

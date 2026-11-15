@@ -10,7 +10,13 @@ import { createNoiseController } from '../application/noise-control';
 import { type EqBank } from '../domain/equalizer';
 import { EqBankUploadError } from '../hardware/eq-bank';
 import SignalChain from './SignalChain';
-import { exchangeBiquads, copyChannelProcessing, clearPreset } from '../domain/editing';
+import {
+  exchangeBiquads,
+  copyChannelProcessing,
+  clearPreset,
+  deleteBiquad,
+  isUnusedBiquad,
+} from '../domain/editing';
 import InteractivePlot, { type PlotRange } from './InteractivePlot';
 import { createPlotViewController } from '../application/plot-view';
 import {
@@ -1692,7 +1698,7 @@ export default function Studio() {
       list = eq ? preset.inputEq : channel.filters,
       index =
         mode === 'add'
-          ? list.findIndex((f) => f.kind === 'unity' && !f.enabled)
+          ? list.findIndex((f) => isUnusedBiquad(f) && (!eq || !f.enabled))
           : (requestedIndex ?? (eq ? eqIndex : w.filter));
     if (index < 0 || index >= list.length) {
       setError('All sections are in use. Change an existing filter shape or remove a section.');
@@ -1743,7 +1749,7 @@ export default function Studio() {
         if (!palette.eq && c.linkedTo !== undefined)
           throw new Error('A target channel is linked to a master.');
         const old = list[palette.index];
-        if (palette.mode === 'add' && (old.kind !== 'unity' || old.enabled))
+        if (palette.mode === 'add' && (!isUnusedBiquad(old) || (palette.eq && old.enabled)))
           throw new Error(
             'The target section changed while previewing. Choose a free section again.',
           );
@@ -2975,7 +2981,10 @@ export default function Studio() {
                         onRemove={() =>
                           tab === 'Input EQ'
                             ? editFilter({ enabled: false, gain: 0 }, true)
-                            : editFilter({ ...newFilter(), sourceId: filter.sourceId }, true)
+                            : designAction(
+                                () => w.edit((p) => deleteBiquad(p, w.preset, w.channel, w.filter)),
+                                'Filter deleted; its settings are retained in the unused slot.',
+                              )
                         }
                         onToggle={() => editFilter({ enabled: !filter.enabled })}
                         begin={w.beginGesture}
@@ -3189,17 +3198,14 @@ export default function Studio() {
                       })
                     }
                     onRemove={(i) =>
-                      w.edit((p) => {
-                        const list =
-                            tab === 'Input EQ'
-                              ? p.presets[w.preset].inputEq
-                              : p.presets[w.preset].channels[w.channel].filters,
-                          old = list[i];
-                        list[i] =
-                          tab === 'Input EQ'
-                            ? { ...old, enabled: false }
-                            : { ...newFilter(), id: old.id, sourceId: old.sourceId };
-                      })
+                      designAction(
+                        () =>
+                          w.edit((p) => {
+                            if (tab === 'Input EQ') p.presets[w.preset].inputEq[i].enabled = false;
+                            else deleteBiquad(p, w.preset, w.channel, i);
+                          }),
+                        'Filter deleted; its settings are retained in the unused slot.',
+                      )
                     }
                   />
                 </div>

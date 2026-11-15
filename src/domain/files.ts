@@ -636,8 +636,12 @@ export function importHfd(xml: string, name: string): Project {
       // HFD serializes a cached direct form: either a base section or an
       // effective first numerator. Detect both without replacing custom data.
       const first = channel.filters[0];
-      channel.coefficientCache = cacheIsBase ? 'base' : 'effective';
-      if (!cacheIsBase && first.coefficients) {
+      // At an exact unit multiplier the two interpretations are identical,
+      // including native freshly-added zero-Peak caches that are still Unity
+      // instead of parameter-regenerated cancelling poles/zeros. Keep the
+      // original cache; near-unit and inverted caches still need detection.
+      channel.coefficientCache = cacheIsBase || multiplier === 1 ? 'base' : 'effective';
+      if (!cacheIsBase && multiplier !== 1 && first.coefficients) {
         const stored = first.coefficients;
         let base;
         try {

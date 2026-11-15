@@ -194,14 +194,25 @@ describe('native isolated selected section', () => {
 describe('native manual filter marker anchors', () => {
   // Independently evaluated from the saved native coefficient literals at f1,
   // before the native marker's final Double-to-Single store.
-  const literalCenterDb = [
-    4.582832114903331, -7.458367711656704, 3.0000003736199545, -3.0000003736203062,
-  ];
+  const literalCenterDb: Record<string, number> = {
+    'asymmetric Low normalization': 4.582832114903331,
+    'asymmetric High normalization': -7.458367711656704,
+    'second-order high shelf +6 dB': 3.0000003736199545,
+    'second-order high shelf -6 dB': -3.0000003736203062,
+    'boost/cut +7.5 dB': 7.500008716167609,
+    'boost/cut -7.5 dB': -7.500008716167583,
+    'boost/cut zero gain after edit': 0,
+    'low-pass 2 real-pole Q 0.4': -7.970118835525309,
+  };
   it.each(
-    manualNative.cases.map((fixture, index) => ({ fixture, expected: literalCenterDb[index] })),
+    manualNative.cases.map((fixture) => ({ fixture, expected: literalCenterDb[fixture.name] })),
   )(
     'places $fixture.name at its own native response instead of the gain parameter',
     ({ fixture, expected }) => {
+      expect(
+        Number.isFinite(expected),
+        `Missing independent native center oracle: ${fixture.name}`,
+      ).toBe(true);
       const f: Filter = {
         ...newFilter(fixture.kind as Filter['kind']),
         frequency: Number(fixture.parameters.f1),

@@ -42,6 +42,7 @@ const seen = vi.hoisted(() => ({
         range: Readonly<PlotRange>;
         onRectangleZoom: (zoom: RectangleZoom, range: Readonly<PlotRange>) => void;
         onResetRange: () => void;
+        onRemove: () => void;
         contextKey?: string;
       }
     | undefined,
@@ -163,6 +164,104 @@ afterEach(async () => {
   restoreTestHid = undefined;
   host.remove();
   vi.restoreAllMocks();
+});
+
+function seedNativeDeleteCase(enabled = true) {
+  const documents = structuredClone(state().documents),
+    channel = documents.left.presets[0].channels[0];
+  channel.filters.forEach((_, i) => {
+    channel.filters[i] = { ...newFilter('peak'), frequency: 100 + i, gain: 0 };
+  });
+  channel.filters[0] = {
+    ...newFilter('lowpass2'),
+    id: 'native-delete-slot',
+    sourceId: '13',
+    sourceType: 'ftLowPass2',
+    enabled,
+    frequency: 720,
+    q: 0.4,
+    frequency2: 988.101806640625,
+    q2: 0.7,
+    gain: 0,
+    shelfDirection: 'low',
+    provenance: 'hfd',
+    coefficients: { b0: 0.1, b1: 0, b2: 0, f1: 0.8, f2: -0.2 },
+  };
+  channel.coefficientCache = 'effective';
+  useWorkspace.setState({ documents });
+}
+
+it('card Remove retains native slot state and Add reuses enabled Unity through the actual palette commit', async () => {
+  seedNativeDeleteCase();
+  await mount();
+  const before = structuredClone(state().documents),
+    previous = before.left.presets[0].channels[0].filters[0];
+  const remove = host.querySelector<HTMLButtonElement>('button[aria-label="Remove section 1"]')!;
+  expect(remove).not.toBeNull();
+  await act(async () => remove.click());
+  const deleted = state().documents.left.presets[0].channels[0].filters[0];
+  expect(deleted).toMatchObject({
+    id: previous.id,
+    sourceId: '13',
+    kind: 'unity',
+    enabled: true,
+    frequency: 720,
+    q: 0.4,
+    frequency2: 988.101806640625,
+    q2: 0.7,
+    gain: 0,
+  });
+  expect(state().documents.right).toEqual(before.right);
+  expect(host.querySelector('.add-filter-card')?.textContent).toContain('1 sections available');
+  await act(async () => (host.querySelector('.add-filter-card') as HTMLButtonElement).click());
+  const add = [...host.querySelectorAll('button')].find((b) =>
+    b.textContent?.includes('Add to design'),
+  )!;
+  expect(add).toBeDefined();
+  expect(add.disabled).toBe(false);
+  await act(async () => add.click());
+  expect(state().documents.left.presets[0].channels[0].filters[0]).toMatchObject({
+    id: previous.id,
+    sourceId: '13',
+    kind: 'peak',
+    enabled: true,
+    gain: 3,
+  });
+  expect(state().documents.right).toEqual(before.right);
+  await act(async () => state().undo());
+  expect(state().documents.left.presets[0].channels[0].filters[0]).toEqual(deleted);
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+});
+
+it('graph Delete uses native latent retention while explicit inspector Reset stays broader and Undo restores Delete', async () => {
+  seedNativeDeleteCase(false);
+  await mount();
+  const right = structuredClone(state().documents.right);
+  await act(async () => seen.plot!.onRemove());
+  const deleted = structuredClone(state().documents.left.presets[0].channels[0].filters[0]);
+  expect(deleted).toMatchObject({
+    id: 'native-delete-slot',
+    sourceId: '13',
+    kind: 'unity',
+    enabled: false,
+    frequency: 720,
+    q: 0.4,
+  });
+  const reset = host.querySelector<HTMLButtonElement>('button[title="Reset selected filter"]')!;
+  await act(async () => reset.click());
+  expect(state().documents.left.presets[0].channels[0].filters[0]).toMatchObject({
+    kind: 'unity',
+    enabled: false,
+    frequency: 1000,
+    q: Math.SQRT1_2,
+  });
+  const execute = createToolExecutor(seen.adapter!);
+  await act(async () => {
+    await execute('fusion_history', { action: 'undo' });
+  });
+  expect(state().documents.left.presets[0].channels[0].filters[0]).toEqual(deleted);
+  expect(state().documents.right).toEqual(right);
 });
 
 it('F1, the Help rail and agent Help share local reference views without editing either project', async () => {

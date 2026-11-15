@@ -251,9 +251,22 @@ it('reverse rectangles commit only after native reverse geometry has restored th
   expect(updates.at(-1)).toEqual(initial);
 });
 
-const nativeCenterDb = [
-  4.582832114903331, -7.458367711656704, 3.0000003736199545, -3.0000003736203062,
-];
+const nativeCenterDb: Record<string, number> = {
+  'asymmetric Low normalization': 4.582832114903331,
+  'asymmetric High normalization': -7.458367711656704,
+  'second-order high shelf +6 dB': 3.0000003736199545,
+  'second-order high shelf -6 dB': -3.0000003736203062,
+  'boost/cut +7.5 dB': 7.500008716167609,
+  'boost/cut -7.5 dB': -7.500008716167583,
+  'boost/cut zero gain after edit': 0,
+  'low-pass 2 real-pole Q 0.4': -7.970118835525309,
+};
+function nativeCenter(index: number) {
+  const name = manualNative.cases[index].name,
+    db = nativeCenterDb[name];
+  if (!Number.isFinite(db)) throw new Error(`Missing independent native center oracle: ${name}`);
+  return db;
+}
 function markerChannels(fixtureIndex = 2) {
   const channels = newProject().presets[0].channels,
     fixture = manualNative.cases[fixtureIndex];
@@ -333,7 +346,7 @@ it.each(manualNative.cases.map((fixture, index) => ({ fixture, index })))(
     const channels = markerChannels(index),
       before = structuredClone(channels);
     await act(async () => root.render(<MarkerHarness source={channels} />));
-    const expected = expectedMarker(Number(fixture.parameters.f1), nativeCenterDb[index]),
+    const expected = expectedMarker(Number(fixture.parameters.f1), nativeCenter(index)),
       actual = coordinates(marker());
     // DOM style serialization rounds CSS pixel values to three decimals.
     expect(actual.x).toBeCloseTo(expected.x, 2);
@@ -403,14 +416,14 @@ it('omits one malformed marker without fabricating zero dB or dropping valid/man
   channels[0].filters[2] = { ...newFilter('raw'), coefficients: { ...unity(), b0: 0.5 } };
   await act(async () => root.render(<MarkerHarness source={channels} />));
   expect(host.querySelectorAll('[data-filter]')).toHaveLength(1);
-  expect(coordinates(marker()).y).toBeCloseTo(expectedMarker(800, nativeCenterDb[1]).y, 2);
+  expect(coordinates(marker()).y).toBeCloseTo(expectedMarker(800, nativeCenter(1)).y, 2);
 });
 
 it('fans overlapping markers while preserving true electrical leader endpoints and anchor hit selection', async () => {
   const channels = markerChannels();
   channels[0].filters[1] = { ...channels[0].filters[0], id: 'synthetic-second-marker' };
   await act(async () => root.render(<MarkerHarness source={channels} />));
-  const anchor = expectedMarker(1500, nativeCenterDb[2]),
+  const anchor = expectedMarker(1500, nativeCenter(2)),
     fanned = coordinates(marker(1)),
     line = host.querySelector('line')!;
   expect(Math.hypot(fanned.x - anchor.x, fanned.y - anchor.y)).toBeGreaterThanOrEqual(24 - 1e-7);

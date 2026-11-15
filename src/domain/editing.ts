@@ -1,5 +1,18 @@
 import { rootChannel } from './links';
-import { CHANNELS, emptyFir, type Channel, type Filter, type Preset, type Project } from './model';
+import {
+  CHANNELS,
+  emptyFir,
+  unity,
+  type Channel,
+  type Filter,
+  type Preset,
+  type Project,
+} from './model';
+
+/** Native Add considers the Unity type unused, independently of Enabled. */
+export function isUnusedBiquad(filter: Pick<Filter, 'kind'>): boolean {
+  return filter.kind === 'unity';
+}
 
 function index(value: number, length: number, label: string) {
   if (!Number.isInteger(value) || value < 0 || value >= length)
@@ -62,6 +75,26 @@ function synchronizeFollowers(preset: Preset, master: number) {
   for (let follower = 0; follower < CHANNELS; follower++)
     if (follower !== master && rootChannel(preset, follower) === master)
       copyProcessing(preset.channels[master], preset.channels[follower]);
+}
+
+/** Native Delete (c69810) changes the same slot to Unity, retaining Enabled
+ * and latent design parameters. It is not the broader browser Reset action. */
+export function deleteBiquad(
+  project: Project,
+  presetIndex: number,
+  channelIndex: number,
+  filterIndex: number,
+): void {
+  const preset = presetAt(project, presetIndex),
+    channel = editableChannel(preset, channelIndex);
+  index(filterIndex, channel.filters.length, 'biquad');
+  const filter = { ...channel.filters[filterIndex], kind: 'unity' as const, coefficients: unity() };
+  delete filter.provenance;
+  if (filter.sourceType !== undefined) filter.sourceType = 'ftUnity';
+  channel.filters[filterIndex] = filter;
+  // Only replacing the first section resolves its formerly ambiguous gain cache.
+  if (filterIndex === 0) channel.coefficientCache = 'base';
+  synchronizeFollowers(preset, channelIndex);
 }
 
 /** Exchange complete biquad parameters, including disabled/raw coefficient

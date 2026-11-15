@@ -1,0 +1,163 @@
+{
+  "source": "HFD 5.2.4.24; V37 classic screenshot-operated synthetic offline FA503 selected BQ lifecycle",
+  "scope": "Sanitized fields and original saved decimal coefficients only. Expected Q24 words are independent software encodings of saved literals, not device readback.",
+  "observed": {
+    "disableChangedOnlyEnabled": true,
+    "reenabledConfigByteIdenticalToEnabled": true,
+    "deleteRetainedEnabledAndLatentParameters": true,
+    "deleteReaddReusedNativeSlot": true,
+    "freshAddRetainedUnityCacheUntilRegenerated": true
+  },
+  "states": [
+    {
+      "state": "enabled LP2",
+      "kind": "lowpass2",
+      "enabled": true,
+      "parameters": {
+        "filtertype": "ftLowPass2",
+        "f1": "720",
+        "f2": "988.101806640625",
+        "q1": "0.4",
+        "q2": "0.7",
+        "gain": "0",
+        "shelfhl": "stUnknown"
+      },
+      "coefficients": {
+        "b0": "0.00218985334083258",
+        "b1": "0",
+        "b2": "0",
+        "a1": "1.88416237410376",
+        "a2": "-0.886355508349538",
+        "sconst": "20465611.6860989",
+        "zconst": "0.00218985334083258"
+      },
+      "literalQ24WireWords": [0, 0, 36740, -14870578, 31610999],
+      "marker": {
+        "frequency": 720.0,
+        "doubleDb": -7.970118835525309,
+        "db": -7.970118999481201
+      },
+      "activeQ24WireWords": [0, 0, 36740, -14870578, 31610999]
+    },
+    {
+      "state": "disabled LP2",
+      "kind": "lowpass2",
+      "enabled": false,
+      "parameters": {
+        "filtertype": "ftLowPass2",
+        "f1": "720",
+        "f2": "988.101806640625",
+        "q1": "0.4",
+        "q2": "0.7",
+        "gain": "0",
+        "shelfhl": "stUnknown"
+      },
+      "coefficients": {
+        "b0": "0.00218985334083258",
+        "b1": "0",
+        "b2": "0",
+        "a1": "1.88416237410376",
+        "a2": "-0.886355508349538",
+        "sconst": "20465611.6860989",
+        "zconst": "0.00218985334083258"
+      },
+      "literalQ24WireWords": [0, 0, 36740, -14870578, 31610999],
+      "marker": {
+        "frequency": 720.0,
+        "doubleDb": -7.970118835525309,
+        "db": -7.970118999481201
+      },
+      "activeQ24WireWords": [0, 0, 16777216, 0, 0]
+    },
+    {
+      "state": "re-enabled LP2",
+      "kind": "lowpass2",
+      "enabled": true,
+      "parameters": {
+        "filtertype": "ftLowPass2",
+        "f1": "720",
+        "f2": "988.101806640625",
+        "q1": "0.4",
+        "q2": "0.7",
+        "gain": "0",
+        "shelfhl": "stUnknown"
+      },
+      "coefficients": {
+        "b0": "0.00218985334083258",
+        "b1": "0",
+        "b2": "0",
+        "a1": "1.88416237410376",
+        "a2": "-0.886355508349538",
+        "sconst": "20465611.6860989",
+        "zconst": "0.00218985334083258"
+      },
+      "literalQ24WireWords": [0, 0, 36740, -14870578, 31610999],
+      "marker": {
+        "frequency": 720.0,
+        "doubleDb": -7.970118835525309,
+        "db": -7.970118999481201
+      },
+      "activeQ24WireWords": [0, 0, 36740, -14870578, 31610999]
+    },
+    {
+      "state": "deleted slot",
+      "kind": "unity",
+      "enabled": true,
+      "parameters": {
+        "filtertype": "ftUnity",
+        "f1": "720",
+        "f2": "988.101806640625",
+        "q1": "0.4",
+        "q2": "0.7",
+        "gain": "0",
+        "shelfhl": "stUnknown"
+      },
+      "coefficients": {
+        "b0": "1",
+        "b1": "0",
+        "b2": "0",
+        "a1": "0",
+        "a2": "0",
+        "sconst": "1",
+        "zconst": "1"
+      },
+      "literalQ24WireWords": [0, 0, 16777216, 0, 0],
+      "marker": {
+        "frequency": 720.0,
+        "doubleDb": 0.0,
+        "db": 0.0
+      },
+      "activeQ24WireWords": [0, 0, 16777216, 0, 0]
+    },
+    {
+      "state": "freshly added zero-gain Peak",
+      "kind": "peak",
+      "enabled": true,
+      "parameters": {
+        "filtertype": "ftBoostCut",
+        "f1": "106.17537689209",
+        "f2": "106.17537689209",
+        "q1": "0.7",
+        "q2": "0.7",
+        "gain": "0",
+        "shelfhl": "stUnknown"
+      },
+      "coefficients": {
+        "b0": "1",
+        "b1": "0",
+        "b2": "0",
+        "a1": "0",
+        "a2": "0",
+        "sconst": "1",
+        "zconst": "1"
+      },
+      "literalQ24WireWords": [0, 0, 16777216, 0, 0],
+      "marker": {
+        "frequency": 106.17537689208984,
+        "doubleDb": 0.0,
+        "db": 0.0
+      },
+      "activeQ24WireWords": [0, 0, 16777216, 0, 0]
+    }
+  ]
+}

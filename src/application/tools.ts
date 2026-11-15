@@ -7,7 +7,13 @@ import {
 } from '../domain/equalizer';
 import { readEqBank, uploadEqBankPair, EqBankUploadError } from '../hardware/eq-bank';
 import { uploadProjectPair, ProjectUploadError } from '../hardware/project-upload';
-import { exchangeBiquads, copyChannelProcessing, clearPreset } from '../domain/editing';
+import {
+  exchangeBiquads,
+  copyChannelProcessing,
+  clearPreset,
+  deleteBiquad,
+  isUnusedBiquad,
+} from '../domain/editing';
 import { copyPresetBetween } from '../domain/preset-copy';
 import {
   editPresetFir,
@@ -923,6 +929,7 @@ const schemas = {
   fusion_preset_clear: z.object({ target, preset }).strict(),
   fusion_filter_move: z.object({ target, preset, channel, from: index, to: index }).strict(),
   fusion_filter_reset: z.object({ target, preset, channel, index }).strict(),
+  fusion_filter_delete: z.object({ target, preset, channel, index }).strict(),
   fusion_channel_cache: z
     .object({ target, preset, channel, interpretation: z.enum(['base', 'effective']) })
     .strict(),
@@ -1621,6 +1628,8 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     'Clear preset gain, inversion, biquads and input FIR using HFD semantics; retain EQ, delays, output FIR, links and measurements. Undoable design edit only.',
   fusion_filter_move: 'Reorder a channel’s biquad cascade.',
   fusion_filter_reset: 'Reset a biquad to a bypassed unity section.',
+  fusion_filter_delete:
+    'Delete a crossover biquad using native HFD semantics: retain its slot identity, Enabled state and latent frequency/Q/gain/direction parameters, replace its response with Unity and make the slot available for Add. This is an undoable design edit without amplifier I/O; broader Reset remains separate.',
   fusion_channel_set: 'Edit channel gain, polarity, mute, delay and labels.',
   fusion_copy: 'Copy a channel or preset between roles while retaining independent documents.',
   fusion_history: 'Undo or redo a design edit.',
@@ -1802,6 +1811,7 @@ export function createToolExecutor(adapter: ToolAdapter) {
           'fusion_filter_set',
           'fusion_filter_move',
           'fusion_filter_reset',
+          'fusion_filter_delete',
           'fusion_channel_set',
         ].includes(key)
       ) {
@@ -2098,13 +2108,15 @@ export function createToolExecutor(adapter: ToolAdapter) {
           const p = schemas.fusion_filter_add.parse(a);
           adapter.edit(roles(p.target), (d) => {
             const c = d.presets[p.preset - 1].channels[p.channel - 1],
-              i = c.filters.findIndex((f) => !f.enabled && f.kind === 'unity');
+              i = c.filters.findIndex(isUnusedBiquad);
             if (i < 0) throw new Error('No unused biquad slots remain');
             c.filters[i] = {
               ...newFilter(p.kind),
+              id: c.filters[i].id,
               frequency: p.frequency,
               sourceId: c.filters[i].sourceId,
             };
+            if (i === 0) c.coefficientCache = 'base';
           });
           break;
         }
@@ -2157,6 +2169,13 @@ export function createToolExecutor(adapter: ToolAdapter) {
               id = c.filters[p.index - 1].sourceId;
             c.filters[p.index - 1] = { ...newFilter(), sourceId: id };
           });
+          break;
+        }
+        case 'fusion_filter_delete': {
+          const p = schemas.fusion_filter_delete.parse(a);
+          adapter.edit(roles(p.target), (doc) =>
+            deleteBiquad(doc, p.preset - 1, p.channel - 1, p.index - 1),
+          );
           break;
         }
         case 'fusion_channel_cache': {

@@ -2,7 +2,7 @@
 
 Agents use the same controllers and validation as the human interface. Normal users can work entirely through visible controls; the optional command console is a development aid.
 
-The current registry contains **88 commands**, including shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
+The current registry contains **89 commands**, including shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
 
 ## Pair a local client
 
@@ -76,20 +76,53 @@ Add a design section to an explicit destination:
 
 That design edit does not upload the section. Inspect state and use Undo when appropriate. Hardware upload is a separate operation.
 
+## Native Delete, broader Reset and reusable slots
+
+The normal card Remove and graph Delete actions share `fusion_filter_delete`:
+
+```json
+{
+  "name": "fusion_filter_delete",
+  "arguments": { "target": "both", "preset": 1, "channel": 1, "index": 1 }
+}
+```
+
+Choose `left`, `right` or `both`; preset/channel are 1–3 and index is 1–15.
+The schema is strict and accepts no caller identity or coefficient payload.
+Both edits that explicit slot in each independent project and retains each
+role's own latent values. Delete preserves the slot IDs, Enabled state,
+frequency/Q/gain/direction fields, and replaces the section response/cache
+with Unity. It is an undoable design edit with no amplifier call. Linked
+followers stay read-only and follow their master.
+
+A Unity slot is unused even when Enabled is true. `fusion_filter_add` and the
+visible Add palette can reuse it while retaining its identity; palette settings
+remain the user's explicit choice. `fusion_filter_reset` and the inspector's
+Reset remain broader operations that restore disabled Unity/default parameters.
+Input-EQ removal and preset Clear have their separate scopes.
+
+Fresh native Add can save an enabled zero-gain Peak with a direct Unity cache;
+a later regenerated zero-gain Peak can instead have cancelling coefficients.
+The importer preserves either supplied cache. An exactly unit gain multiplier
+is unambiguous for base/effective interpretation, so the first case now compiles
+without a false unresolved-cache block. Nonunit, inverted and near-unit
+ambiguity guards remain unchanged. See [verification](VERIFICATION.md#v37-native-filter-lifecycle-checkpoint)
+for the bounded native/browser evidence and completed public-source checks.
+
 ## Command families
 
-| Purpose                      | Representative commands                                                                                                                                                                            |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| State, selection and history | `fusion_state`, `fusion_select`, `fusion_view`, `fusion_history`                                                                                                                                   |
-| Projects and storage         | `fusion_project_new`, `fusion_project_import`, `fusion_project_export`, `fusion_project_save`, `fusion_workspace_storage`, `fusion_project_sources`, `fusion_project_directory`                    |
-| Filters and channels         | `fusion_filter_palette`, `fusion_preview_filter`, `fusion_filter_add`, `fusion_filter_set`, `fusion_channel_set`, `fusion_channel_link`, `fusion_biquad_exchange`                                  |
-| EQ and FIR                   | `fusion_eq_set`, `fusion_eq_bank`, `fusion_eq_read`, `fusion_eq_upload`, `fusion_fir_set`, `fusion_fir_read`, `fusion_fir_upload`                                                                  |
-| Measurements and analysis    | `fusion_hfd_measurement`, `fusion_microphone`, `fusion_analyze`, `fusion_time_analyze`, `fusion_audio`                                                                                             |
-| Device state and settings    | `fusion_device_read`, `fusion_controls`, `fusion_amplifier_modes`, `fusion_limiter_editor`, `fusion_device_defaults`                                                                               |
-| Device templates             | `fusion_device_clone`                                                                                                                                                                              |
-| Backup/upload/recovery       | `fusion_backup`, `fusion_configuration_backup`, `fusion_upload`, `fusion_upload_all`, `fusion_restore`                                                                                             |
-| Large files                  | `fusion_file_upload_begin`, `fusion_file_upload_chunk`, `fusion_file_upload_commit`, `fusion_file_export`, `fusion_file_chunk_read`, `fusion_file_status`, `fusion_file_list`, `fusion_file_close` |
-| Help                         | `fusion_help`                                                                                                                                                                                      |
+| Purpose                      | Representative commands                                                                                                                                                                                          |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| State, selection and history | `fusion_state`, `fusion_select`, `fusion_view`, `fusion_history`                                                                                                                                                 |
+| Projects and storage         | `fusion_project_new`, `fusion_project_import`, `fusion_project_export`, `fusion_project_save`, `fusion_workspace_storage`, `fusion_project_sources`, `fusion_project_directory`                                  |
+| Filters and channels         | `fusion_filter_palette`, `fusion_preview_filter`, `fusion_filter_add`, `fusion_filter_set`, `fusion_filter_delete`, `fusion_filter_reset`, `fusion_channel_set`, `fusion_channel_link`, `fusion_biquad_exchange` |
+| EQ and FIR                   | `fusion_eq_set`, `fusion_eq_bank`, `fusion_eq_read`, `fusion_eq_upload`, `fusion_fir_set`, `fusion_fir_read`, `fusion_fir_upload`                                                                                |
+| Measurements and analysis    | `fusion_hfd_measurement`, `fusion_microphone`, `fusion_analyze`, `fusion_time_analyze`, `fusion_audio`                                                                                                           |
+| Device state and settings    | `fusion_device_read`, `fusion_controls`, `fusion_amplifier_modes`, `fusion_limiter_editor`, `fusion_device_defaults`                                                                                             |
+| Device templates             | `fusion_device_clone`                                                                                                                                                                                            |
+| Backup/upload/recovery       | `fusion_backup`, `fusion_configuration_backup`, `fusion_upload`, `fusion_upload_all`, `fusion_restore`                                                                                                           |
+| Large files                  | `fusion_file_upload_begin`, `fusion_file_upload_chunk`, `fusion_file_upload_commit`, `fusion_file_export`, `fusion_file_chunk_read`, `fusion_file_status`, `fusion_file_list`, `fusion_file_close`               |
+| Help                         | `fusion_help`                                                                                                                                                                                                    |
 
 Some older clients cache tool names. Existing validated compatibility namespaces expose selected newer operations; use the server’s current schema rather than guessing nested arguments. Firmware inspection and authentication actions are available through `fusion_device_read` namespaces. Physical firmware programming remains disabled.
 

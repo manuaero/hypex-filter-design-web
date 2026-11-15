@@ -2,6 +2,138 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V37 native filter lifecycle checkpoint
+
+Fresh classic HFD 5.2.4.24 offline GUI work produced nine completed native
+checkpoints: a new FA503 design, signed/zero-gain Peak states, a real-pole LP2,
+Disable/re-enable, Delete and Add reuse. A freshly verified exclusive interface
+handle kept native HFD disconnected; it closed normally before that handle was
+released. No actual amplifier command, sector read, bridge/configuration Apply,
+Upload, power, firmware, noise or audio Take operation occurred. The last fresh
+physical preset hash remains the separately dated v35 read-only check at
+2026-11-15 13:40:58 UTC; no new v37 hardware proof is claimed.
+
+| Check                                        | V37 status                                                                                          |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Delete/domain/UI/tool focused regressions    | 101 passed across six files.                                                                        |
+| Native import/round-trip focused regressions | 46 passed across three files.                                                                       |
+| Global typecheck and changed-file formatting | Passed on the frozen source.                                                                        |
+| Full development-source suite                | 2,507 passed across 179 files; zero failures/pending.                                               |
+| Actual Studio browser acceptance             | Passed: 19 bounded checks on actual Studio.                                                         |
+| Fresh public-checkout suite/typecheck        | 2,506 passed, one optional skip; 2,507 total in 179 files. Typecheck passed.                        |
+| Fresh production/client/Worker checks        | Next production build and Worker packaging passed.                                                  |
+| Private v37 deployment                       | Succeeded with MCP enabled and unchanged owner-only access; no public hosted deployment is claimed. |
+
+The synchronized public allowlist contains **372 source/test/configuration
+files and 13 protected documentation/assets: 385 files total**. Only one new
+test file and one sanitized lifecycle fixture were added; no vendor files or
+new public documentation paths were introduced. V36 and earlier test/build
+evidence below remains unchanged history.
+
+Fresh public verification completed on **2026-11-15 at 16:20:19 UTC**, using
+Node.js 24.22.1. The full unfiltered suite passed **2,506 tests, with one skip
+and zero failures: 2,507 total across 179 files**. It used two workers,
+unchanged timeouts and no omissions. The sole skip is the optional exact
+installed vendor-PDF identity test; the vendor PDF is absent and synthetic
+manual fallback/routing tests ran. Global typecheck, Next production build
+and Worker packaging passed. The generated Next environment file stayed
+unchanged.
+
+The build contains **24 static assets totaling 1,895,814 bytes** and a
+**3,095,778-byte Worker**, SHA-256:
+`c9fc7e86cd799ecc4f8d7f6fd8d9e08302e63bd61e908cfc3b48f529d868c035`.
+The actual compiled client and Worker report manual `optional: true`,
+`bundled: false`, with the official Hypex fallback link. The actual packaged
+Worker returned 200 for home and 404 for the absent manual in an isolated
+runtime without `process`. Source and built privacy scans each found zero
+matches across five checked categories; these bounded pattern scans are not
+exhaustive secret detection. The separately completed private deployment
+retained MCP and its existing owner-only audience. No public hosting or new
+remote MCP transport acceptance follows from these checks.
+
+Commands run from the public checkout:
+
+```sh
+node node_modules/typescript/bin/tsc --noEmit --incremental false
+node node_modules/vitest/vitest.mjs run --maxWorkers=2 --reporter=default --reporter=json --outputFile=../hypex-filter-design-web-public-v37.tests.json
+node node_modules/next/dist/bin/next build
+node scripts/build-worker.mjs
+```
+
+The final unfiltered development-source run passed **2,507 of 2,507 tests
+across 179 files**, with two workers and unchanged timeouts. All 364 checked
+source/test/configuration hashes, including the 11 frozen changed paths,
+stayed unchanged during that run. The first full run had 2,499 passes and
+eight failures: two marker tests still matched fixture entries by position
+against four-case oracles after the fixture expanded to eight cases. A
+test-only correction keyed the eight literal oracles by case name; focused
+checks then passed 50 tests in two files, with global typecheck and formatting
+passing, before the final full rerun. The original failing run was retained.
+
+### Bounded native observations
+
+- Peak at **2300 Hz / Q 1.150** was saved at **+7.50, −7.50 and 0 dB**. The
+  zero-gain state remains an enabled Peak object and has cancelling direct
+  coefficients, rather than becoming a Unity type.
+- LP2 at **720 Hz / Q 0.400** exercises the real-pole branch. Native Disable
+  changed only Enabled; re-enable produced a Config file byte-identical to
+  the enabled state. Parameters and literal coefficients survived bypass.
+- Native Delete changed that same slot to Unity while retaining Enabled true,
+  identity/connectors and latent frequency/Q/gain/direction. Seven saved values
+  changed in this case: type, b0, a1, a2, sconst, spoles and zconst; b1/b2 were
+  already zero. This is editing-state/cache evidence, not a newly established
+  audible filter error.
+- Native Add reused that slot. It saved an enabled zero-gain Peak near
+  **106.17537689209 Hz**, with Q1 reset to 0.7 and a direct Unity cache. This
+  fresh-Add cache differs from the cancelling cache after an explicit gain
+  edit to zero, although both transfers are flat. No resets of other latent
+  fields are inferred from fields that were already at their observed values.
+
+The current implementation shares native Delete between card Remove, graph
+Delete and the strict `fusion_filter_delete` command, with explicit Left,
+Right or Both targets. It preserves each slot's identity, latent parameters
+and Enabled flag, replaces obsolete section coefficients with Unity, and
+resolves an obsolete first-slot cache classification. All Add capacity/find/
+commit paths treat Unity as unused regardless of Enabled and preserve the
+reused slot identity. The broader Reset, Input-EQ removal and preset Clear
+remain separate. The registry contains 89 commands.
+
+The importer now treats an **exactly unit gain multiplier** as an unambiguous
+base/effective-cache case while preserving the parsed native values. This
+allows the valid fresh-Add Unity cache to compile without silently regenerating
+it. Nonunit, inverted and near-unit custom-cache ambiguity guards are unchanged.
+No gain/compensation arithmetic or hardware write behavior was changed. Local
+Q8.24 checks are software encodings, not observed device readback.
+
+### Actual Studio browser acceptance
+
+All **19 checks passed** on actual Studio in isolated browser fixtures with
+hardware/audio/file operations blocked. Card Remove preserved latent values
+and freed an enabled Unity slot; Add reused its identity, and Undo restored
+the exact projects. Graph context-menu Delete and Undo passed separately.
+Bypass retained the native coefficients and latent values while compile
+produced Unity, and re-enable restored both complete projects. The shared
+Both command retained each role's independent parameters, with one Undo
+restoring both exactly. These commands ran through Studio's shared command
+interface; no new remote MCP transport or keyboard shortcut acceptance is
+claimed.
+
+A separate fresh-native-Add case retained the supplied direct Unity cache,
+classified it as base, compiled identity and preserved critical native XML
+fields on export. Read-only compile/export commands left both complete
+projects unchanged. Both fixtures retained their pre-reload canonical project
+values after reload, with persistence Ready and no blocked I/O attempts.
+No browser download-delivery or new hardware acceptance follows from these
+checks.
+
+Native saves, field observations and fixed literal fixtures precede these
+source and browser checks. Existing configurable palette defaults remain a
+user choice; this increment does not claim identical native per-keystroke
+editing or all fresh-Add defaults.
+Native Default EQ remains unaccepted in the disconnected configuration.
+Production firmware programming is still missing/disabled; two physical
+amplifiers, macOS and full hardware functionality remain unqualified.
+
 ## V36 manual-filter and graph-point checkpoint
 
 Four manual-filter states were created and saved through actual mouse/keyboard
