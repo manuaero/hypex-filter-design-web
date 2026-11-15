@@ -110,7 +110,9 @@ describe('native isolated selected section', () => {
     expect(filter.coefficients.b0).toBe(0.25);
   });
   it('rejects missing/nonfinite free coefficients and invalid frequency instead of inventing a Unity response', () => {
-    expect(() => selectedSectionCoefficients(newFilter('raw'))).toThrow(/original coefficients/);
+    expect(() =>
+      selectedSectionCoefficients({ ...newFilter('raw'), coefficients: undefined }),
+    ).toThrow(/original coefficients/);
     expect(() =>
       selectedSectionCoefficients({ ...newFilter('raw'), coefficients: { ...unity(), b0: NaN } }),
     ).toThrow();

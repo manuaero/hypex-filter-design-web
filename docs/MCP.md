@@ -315,3 +315,16 @@ Agents can read or save only through already granted filesystem roots. Missing/r
 ## Hosted transport
 
 The optional hosted bridge has its own authentication and browser-lease checks. It does not use the local bearer token. Queue encryption protects transient stored command/results, but the authenticated server processes plaintext; an agent also receives data explicitly returned by tools. Hosted authentication and deployment are separate from local setup.
+
+
+## V41 raw coefficient checkpoint
+
+`fusion_filter_set` accepts a strict, nonempty partial coefficient object for raw sections. For example:
+
+```json
+{"target":"both","preset":1,"channel":1,"index":1,"patch":{"coefficients":{"b0":0.5}}}
+```
+
+Each role merges only `b0` into its own complete finite vector. The other four values, bypass state and first-cache interpretation stay independent. All targets are preflighted before one Undoable edit; malformed or linked destinations refuse the entire operation. An exact no-op retains metadata and history. Raw bypass or latent parameter edits retain the vector under the default redesign option. Full nonraw cache overrides remain compatible; changed vectors clear stale original-coefficient provenance.
+
+Direct raw Add starts at Unity. Conversion captures the current unbypassed section; the palette converts its staged preview and replaces the whole proposed section only on Apply. Human typed coefficients commit on Enter/blur. Partial coefficient authoring does not resolve an ambiguous gain cache or weaken compile stability/Q24 checks. The core/MCP can retain signed zero in memory; existing UI/JSON number semantics canonicalize it. These 29 browser checks exercised the shared executor through the optional developer console, not a remote MCP transport. See [explicit coefficient editing](HFD-RAW-COEFFICIENT-EDITOR.md).

@@ -457,6 +457,14 @@ const manualFilterPatch = filterPatch.extend({
   q2: finite.optional(),
   gain: finite.optional(),
 });
+const rawManualFilterPatch = manualFilterPatch.extend({
+  coefficients: coefficients
+    .partial()
+    .refine((patch) => Object.keys(patch).length > 0, {
+      message: 'Supply at least one coefficient',
+    })
+    .optional(),
+});
 const eqFilterPatch = z
   .object({
     kind: z.enum(['peak', 'lowshelf2', 'highshelf2']).optional(),
@@ -930,7 +938,7 @@ const schemas = {
       preset,
       channel,
       index,
-      patch: manualFilterPatch,
+      patch: rawManualFilterPatch,
       redesign: z.boolean().default(true),
     })
     .strict(),
@@ -1650,9 +1658,9 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     'Import a local HFD XML or Fusion JSON design without applying saved device settings.',
   fusion_project_export: 'Return a project file as text for saving.',
   fusion_filter_set:
-    'Edit a manual crossover biquad. Explicit frequency/F2 commits use canonical decimal Text, 10–50,000 Hz bounds, one decimal and Single storage. Ordinary FA Q/Q2 commits use 0.1–20, three decimals and Double storage; BQ gain uses −125…24 dB, two decimals and Double storage. Exact zero retains the previous frequency/Q field value; gain zero is accepted. These are recovered profile defaults, not all native custom preference settings. Untouched imported values stay unchanged. A shape change preserves Enabled unless explicitly supplied. Redesign explicitly replaces preserved imported coefficients.',
+    'Edit a manual crossover biquad. Explicit frequency/F2 commits use canonical decimal Text, 10–50,000 Hz bounds, one decimal and Single storage. Ordinary FA Q/Q2 commits use 0.1–20, three decimals and Double storage; BQ gain uses −125…24 dB, two decimals and Double storage. Exact zero retains the previous frequency/Q field value; gain zero is accepted. These are recovered profile defaults, not all native custom preference settings. Untouched imported values stay unchanged. A shape change preserves Enabled unless explicitly supplied. Parameter redesign replaces preserved imported caches; raw bypass/latent edits retain coefficients. Raw coefficients accept a strict nonempty finite partial vector, merged independently for each role without rounding. Conversion to raw retains the current unbypassed section; new raw sections start at Unity. Every target is preflighted before one Undoable edit. Cache interpretation and upload stability guards remain independent.',
   fusion_filter_adjust:
-    'Apply one stateless native ordinary Q/Q2 or BQ-gain wheel event from a freshly/passively displayed canonical value, using factory steps 0.04 or 0.1. Continuous human wheel gestures retain separate field-local Text/state; commands do not share that transient state. Returns stored value and visible native Text independently because the AdditionalGain guard may change only Text. Preset/channel/index are one-based. Both basis:each advances each active field independently; basis:left/right computes that selected source event and mirrors its changed stored value, including inactive destination latent fields. A single target accepts each or its matching role only. Every target must be editable/unlinked before any mutation. Uses channel AdditionalGain, never ordinary channel gain. Unchanged source Text and all-bound no-ops retain exact coefficients, metadata and history. Only changed values redesign. No amplifier I/O; keyboard arrows, graph gestures and Input EQ remain separate.',
+    'Apply one stateless native ordinary Q/Q2 or BQ-gain wheel event from a freshly/passively displayed canonical value, using factory steps 0.04 or 0.1. Continuous human wheel gestures retain separate field-local Text/state; commands do not share that transient state. Returns stored value and visible native Text independently because the AdditionalGain guard may change only Text. Preset/channel/index are one-based. Both basis:each advances each active field independently; basis:left/right computes that selected source event and mirrors its changed stored value, including inactive destination latent fields. A single target accepts each or its matching role only. Every target must be editable/unlinked before any mutation. Uses channel AdditionalGain, never ordinary channel gain. No-op and mirror decisions use the stored value and changed flag: guarded Text can remain unchanged while the stored value changes. All-bound no-ops retain exact coefficients, metadata and history. Only changed values redesign. No amplifier I/O; keyboard arrows, graph gestures and Input EQ remain separate.',
   fusion_biquad_exchange:
     'Exchange two same-channel biquad parameter sets while preserving physical graph slots and read-only linked channels.',
   fusion_channel_copy:
@@ -2155,16 +2163,31 @@ export function createToolExecutor(adapter: ToolAdapter) {
         }
         case 'fusion_filter_set': {
           const p = schemas.fusion_filter_set.parse(a);
-          adapter.edit(roles(p.target), (doc) => {
-            const f = doc.presets[p.preset - 1].channels[p.channel - 1].filters[p.index - 1];
-            Object.assign(f, editManualFilter(f, p.patch, { redesign: p.redesign }));
-            if (p.redesign && !p.patch.coefficients) {
-              delete f.coefficients;
-              delete f.provenance;
-              if (p.index === 1)
-                doc.presets[p.preset - 1].channels[p.channel - 1].coefficientCache = 'base';
-            }
+          // Validate all independent vectors before the adapter can publish a
+          // paired edit. A partial raw patch must never use the other role's cache.
+          const changed = roles(p.target).filter((role) => {
+            const f =
+              state.documents[role].presets[p.preset - 1].channels[p.channel - 1].filters[
+                p.index - 1
+              ];
+            const next = editManualFilter(f, p.patch, { redesign: p.redesign });
+            return (
+              JSON.stringify(next) !== JSON.stringify(f) ||
+              (['b0', 'b1', 'b2', 'f1', 'f2'] as const).some(
+                (key) => !Object.is(next.coefficients?.[key], f.coefficients?.[key]),
+              )
+            );
           });
+          if (changed.length)
+            adapter.edit(changed, (doc) => {
+              const c = doc.presets[p.preset - 1].channels[p.channel - 1];
+              const next = editManualFilter(c.filters[p.index - 1], p.patch, {
+                redesign: p.redesign,
+              });
+              c.filters[p.index - 1] = next;
+              if (p.redesign && next.kind !== 'raw' && !p.patch.coefficients && p.index === 1)
+                c.coefficientCache = 'base';
+            });
           break;
         }
         case 'fusion_filter_adjust': {

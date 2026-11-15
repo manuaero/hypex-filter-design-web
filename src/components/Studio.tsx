@@ -20,6 +20,7 @@ import {
   planManualFilterWheel,
   applyManualFilterWheel,
   type ManualFilterParameter,
+  type ManualFilterPatch,
 } from '../domain/editing';
 import type { HfdManualWheelResult } from '../domain/parameter-wheel';
 import { normalizeHfdManualFrequencyText } from '../domain/manual-frequency';
@@ -180,7 +181,7 @@ import { importBackupFile } from '../hardware/backup-file';
 import { VID, PID, type PanelStatus, type Controls, hex, encodeEq } from '../hardware/codec';
 import ResponsePlot, { COLORS, type PlotMode } from './ResponsePlot';
 import { inputEqAnalysisChannel } from '../domain/input-eq-analysis';
-import { selectedSectionAnalysisChannel } from '../domain/plot-layers';
+import { selectedSectionAnalysisChannel, selectedSectionCoefficients } from '../domain/plot-layers';
 import { analyzeTimeResponses } from '../domain/time-analysis';
 import { fitTimeSeries } from '../domain/time-series';
 import { importChannelMeasurement } from '../domain/hfd-measurement';
@@ -1683,37 +1684,52 @@ export default function Studio() {
         pr.channels.forEach((c) => (c.globalDelayUs = patch.globalDelayUs!));
     });
   };
-  const editFilter = (patch: Partial<Filter>, redesign = false) => {
-    if (tab !== 'Input EQ' && channel.linkedTo !== undefined) {
-      setError('Edit the linked master channel, or unlink this channel.');
-      return;
+  const editFilter = (patch: ManualFilterPatch, redesign = false) => {
+    try {
+      const current = useWorkspace.getState();
+      if (
+        current.slot !== w.slot ||
+        current.preset !== w.preset ||
+        current.channel !== w.channel ||
+        current.filter !== w.filter
+      )
+        throw new Error('The selected filter changed before this edit');
+      const slots: Slot[] = current.linkedEdits ? ['left', 'right'] : [current.slot];
+      const prepare = (p: Project) => {
+        const pr = p.presets[w.preset],
+          c = pr.channels[w.channel];
+        if (tab !== 'Input EQ' && c.linkedTo !== undefined)
+          throw new Error(
+            'A target channel is linked. Edit its master channel or unlink it first.',
+          );
+        const list = tab === 'Input EQ' ? pr.inputEq : c.filters,
+          index = tab === 'Input EQ' ? eqIndex : w.filter,
+          original = list[index],
+          source =
+            tab === 'Input EQ' && original.kind === 'unity' && !original.enabled
+              ? { ...original, kind: 'peak' as const, gain: 0 }
+              : original,
+          next = editManualFilter(source, patch, {
+            redesign,
+            manualFrequency: false,
+            manualParameters: false,
+          });
+        if (tab === 'Input EQ') encodeEq(list.map((f, i) => (i === index ? next : f)));
+        return { list, index, next, channel: c };
+      };
+      // Validate every independent target before the single workspace edit.
+      // Reapply the pure patch to each detached target, never a source vector.
+      for (const slot of slots) prepare(current.documents[slot]);
+      current.editAt(slots, (p) => {
+        const prepared = prepare(p);
+        prepared.list[prepared.index] = prepared.next;
+        if (redesign && prepared.next.kind !== 'raw' && tab !== 'Input EQ' && w.filter === 0)
+          prepared.channel.coefficientCache = 'base';
+      });
+      setError('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
-    w.edit((p) => {
-      const f = (
-        tab === 'Input EQ'
-          ? p.presets[w.preset].inputEq
-          : p.presets[w.preset].channels[w.channel].filters
-      )[tab === 'Input EQ' ? eqIndex : w.filter];
-      if (tab === 'Input EQ' && f.kind === 'unity' && !f.enabled) {
-        f.kind = 'peak';
-        f.gain = 0;
-      }
-      Object.assign(
-        f,
-        editManualFilter(f, patch, {
-          redesign,
-          manualFrequency: false,
-          manualParameters: false,
-        }),
-      );
-      if (redesign && f.kind !== 'raw') {
-        delete f.coefficients;
-        delete f.provenance;
-        if (tab !== 'Input EQ' && w.filter === 0)
-          p.presets[w.preset].channels[w.channel].coefficientCache = 'base';
-      }
-      if (tab === 'Input EQ') encodeEq(p.presets[w.preset].inputEq);
-    });
   };
   const wheelFilter = (
     parameter: ManualFilterParameter,
@@ -1792,19 +1808,22 @@ export default function Studio() {
     });
     return true;
   }
-  function updatePalette(patch: Partial<Filter>, manualParameters = true) {
+  function updatePalette(patch: ManualFilterPatch, manualParameters = true) {
+    if (palette?.eq && patch.coefficients !== undefined)
+      throw new Error('Input EQ does not support custom coefficients');
     setPaletteFailure('');
     if (Object.hasOwn(patch, 'enabled')) paletteEnabledExplicit.current = true;
     setPaletteDraft((old) => {
+      const { coefficients: _coefficients, ...parameters } = patch;
       const next = palette?.eq
-        ? { ...old, ...patch }
+        ? { ...old, ...parameters }
         : editManualFilter(old, patch, {
             manualParameters,
           });
       if (next.kind !== 'raw') {
         delete next.coefficients;
         delete next.provenance;
-      } else next.coefficients = { b0: 1, b1: 0, b2: 0, f1: 0, f2: 0, ...next.coefficients };
+      }
       return next;
     });
   }
@@ -1834,7 +1853,12 @@ export default function Studio() {
           id: old.id,
           sourceId: old.sourceId,
         };
-        if (!palette.eq && palette.index === 0 && !paletteDraft.provenance)
+        if (
+          !palette.eq &&
+          palette.index === 0 &&
+          !paletteDraft.provenance &&
+          (paletteDraft.kind !== 'raw' || palette.mode === 'add')
+        )
           c.coefficientCache = 'base';
         if (palette.eq) encodeEq(list);
         else encodeChannel(c);
@@ -1882,7 +1906,7 @@ export default function Studio() {
   let coefficients: ReturnType<typeof design> | undefined;
   let designError = '';
   try {
-    coefficients = design(filter);
+    coefficients = filter.kind === 'raw' ? selectedSectionCoefficients(filter) : design(filter);
     effectiveSections(channel);
   } catch (e) {
     designError = String(e);
@@ -2304,6 +2328,12 @@ export default function Studio() {
           preset={w.documents[palette.slot].presets[palette.preset]}
           channelIndex={palette.channel}
           sectionIndex={palette.index}
+          contextKey={palette.slots
+            .map(
+              (slot) =>
+                `${slot}:${documentEpochs[slot]}:${w.documents[slot].presets[palette.preset].channels[palette.channel].coefficientCache ?? 'base'}`,
+            )
+            .join('|')}
           targets={palette.slots.map(
             (slot) =>
               `${slot === 'left' ? 'Left' : 'Right'} · Preset ${palette.preset + 1} · ${palette.eq ? 'Input EQ · all outputs' : w.documents[slot].presets[palette.preset].channels[palette.channel].name}`,
@@ -3399,10 +3429,7 @@ export default function Studio() {
                       onChange={(e) => {
                         const kind = e.target.value as FilterKind;
                         if (kind === 'raw') {
-                          editFilter({
-                            kind,
-                            coefficients: coefficients ?? { b0: 1, b1: 0, b2: 0, f1: 0, f2: 0 },
-                          });
+                          editFilter({ kind });
                           setShowRaw(true);
                         } else
                           editFilter(
@@ -3594,25 +3621,32 @@ export default function Studio() {
                   {designError && <div className="inline-error">{designError}</div>}
                   {(showRaw || filter.kind === 'raw') && coefficients && (
                     <div className="coefficients">
-                      {Object.entries(coefficients).map(([key, value]) => (
-                        <label key={key}>
-                          {key}
-                          <input
-                            aria-label={`Coefficient ${key}`}
-                            type="number"
-                            step="0.00000001"
-                            value={value}
-                            readOnly={filter.kind !== 'raw'}
-                            onChange={(e) => {
-                              if (Number.isFinite(e.target.valueAsNumber))
-                                editFilter({
-                                  coefficients: { ...coefficients, [key]: e.target.valueAsNumber },
-                                  kind: 'raw',
-                                });
-                            }}
+                      {(['b0', 'b1', 'b2', 'f1', 'f2'] as const).map((key) =>
+                        filter.kind === 'raw' ? (
+                          <Numeric
+                            key={key}
+                            label={`Coefficient ${key}`}
+                            value={coefficients[key]}
+                            formatValue={String}
+                            deferTextCommit
+                            contextKey={`${w.slot}:${w.preset}:${w.channel}:${filter.id}:${documentEpochs[w.slot]}:${channel.coefficientCache ?? 'base'}:${w.linkedEdits}:${key}`}
+                            step={0.00000001}
+                            begin={w.beginGesture}
+                            end={w.endGesture}
+                            onChange={(value) => editFilter({ coefficients: { [key]: value } })}
                           />
-                        </label>
-                      ))}
+                        ) : (
+                          <label key={key}>
+                            {key}
+                            <input
+                              aria-label={`Coefficient ${key}`}
+                              type="number"
+                              value={coefficients[key]}
+                              readOnly
+                            />
+                          </label>
+                        ),
+                      )}
                       <small>Positive feedback: 1 − f1 z⁻¹ − f2 z⁻²</small>
                     </div>
                   )}

@@ -73,6 +73,8 @@ See [MCP setup and workflow guidance](docs/MCP.md).
 
 ## Checks and build
 
+V41 development-source verification passed **2,742/2,742 tests in 186 files**; the public checkout passed **2,741 tests plus the sole optional-PDF skip, 2,742 total in 186 files**. Both runs used two workers, no test filters or changed timeouts, with unchanged source snapshots and passing typecheck. The public Next production build and Worker packaging passed. Actual Studio acceptance passed **29/29 Chrome checks** against synthetic designs with blocked external I/O; all five raw fields were visible at 1024×768 without document scrolling. The reviewed public export contains **387 source files plus 13 protected public files: 400 total**. Private deployment succeeded with MCP enabled and owner-only access preserved. See [verification](docs/VERIFICATION.md#v41-raw-coefficient-checkpoint).
+
 V40 development-source checks passed **2,691/2,691 tests across 185 files**, with zero failures or pending tests, two workers, unchanged timeouts and all 377 source/test/configuration hashes plus the recorded `.gitignore` unchanged. Actual Studio acceptance passed **29/29 browser checks** in Chrome using genuine tab-scoped wheel input and the shared command console; no blocked I/O attempts were recorded and the 160 bundled product source files stayed unchanged. Native evidence comprises 22 actual HFD saves and a separately labeled synthetic input. Private V40 deployment succeeded with MCP enabled and unchanged owner-only access. Fresh V40 public-checkout checks passed **2,690 passed plus the sole optional-PDF skip: 2,691 total across 185 files**; global typecheck, Next production build and Worker packaging passed. The reviewed export has **385 source files plus 13 protected public files: 398 total**. The V39 results below remain historical evidence. See [verification](docs/VERIFICATION.md#v40-ordinary-parameter-wheel-checkpoint) for the bounded scope.
 
 V39 development-source checks passed **2,627/2,627 tests across 183 files**, with zero failures or pending tests, two workers, unchanged timeouts and an unchanged 373-file source snapshot. Global typecheck and formatting passed. Actual Studio acceptance recorded **38 accepted browser checks**, with one obstructed initial QA assertion retained separately and the corrected command/Undo checks passing. The public checkout passed **2,626 tests plus the sole optional-PDF skip: 2,627 total in 183 files**, typecheck, Next production build and Worker packaging. The private deployment succeeded with MCP enabled and unchanged owner-only access. The V38 results below remain historical evidence.
@@ -100,6 +102,7 @@ The public source does not include vendor executables, firmware bundles or a ven
 - [Getting started](docs/GETTING_STARTED.md)
 - [Architecture and persistence](docs/ARCHITECTURE.md)
 - [MCP server](docs/MCP.md)
+- [Explicit coefficient editing and cache interpretation](docs/HFD-RAW-COEFFICIENT-EDITOR.md)
 - [USB protocol and operation boundaries](docs/USB_PROTOCOL.md)
 - [Native digital User mixer](docs/NATIVE_MIXER.md)
 - [Firmware files and read-only runtime identity](docs/FIRMWARE_RUNTIME.md)

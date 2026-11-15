@@ -180,6 +180,7 @@ export function newFilter(kind: FilterKind = 'unity'): Filter {
     gain: 0,
     frequency2: 2000,
     q2: Math.SQRT1_2,
+    ...(kind === 'raw' ? { coefficients: unity() } : {}),
   };
 }
 export function newProject(name = 'Untitled crossover'): Project {

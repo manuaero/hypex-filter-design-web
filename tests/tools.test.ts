@@ -94,6 +94,176 @@ function setup(options: { microphone?: boolean } = {}) {
   };
   return { execute: createToolExecutor(adapter), state: () => state, remember, adapter };
 }
+it('retains disabled raw coefficients under MCP bypass and latent edits and merges Both patches independently', async () => {
+  const { execute, state, adapter } = setup();
+  const vectors = {
+    left: { b0: 0.12345678901234566, b1: -0.25, b2: 0.0625, f1: 0.4, f2: -0.1 },
+    right: { b0: 0.75, b1: 0.1, b2: -0.02, f1: 0.2, f2: -0.03 },
+  };
+  for (const role of ['left', 'right'] as const) {
+    const c = state().documents[role].presets[0].channels[0];
+    Object.assign(c.filters[0], { kind: 'raw', enabled: false, coefficients: vectors[role] });
+    c.coefficientCache = 'unresolved';
+  }
+  const before = structuredClone(state().documents);
+  const input = { target: 'both', preset: 1, channel: 1, index: 1 };
+  expect(await execute('fusion_filter_set', { ...input, patch: { enabled: true } })).toMatchObject({
+    ok: true,
+  });
+  for (const role of ['left', 'right'] as const)
+    expect(state().documents[role].presets[0].channels[0].filters[0].coefficients).toEqual(
+      vectors[role],
+    );
+  expect(
+    await execute('fusion_filter_set', { ...input, patch: { enabled: false, frequency: 2200 } }),
+  ).toMatchObject({ ok: true });
+  const edit = vi.spyOn(adapter, 'edit');
+  const beforeCoefficientEdit = structuredClone(state().documents);
+  expect(
+    await execute('fusion_filter_set', {
+      ...input,
+      patch: { coefficients: { b0: 0.3333333333333333 } },
+    }),
+  ).toMatchObject({ ok: true });
+  expect(edit).toHaveBeenCalledTimes(1);
+  for (const role of ['left', 'right'] as const) {
+    const c = state().documents[role].presets[0].channels[0];
+    expect(c.filters[0].coefficients).toEqual({ ...vectors[role], b0: 0.3333333333333333 });
+    expect(c.filters[0].enabled).toBe(false);
+    expect(c.coefficientCache).toBe('unresolved');
+    expect(c.filters[0].id).toBe(before[role].presets[0].channels[0].filters[0].id);
+  }
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(beforeCoefficientEdit);
+});
+it('preflights every raw coefficient target, rejects malformed patches, and preserves history on refusal', async () => {
+  const { execute, state, adapter } = setup();
+  for (const role of ['left', 'right'] as const)
+    Object.assign(state().documents[role].presets[0].channels[0].filters[0], {
+      kind: 'raw',
+      coefficients: { b0: 1, b1: 0.1, b2: 0.2, f1: 0.3, f2: -0.1 },
+    });
+  const edit = vi.spyOn(adapter, 'edit');
+  delete state().documents.right.presets[0].channels[0].filters[0].coefficients;
+  const before = structuredClone(state().documents);
+  const input = { target: 'both', preset: 1, channel: 1, index: 1 };
+  for (const coefficients of [{ b0: 0.5 }, {}, { b0: Infinity }, { b0: 0.5, unknown: 1 }])
+    expect(await execute('fusion_filter_set', { ...input, patch: { coefficients } })).toMatchObject(
+      { ok: false },
+    );
+  expect(edit).not.toHaveBeenCalled();
+  expect(state().documents).toEqual(before);
+  state().documents.right.presets[0].channels[0].linkedTo = 1;
+  const linked = structuredClone(state().documents);
+  expect(
+    await execute('fusion_filter_set', { ...input, patch: { coefficients: { b0: 0.5 } } }),
+  ).toMatchObject({ ok: false });
+  expect(edit).not.toHaveBeenCalled();
+  expect(state().documents).toEqual(linked);
+});
+it('creates complete raw sections and converts each role from its retained unbypassed response', async () => {
+  const { execute, state } = setup();
+  const left = state().documents.left.presets[0].channels[0];
+  const right = state().documents.right.presets[0].channels[0];
+  Object.assign(left.filters[0], {
+    kind: 'peak',
+    enabled: false,
+    coefficients: { b0: 0.9, b1: -0.2, b2: 0.1, f1: 0.3, f2: -0.05 },
+  });
+  Object.assign(right.filters[0], {
+    kind: 'peak',
+    enabled: true,
+    coefficients: { b0: 0.8, b1: -0.4, b2: 0.2, f1: 0.1, f2: -0.02 },
+  });
+  const before = structuredClone(state().documents);
+  expect(
+    await execute('fusion_filter_set', {
+      target: 'both',
+      preset: 1,
+      channel: 1,
+      index: 1,
+      patch: { kind: 'raw' },
+    }),
+  ).toMatchObject({ ok: true });
+  for (const role of ['left', 'right'] as const) {
+    const f = state().documents[role].presets[0].channels[0].filters[0];
+    expect(f.coefficients).toEqual(before[role].presets[0].channels[0].filters[0].coefficients);
+    expect(f.enabled).toBe(before[role].presets[0].channels[0].filters[0].enabled);
+  }
+  expect(
+    await execute('fusion_filter_add', {
+      target: 'both',
+      preset: 1,
+      channel: 1,
+      kind: 'raw',
+      frequency: 1000,
+    }),
+  ).toMatchObject({ ok: true });
+  for (const role of ['left', 'right'] as const)
+    expect(state().documents[role].presets[0].channels[0].filters[1].coefficients).toEqual({
+      b0: 1,
+      b1: 0,
+      b2: 0,
+      f1: 0,
+      f2: 0,
+    });
+});
+it('keeps raw no-op history exact and distinguishes partial raw edits from complete diagnostic or parameter overrides', async () => {
+  const { execute, state, adapter } = setup();
+  const c = state().documents.left.presets[0].channels[0];
+  Object.assign(c.filters[0], {
+    kind: 'raw',
+    enabled: false,
+    provenance: 'hfd',
+    coefficients: { b0: 0.12345678901234566, b1: 0, b2: 0, f1: 0, f2: 0 },
+  });
+  const before = structuredClone(state().documents),
+    edit = vi.spyOn(adapter, 'edit');
+  const input = { target: 'left', preset: 1, channel: 1, index: 1 };
+  expect(
+    await execute('fusion_filter_set', {
+      ...input,
+      patch: { coefficients: { b0: 0.12345678901234566 } },
+    }),
+  ).toMatchObject({ ok: true });
+  expect(edit).not.toHaveBeenCalled();
+  expect(state().documents).toEqual(before);
+  delete state().documents.left.presets[0].channels[0].filters[0].provenance;
+  expect(
+    await execute('fusion_filter_set', { ...input, patch: { coefficients: { b1: -0 } } }),
+  ).toMatchObject({ ok: true });
+  expect(
+    Object.is(state().documents.left.presets[0].channels[0].filters[0].coefficients!.b1, -0),
+  ).toBe(true);
+  expect(edit).toHaveBeenCalledTimes(1);
+  edit.mockClear();
+  expect(
+    await execute('fusion_filter_set', {
+      ...input,
+      index: 2,
+      patch: { coefficients: { b0: 0.5 } },
+    }),
+  ).toMatchObject({ ok: false });
+  expect(edit).not.toHaveBeenCalled();
+  const full = { b0: 0.5, b1: 0, b2: 0, f1: 0, f2: 0 };
+  expect(
+    await execute('fusion_filter_set', {
+      ...input,
+      index: 2,
+      patch: { kind: 'peak', coefficients: full },
+    }),
+  ).toMatchObject({ ok: true });
+  expect(state().documents.left.presets[0].channels[0].filters[1]).toMatchObject({
+    kind: 'peak',
+    coefficients: full,
+  });
+  expect(
+    await execute('fusion_preview_filter', {
+      filter: { kind: 'raw', coefficients: { b0: 0.5 } },
+      frequencies: [1000],
+    }),
+  ).toMatchObject({ ok: false });
+});
 it('exposes one strict wheel event with atomic independent Both changes, no-op preservation and one Undo', async () => {
   const { execute, state, adapter } = setup();
   const edits = vi.spyOn(adapter, 'edit');

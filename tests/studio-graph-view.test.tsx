@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createToolExecutor, type ToolAdapter } from '../src/application/tools';
 import type { GraphViewState } from '../src/application/graph-view';
 import type { MagnitudeLayers } from '../src/domain/plot-layers';
+import { selectedSectionCoefficients } from '../src/domain/plot-layers';
 import type { PlotRange } from '../src/domain/plot-viewport';
 import { rectangleZoom, type RectangleZoom } from '../src/components/plot-zoom-geometry';
 import type { PlotViewSnapshot } from '../src/application/plot-view';
@@ -964,6 +965,247 @@ async function typeNumeric(field: HTMLInputElement, text: string) {
     field.dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
+
+it('raw inspector preserves retained bypassed vectors and merges one committed Mirror coefficient independently per role', async () => {
+  const left = { b0: 0.25, b1: 0.125, b2: -0.0625, f1: -0.2, f2: 0.1 };
+  const right = { b0: 0.5, b1: -0.15, b2: 0.03125, f1: 0.3, f2: -0.125 };
+  Object.assign(selectedFilter(), {
+    kind: 'raw',
+    enabled: false,
+    coefficients: left,
+    provenance: 'hfd',
+  });
+  Object.assign(selectedFilter('right'), {
+    kind: 'raw',
+    enabled: true,
+    coefficients: right,
+    provenance: 'hfd',
+  });
+  useWorkspace.setState({ linkedEdits: true });
+  await mount();
+  const before = structuredClone(state().documents);
+  const input = host.querySelector<HTMLInputElement>('[aria-label="Coefficient b0"]')!;
+  expect(input.value).toBe('0.25');
+  for (const [key, value] of Object.entries(left))
+    expect(host.querySelector<HTMLInputElement>(`[aria-label="Coefficient ${key}"]`)!.value).toBe(
+      String(value),
+    );
+  await typeNumeric(input, '0.3751234567890123');
+  expect(state().documents).toEqual(before);
+  await act(async () => input.blur());
+  expect(selectedFilter().coefficients).toEqual({ ...left, b0: 0.3751234567890123 });
+  expect(selectedFilter('right').coefficients).toEqual({ ...right, b0: 0.3751234567890123 });
+  expect(selectedFilter()).toMatchObject({
+    id: before.left.presets[0].channels[0].filters[0].id,
+    enabled: false,
+  });
+  expect(selectedFilter('right')).toMatchObject({
+    id: before.right.presets[0].channels[0].filters[0].id,
+    enabled: true,
+  });
+  expect(state().past).toHaveLength(1);
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+});
+
+it('raw inspector keeps incomplete/nonfinite drafts local and discards them on Escape, role and cache-context changes', async () => {
+  const coefficients = { b0: 0.12345678912345678, b1: 0.125, b2: -0.0625, f1: -0.2, f2: 0.1 };
+  Object.assign(selectedFilter(), { kind: 'raw', enabled: false, coefficients });
+  Object.assign(selectedFilter('right'), {
+    kind: 'raw',
+    coefficients: { ...coefficients, b0: 0.5 },
+  });
+  state().documents.left.presets[0].channels[0].coefficientCache = 'unresolved';
+  await mount();
+  const before = structuredClone(state().documents);
+  let input = host.querySelector<HTMLInputElement>('[aria-label="Coefficient b0"]')!;
+  expect(input.value).toBe(String(coefficients.b0));
+  await typeNumeric(input, '-');
+  expect(input.value).toBe('-');
+  expect(state().documents).toEqual(before);
+  await act(async () => seen.adapter!.choose({ slot: 'right' }));
+  input = host.querySelector<HTMLInputElement>('[aria-label="Coefficient b0"]')!;
+  expect(input.value).toBe('0.5');
+  await act(async () => input.blur());
+  expect(state().documents).toEqual(before);
+  await act(async () => seen.adapter!.choose({ slot: 'left' }));
+  input = host.querySelector<HTMLInputElement>('[aria-label="Coefficient b0"]')!;
+  await typeNumeric(input, '1e309');
+  expect(state().documents).toEqual(before);
+  await act(async () => input.blur());
+  expect(input.value).toBe(String(coefficients.b0));
+  await typeNumeric(input, '0.999');
+  await act(async () =>
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
+  );
+  expect(state().documents).toEqual(before);
+  expect(state().past).toHaveLength(0);
+  input = host.querySelector<HTMLInputElement>('[aria-label="Coefficient b0"]')!;
+  await typeNumeric(input, '0.777');
+  await act(async () => {
+    expect(
+      await createToolExecutor(seen.adapter!)('fusion_channel_cache', {
+        target: 'left',
+        preset: 1,
+        channel: 1,
+        interpretation: 'base',
+      }),
+    ).toMatchObject({ ok: true });
+  });
+  expect(input.value).toBe(String(coefficients.b0));
+  await act(async () => input.blur());
+  expect(selectedFilter().coefficients).toEqual(coefficients);
+});
+
+it.each(['linked', 'missing-vector'] as const)(
+  'raw inspector refuses a %s Mirror destination before changing either role',
+  async (failure) => {
+    const coefficients = { b0: 0.25, b1: 0.125, b2: -0.0625, f1: -0.2, f2: 0.1 };
+    Object.assign(selectedFilter(), { kind: 'raw', enabled: false, coefficients });
+    Object.assign(selectedFilter('right'), {
+      kind: 'raw',
+      coefficients: failure === 'missing-vector' ? undefined : { ...coefficients, b0: 0.5 },
+    });
+    if (failure === 'linked') state().documents.right.presets[0].channels[0].linkedTo = 1;
+    useWorkspace.setState({ linkedEdits: true });
+    await mount();
+    const before = structuredClone(state().documents),
+      revision = state().documentRevision;
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Coefficient b0"]')!;
+    await typeNumeric(input, '0.375');
+    await act(async () => input.blur());
+    expect(state().documents).toEqual(before);
+    expect(state().documentRevision).toBe(revision);
+    expect(state().past).toHaveLength(0);
+    expect(host.textContent).toMatch(
+      failure === 'linked' ? /target channel is linked/i : /complete finite coefficients/i,
+    );
+  },
+);
+
+it('inspector conversion to Free captures each role own unbypassed section and preserves cache interpretation', async () => {
+  Object.assign(selectedFilter(), {
+    kind: 'lowpass2',
+    enabled: false,
+    frequency: 720,
+    q: 0.4,
+    coefficients: undefined,
+  });
+  Object.assign(selectedFilter('right'), {
+    kind: 'peak',
+    enabled: true,
+    frequency: 2300,
+    q: 1.15,
+    gain: 7.5,
+    coefficients: undefined,
+  });
+  state().documents.left.presets[0].channels[0].coefficientCache = 'effective';
+  useWorkspace.setState({ linkedEdits: true });
+  const expected = {
+    left: selectedSectionCoefficients(selectedFilter()),
+    right: selectedSectionCoefficients(selectedFilter('right')),
+  };
+  await mount();
+  const before = structuredClone(state().documents);
+  const select = host.querySelector<HTMLSelectElement>('.exact-filter-type select')!;
+  await act(async () => {
+    select.value = 'raw';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  expect(selectedFilter()).toMatchObject({
+    kind: 'raw',
+    enabled: false,
+    coefficients: expected.left,
+  });
+  expect(selectedFilter('right')).toMatchObject({
+    kind: 'raw',
+    enabled: true,
+    coefficients: expected.right,
+  });
+  expect(expected.left).not.toEqual({ b0: 1, b1: 0, b2: 0, f1: 0, f2: 0 });
+  expect(expected.left).not.toEqual(expected.right);
+  expect(state().documents.left.presets[0].channels[0].coefficientCache).toBe('effective');
+  expect(state().past).toHaveLength(1);
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+});
+
+it('palette Free selection retains the unbypassed parameter response instead of initializing Unity', async () => {
+  Object.assign(selectedFilter(), {
+    kind: 'lowpass2',
+    enabled: false,
+    frequency: 720,
+    q: 0.4,
+    coefficients: undefined,
+  });
+  const expected = selectedSectionCoefficients(selectedFilter());
+  await mount();
+  const before = structuredClone(state().documents);
+  await act(async () => host.querySelector<HTMLButtonElement>('.inspector-shape')!.click());
+  const dialog = host.querySelector<HTMLDialogElement>('dialog[aria-label="Change filter type"]')!;
+  await act(async () =>
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Advanced')!.click(),
+  );
+  await act(async () => dialog.querySelector<HTMLButtonElement>('.shape-choice')!.click());
+  expect(
+    (seen.adapter!.viewState!() as { palette: { draft: { coefficients: unknown } } }).palette.draft
+      .coefficients,
+  ).toEqual(expected);
+  expect(state().documents).toEqual(before);
+  const apply = [...dialog.querySelectorAll('button')].find(
+    (b) => b.textContent === 'Apply shape',
+  )!;
+  expect(apply.disabled).toBe(false);
+  await act(async () => apply.click());
+  expect(selectedFilter()).toMatchObject({ kind: 'raw', enabled: false, coefficients: expected });
+  expect(state().documents.right).toEqual(before.right);
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+});
+
+it('palette raw fields retain exact text precision, stage until Apply and keep ambiguous cache compilation blocked', async () => {
+  const coefficients = { b0: 0.12345678912345678, b1: 0.125, b2: -0.0625, f1: -0.2, f2: 0.1 };
+  Object.assign(selectedFilter(), { kind: 'raw', enabled: false, coefficients, provenance: 'hfd' });
+  state().documents.left.presets[0].channels[0].coefficientCache = 'effective';
+  await mount();
+  const before = structuredClone(state().documents);
+  await act(async () => host.querySelector<HTMLButtonElement>('.inspector-shape')!.click());
+  let dialog = host.querySelector<HTMLDialogElement>('dialog[aria-label="Change filter type"]')!;
+  const input = dialog.querySelector<HTMLInputElement>('[aria-label="b0"]')!;
+  expect(input.value).toBe(String(coefficients.b0));
+  await typeNumeric(input, '0.3751234567890123');
+  expect(state().documents).toEqual(before);
+  await act(async () =>
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
+  );
+  expect(state().documents).toEqual(before);
+  await act(async () =>
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Apply shape')!.click(),
+  );
+  expect(selectedFilter().coefficients).toEqual({ ...coefficients, b0: 0.3751234567890123 });
+  expect(state().documents.left.presets[0].channels[0].coefficientCache).toBe('effective');
+  expect(selectedFilter().enabled).toBe(false);
+  expect(state().past).toHaveLength(1);
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+  await act(async () =>
+    state().editAt(['left'], (p) => {
+      p.presets[0].channels[0].coefficientCache = 'unresolved';
+    }),
+  );
+  const unresolved = structuredClone(state().documents);
+  await act(async () => host.querySelector<HTMLButtonElement>('.inspector-shape')!.click());
+  dialog = host.querySelector<HTMLDialogElement>('dialog[aria-label="Change filter type"]')!;
+  expect(
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Apply shape')!.disabled,
+  ).toBe(true);
+  expect(dialog.textContent).toMatch(/resolve imported channel gain/i);
+  await typeNumeric(dialog.querySelector<HTMLInputElement>('[aria-label="b0"]')!, '0.555');
+  await act(async () =>
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Cancel')!.click(),
+  );
+  expect(state().documents).toEqual(unresolved);
+});
 
 it('actual Q1/Q2 fields retain imported Double precision until explicit dirty commits and isolate Undo', async () => {
   importedAsymmetric();

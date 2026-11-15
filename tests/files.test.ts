@@ -2,7 +2,8 @@
 import { it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { HFD_TEMPLATE } from '../src/domain/hfd-template';
-import { importHfd, exportHfd, resolveGainCache } from '../src/domain/files';
+import { importHfd, exportHfd, parseProject, resolveGainCache } from '../src/domain/files';
+import { importProjectFolder, projectFiles } from '../src/domain/project-io';
 import { newProject, newFilter } from '../src/domain/model';
 import {
   effectiveSections,
@@ -294,6 +295,149 @@ it('requires a decision for inconsistent/custom first coefficients before compil
   expect(() => encodeChannel(c)).toThrow('Resolve');
   resolveGainCache(c, 'effective');
   expect(effectiveSections(c)[0].b0).toBeCloseTo(0.25, 12);
+});
+
+function unresolvedRawProject(configuration: {
+  gain: string;
+  invert: boolean;
+  additionalGain?: string;
+}) {
+  const doc = document(HFD_TEMPLATE),
+    node = doc.querySelector('preset[index="1"] processobj[processtype="ptBiQuad"][groupid="1"]')!,
+    gain = doc.querySelector('preset[index="1"] processobj[processtype="ptGain"][groupid="1"]')!;
+  node.setAttribute('enabled', 'false');
+  for (const [key, value] of Object.entries({
+    filtertype: 'ftFree',
+    b0: '1.28734873744321',
+    b1: '-1.92017414830364',
+    b2: '0.655018836373937',
+    a1: '1.85236017184606',
+    a2: '-0.874553956539528',
+  }))
+    node.querySelector(`:scope > ${key}`)!.setAttribute('value', value);
+  gain.querySelector('gain')!.setAttribute('value', configuration.gain);
+  gain.querySelector('invert')!.setAttribute('value', String(configuration.invert));
+  gain.querySelector('additionalgain')!.setAttribute('value', configuration.additionalGain ?? '0');
+  return importHfd(serialize(doc), 'Unresolved raw cache');
+}
+
+it.each([
+  { gain: '-6', invert: false },
+  { gain: '0', invert: true },
+  { gain: '0', invert: false, additionalGain: '10' },
+])('keeps unresolved raw caches blocked after standalone XML export with %j', (configuration) => {
+  const project = unresolvedRawProject(configuration),
+    before = structuredClone(project),
+    channel = project.presets[0].channels[0],
+    reopened = importHfd(exportHfd(project), 'Reopened raw cache'),
+    actual = reopened.presets[0].channels[0];
+  expect(channel.coefficientCache).toBe('unresolved');
+  expect(() => encodeChannel(channel)).toThrow('Resolve');
+  expect(actual.coefficientCache).toBe('unresolved');
+  expect(actual.filters[0].coefficients).toEqual(channel.filters[0].coefficients);
+  expect(actual.filters[0].enabled).toBe(false);
+  expect(() => encodeChannel(actual)).toThrow('Resolve');
+  expect(project).toEqual(before);
+});
+
+it('scopes unresolved XML cache markers to their own channels across presets', () => {
+  const project = unresolvedRawProject({ gain: '-6', invert: false }),
+    unresolved = project.presets[0].channels[0],
+    resolved = project.presets[0].channels[1];
+  resolved.gain = -3;
+  resolved.filters[0] = {
+    ...newFilter('raw'),
+    coefficients: { b0: 0.5, b1: 0.1, b2: 0, f1: 0.2, f2: 0 },
+  };
+  resolved.coefficientCache = 'base';
+  Object.assign(project.presets[2].channels[2], {
+    coefficientCache: 'unresolved',
+    filters: structuredClone(unresolved.filters),
+    invert: true,
+  });
+  const xml = exportHfd(project),
+    doc = document(xml),
+    reopened = importHfd(xml, 'Mixed cache states');
+  expect(
+    doc.querySelectorAll('processobj[fusion-studio-coefficient-cache="unresolved"]'),
+  ).toHaveLength(2);
+  for (let p = 0; p < 3; p++)
+    for (let ch = 0; ch < 3; ch++) {
+      const expected = project.presets[p].channels[ch],
+        actual = reopened.presets[p].channels[ch];
+      expect(actual.filters[0].coefficients).toEqual(
+        expected.filters[0].coefficients ?? { b0: 1, b1: 0, b2: 0, f1: 0, f2: 0 },
+      );
+      if (expected.coefficientCache === 'unresolved') {
+        expect(actual.coefficientCache).toBe('unresolved');
+        expect(() => encodeChannel(actual)).toThrow('Resolve');
+      } else {
+        expect(actual.coefficientCache).toBe('base');
+        expect(encodeChannel(actual)).toEqual(encodeChannel(expected));
+      }
+    }
+});
+
+it('rejects malformed per-channel XML cache markers instead of treating them as resolved', () => {
+  for (const marker of ['', 'base', 'effective', 'unknown', ' unresolved', 'UNRESOLVED']) {
+    const doc = document(HFD_TEMPLATE);
+    doc
+      .querySelector('processobj[processtype="ptGain"]')!
+      .setAttribute('fusion-studio-coefficient-cache', marker);
+    expect(() => importHfd(serialize(doc), 'Invalid cache marker')).toThrow(/cache marker/);
+  }
+});
+
+it('honors an explicit unresolved marker without a root base marker or a non-unit scalar', () => {
+  const project = unresolvedRawProject({ gain: '0', invert: false, additionalGain: '10' }),
+    original = project.presets[0].channels[0].filters[0].coefficients,
+    doc = document(exportHfd(project)),
+    gain = doc.querySelector('processobj[processtype="ptGain"]')!;
+  doc.documentElement.removeAttribute('fusion-studio-coefficient-cache');
+  for (const additionalGain of ['10', '0']) {
+    gain.querySelector('additionalgain')!.setAttribute('value', additionalGain);
+    const reopened = importHfd(serialize(doc), 'Explicit unresolved cache').presets[0].channels[0];
+    expect(reopened.coefficientCache).toBe('unresolved');
+    expect(reopened.filters[0].coefficients).toEqual(original);
+    expect(() => encodeChannel(reopened)).toThrow('Resolve');
+  }
+});
+
+it('removes the unresolved XML marker only after an explicit gain-cache resolution', () => {
+  const project = unresolvedRawProject({ gain: '-6', invert: false }),
+    marked = exportHfd(project);
+  project.sourceXml = marked;
+  resolveGainCache(project.presets[0].channels[0], 'effective');
+  const exported = exportHfd(project),
+    reopened = importHfd(exported, 'Explicitly resolved');
+  expect(
+    document(exported).querySelectorAll('processobj[fusion-studio-coefficient-cache]'),
+  ).toHaveLength(0);
+  expect(reopened.presets[0].channels[0].coefficientCache).toBe('base');
+  expect(encodeChannel(reopened.presets[0].channels[0])).toEqual(
+    encodeChannel(project.presets[0].channels[0]),
+  );
+});
+
+it('keeps the unresolved guard through JSON, sidecars and stale-sidecar native fallback', () => {
+  const project = unresolvedRawProject({ gain: '-6', invert: false }),
+    files = projectFiles(project),
+    stale = files.map((file) =>
+      file.path === 'Config.xml' ? { ...file, content: file.content + '\n' } : file,
+    );
+  for (const reopened of [
+    parseProject(JSON.stringify(project)),
+    importProjectFolder(files),
+    importProjectFolder(files.filter((file) => file.path !== 'FusionProject.json')),
+    importProjectFolder(stale),
+  ]) {
+    const actual = reopened.presets[0].channels[0];
+    expect(actual.coefficientCache).toBe('unresolved');
+    expect(actual.filters[0].coefficients).toEqual(
+      project.presets[0].channels[0].filters[0].coefficients,
+    );
+    expect(() => encodeChannel(actual)).toThrow('Resolve');
+  }
 });
 it('exports new designs and preserves reordered filters, gain, delay, EQ and FIR', () => {
   const p = newProject('New design'),

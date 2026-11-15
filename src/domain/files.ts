@@ -499,6 +499,10 @@ export function importHfd(xml: string, name: string): Project {
           (n) => n.getAttribute('groupid') === group && n.getAttribute('processtype') === 'ptGain',
         );
       if (!gain) throw new Error(`Missing channel ${group} gain`);
+      const cacheMarker = gain.getAttribute('fusion-studio-coefficient-cache');
+      if (cacheMarker !== null && cacheMarker !== 'unresolved')
+        throw new Error('Invalid browser channel coefficient cache marker');
+      const unresolvedCache = cacheMarker === 'unresolved';
       const path: Element[] = [],
         seen = new Set<string>();
       let node: Element | undefined = gain;
@@ -611,7 +615,7 @@ export function importHfd(xml: string, name: string): Project {
                   ? 'lowshelf2'
                   : 'highshelf2'
                 : (kinds[type] ?? 'raw');
-        const div = i === 0 && !cacheIsBase ? multiplier : 1;
+        const div = i === 0 && !cacheIsBase && !unresolvedCache ? multiplier : 1;
         return {
           ...newFilter(kind),
           enabled: b.getAttribute('enabled') === 'true',
@@ -640,8 +644,14 @@ export function importHfd(xml: string, name: string): Project {
       // including native freshly-added zero-Peak caches that are still Unity
       // instead of parameter-regenerated cancelling poles/zeros. Keep the
       // original cache; near-unit and inverted caches still need detection.
-      channel.coefficientCache = cacheIsBase || multiplier === 1 ? 'base' : 'effective';
-      if (!cacheIsBase && multiplier !== 1 && first.coefficients) {
+      // Browser-only per-channel metadata overrides the root base-cache marker:
+      // an unresolved vector must remain untouched and blocked after XML reopen.
+      channel.coefficientCache = unresolvedCache
+        ? 'unresolved'
+        : cacheIsBase || multiplier === 1
+          ? 'base'
+          : 'effective';
+      if (!unresolvedCache && !cacheIsBase && multiplier !== 1 && first.coefficients) {
         // Read original native Doubles directly: dividing then multiplying to
         // undo speculative de-embedding can change a cache by one ULP.
         const original = {
@@ -793,6 +803,9 @@ export function exportHfd(project: Project): string {
           (n) => n.getAttribute('groupid') === group && n.getAttribute('processtype') === 'ptGain',
         );
       if (!gain) throw new Error('Missing HFD channel gain');
+      if (c.coefficientCache === 'unresolved')
+        gain.setAttribute('fusion-studio-coefficient-cache', 'unresolved');
+      else gain.removeAttribute('fusion-studio-coefficient-cache');
       const path: Element[] = [],
         seen = new Set<string>();
       let cursor: Element | undefined = gain;

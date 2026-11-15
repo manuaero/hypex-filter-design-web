@@ -2,11 +2,13 @@ import { rootChannel } from './links';
 import { normalizeHfdManualFrequencyText } from './manual-frequency';
 import { normalizeHfdManualQText, normalizeHfdManualGainText } from './manual-parameter';
 import { hfdManualParameterWheelNext, type HfdManualWheelResult } from './parameter-wheel';
+import { designHfd } from './hfd-math';
 import {
   CHANNELS,
   emptyFir,
   unity,
   type Channel,
+  type Coefficients,
   type Filter,
   type Preset,
   type Project,
@@ -168,17 +170,67 @@ export function applyManualFilterWheel(project: Project, plan: ManualFilterWheel
   synchronizeFollowers(preset, channelIndex);
 }
 
-/** Explicit manual edits only: never normalize imported or untouched fields. */
+export type ManualFilterPatch = Omit<Partial<Filter>, 'coefficients'> & {
+  coefficients?: Partial<Coefficients>;
+};
+
+const coefficientFields = ['b0', 'b1', 'b2', 'f1', 'f2'] as const;
+function coefficientPatchKeys(input: unknown): (keyof Coefficients)[] {
+  if (!input || typeof input !== 'object' || Array.isArray(input))
+    throw new Error('Coefficient patch must be a nonempty object');
+  const keys = Reflect.ownKeys(input);
+  if (
+    !keys.length ||
+    keys.some(
+      (key) =>
+        typeof key !== 'string' ||
+        !coefficientFields.includes(key as keyof Coefficients) ||
+        !Number.isFinite((input as Coefficients)[key as keyof Coefficients]),
+    )
+  )
+    throw new Error('Coefficient patch requires known fields with finite values');
+  return keys as (keyof Coefficients)[];
+}
+function completeCoefficients(input: unknown): Coefficients {
+  if (coefficientPatchKeys(input).length !== coefficientFields.length)
+    throw new Error('A complete finite coefficient vector is required');
+  return { ...(input as Coefficients) };
+}
+
+/** Full vectors may repair malformed data. Partial edits require a complete
+ * baseline; no missing component is invented, normalized or stability-clamped. */
+export function mergeRawCoefficients(
+  current: Coefficients | undefined,
+  patch: Partial<Coefficients>,
+): Coefficients {
+  const keys = coefficientPatchKeys(patch);
+  if (keys.length === coefficientFields.length) return completeCoefficients(patch);
+  return { ...completeCoefficients(current), ...patch };
+}
+
+function rawCoefficients(current: Filter): Coefficients {
+  if (current.kind === 'unity') return unity();
+  if (current.coefficients !== undefined) return completeCoefficients(current.coefficients);
+  if (current.kind === 'raw') throw new Error('Raw section requires complete finite coefficients');
+  // Bypass is independent of the retained section. Converting a disabled
+  // section must capture its own unbypassed response, without channel gain.
+  return completeCoefficients(designHfd({ ...current, enabled: true }));
+}
+
+/** Explicit manual edits only: never normalize imported or untouched fields.
+ * Conversion to raw captures the current section before simultaneous parameter
+ * patches; those parameters become latent metadata of the retained response. */
 export function editManualFilter(
   current: Filter,
-  patch: Partial<Filter>,
+  patch: ManualFilterPatch,
   {
     redesign = false,
     manualFrequency = true,
     manualParameters = true,
   }: { redesign?: boolean; manualFrequency?: boolean; manualParameters?: boolean } = {},
 ): Filter {
-  const next = { ...current, ...patch, id: current.id };
+  const { coefficients: coefficientPatch, ...parameters } = patch;
+  const next = { ...current, ...parameters, id: current.id };
   if (Object.hasOwn(current, 'sourceId')) next.sourceId = current.sourceId;
   else delete next.sourceId;
   if (manualFrequency) {
@@ -198,10 +250,26 @@ export function editManualFilter(
       next[field] = normalize(String(patch[field]), { previousValue: current[field] }).value;
     }
   }
-  if (redesign && next.kind !== 'raw' && patch.coefficients === undefined) {
+  if (Object.hasOwn(patch, 'coefficients')) {
+    const keys = coefficientPatchKeys(coefficientPatch);
+    if (next.kind !== 'raw' && keys.length !== coefficientFields.length)
+      throw new Error('Partial coefficient edits require a raw section');
+    next.coefficients =
+      keys.length === coefficientFields.length
+        ? completeCoefficients(coefficientPatch)
+        : mergeRawCoefficients(rawCoefficients(current), coefficientPatch!);
+  } else if (next.kind === 'raw') next.coefficients = rawCoefficients(current);
+  else if (redesign) {
     delete next.coefficients;
     delete next.provenance;
   }
+  if (
+    (next.kind === 'raw' || Object.hasOwn(patch, 'coefficients')) &&
+    coefficientFields.some(
+      (key) => !Object.is(current.coefficients?.[key], next.coefficients![key]),
+    )
+  )
+    delete next.provenance;
   return next;
 }
 

@@ -113,6 +113,7 @@ export default function FilterPalette({
   eq = false,
   failure = '',
   frequencyMaximum = 40000,
+  contextKey,
 }: {
   mode: 'add' | 'replace';
   draft: Filter;
@@ -126,8 +127,18 @@ export default function FilterPalette({
   eq?: boolean;
   failure?: string;
   frequencyMaximum?: number;
+  contextKey?: string;
 }) {
-  const parameterContext = JSON.stringify([draft.id, draft.kind, eq, targets]);
+  const parameterContext = JSON.stringify([
+    draft.id,
+    draft.kind,
+    eq,
+    targets,
+    contextKey,
+    preset.channels[channelIndex].id,
+    sectionIndex,
+    preset.channels[channelIndex].coefficientCache,
+  ]);
   const [previewContext, setPreviewContext] = useState<'section' | 'driver'>('section'),
     phaseMode = draft.kind.startsWith('allpass'),
     axisMax = phaseMode ? 180 : 20,
@@ -158,7 +169,8 @@ export default function FilterPalette({
         after.muted = false;
         after.invert = false;
       }
-      if (sectionIndex === 0 && !draft.provenance) after.coefficientCache = 'base';
+      if (sectionIndex === 0 && !draft.provenance && (draft.kind !== 'raw' || mode === 'add'))
+        after.coefficientCache = 'base';
       if (eq) {
         after.coefficientCache = 'base';
         after.delayUs = 0;
@@ -201,13 +213,22 @@ export default function FilterPalette({
     } catch (e) {
       return { before: '', after: '', error: e instanceof Error ? e.message : String(e) };
     }
-  }, [draft, preset, channelIndex, sectionIndex, eq, previewContext, phaseMode, axisMax, axisMin]);
+  }, [
+    draft,
+    preset,
+    channelIndex,
+    sectionIndex,
+    eq,
+    previewContext,
+    phaseMode,
+    axisMax,
+    axisMin,
+    mode,
+  ]);
   const select = (kind: FilterKind) =>
     onDraft({
       kind,
       ...(eq ? { enabled: true } : {}),
-      coefficients: kind === 'raw' ? { b0: 1, b1: 0, b2: 0, f1: 0, f2: 0 } : undefined,
-      provenance: undefined,
     });
   return (
     <dialog
@@ -489,6 +510,9 @@ export default function FilterPalette({
                       key={key}
                       label={key}
                       value={value}
+                      formatValue={String}
+                      deferTextCommit
+                      contextKey={`${parameterContext}:coefficient:${key}`}
                       step={0.000001}
                       onChange={(v) =>
                         onDraft({
