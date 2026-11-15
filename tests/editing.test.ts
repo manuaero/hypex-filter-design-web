@@ -5,7 +5,7 @@ import {
   exchangeBiquads,
   editManualFilter,
 } from '../src/domain/editing';
-import { effectiveSections } from '../src/domain/dsp';
+import { effectiveSections, encodeChannel } from '../src/domain/dsp';
 import { linkChannel } from '../src/domain/links';
 import { newProject, type Channel, type Filter, type Project } from '../src/domain/model';
 
@@ -74,6 +74,50 @@ function localProperties(channel: Channel) {
 }
 
 describe('explicit manual filter commits', () => {
+  it('compiles stable ordinary BQ gains at the native defaults without changing channel gain limits', () => {
+    const channel = newProject().presets[0].channels[0];
+    channel.filters[0] = editManualFilter(
+      channel.filters[0],
+      { kind: 'lowshelf1', enabled: true, frequency: 1000, q: 0.4, gain: -125 },
+      { redesign: true },
+    );
+    expect(channel.filters[0].gain).toBe(-125);
+    expect(encodeChannel(channel)).toHaveLength(512);
+    channel.filters[0] = editManualFilter(
+      channel.filters[0],
+      { kind: 'peak', q: 20, gain: 24 },
+      { redesign: true },
+    );
+    expect(encodeChannel(channel)).toHaveLength(512);
+    channel.gain = -125;
+    expect(() => encodeChannel(channel)).toThrow(/Channel gain/);
+  });
+  it('normalizes only explicit Q/Q2/gain fields as Double and keeps imported and gesture precision separate', () => {
+    const source = varied().presets[0].channels[0].filters[0];
+    Object.assign(source, { enabled: false, q: 0.456789123456789, q2: 1.3, gain: 7.123456789 });
+    const before = structuredClone(source);
+    const next = editManualFilter(source, { q: 0.4005, q2: 99, gain: 7.555 });
+    expect(next).toMatchObject({ q: 0.401, q2: 20, gain: 7.56, enabled: false });
+    expect(next.q).not.toBe(Math.fround(next.q));
+    expect(next.gain).not.toBe(Math.fround(next.gain));
+    expect(next.coefficients).toEqual(before.coefficients);
+    expect(editManualFilter(source, { kind: 'peak' }, { redesign: true })).toMatchObject({
+      q: before.q,
+      q2: before.q2,
+      gain: before.gain,
+      enabled: false,
+    });
+    expect(editManualFilter(source, { gain: 0 }).gain).toBe(0);
+    expect(editManualFilter(source, { q2: 0 }).q2).toBe(1.3);
+    expect(editManualFilter(source, { gain: -999 }).gain).toBe(-125);
+    const gesture = editManualFilter(
+      source,
+      { q: 0.4005, gain: 7.555 },
+      { manualParameters: false },
+    );
+    expect(gesture).toMatchObject({ q: 0.4005, gain: 7.555 });
+    expect(source).toEqual(before);
+  });
   it('normalizes only supplied frequency fields from decimal Text and preserves zero previous-value semantics', () => {
     const source = varied().presets[0].channels[0].filters[0];
     source.frequency = 720;

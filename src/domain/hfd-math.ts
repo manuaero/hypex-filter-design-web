@@ -17,9 +17,14 @@ function roots(w: number, q: number): Complex[] {
       [a, -a * Math.sqrt(d)],
     ];
   const r = Math.sqrt(-d);
+  // Native real-pair construction uses complex 1 +/- i*sqrt(d).
+  // Its constructor99d084 ->99d0b0 applies IsZero4551c0 with inclusive
+  // abs(component)<=1e-12 before the later multiplication by a. Match only
+  // this proved stage; do not snap general roots, coefficients or responses.
+  const term = (value: number) => (Math.abs(value) <= 1e-12 ? 0 : value);
   return [
-    [a * (1 + r), 0],
-    [a * (1 - r), 0],
+    [a * term(1 + r), 0],
+    [a * term(1 - r), 0],
   ];
 }
 const real = (x: number): Complex => [x, 0];

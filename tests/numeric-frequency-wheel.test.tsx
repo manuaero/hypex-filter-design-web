@@ -4,6 +4,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import Numeric from '../src/components/Numeric';
 import { normalizeHfdManualFrequencyText } from '../src/domain/manual-frequency';
+import {
+  normalizeHfdManualQText,
+  normalizeHfdManualGainText,
+  formatHfdManualQValue,
+  formatHfdManualGainValue,
+} from '../src/domain/manual-parameter';
 import { newProject } from '../src/domain/model';
 import { createWorkspaceStore } from '../src/state/workspace';
 import { assertWorkspaceWrite, type WorkspaceEnvelope } from '../src/state/persistence';
@@ -106,6 +112,77 @@ it('defers invalid manual text without gating hover wheel, preserves its Single 
   await act(async () => field().blur());
   expect(changed).toHaveBeenCalledTimes(1);
   expect(field().value).toBe('1068.1');
+});
+
+it.each([
+  ['q', '0.4005', 0.401, '0.401'],
+  ['q', '0', 0.7, '0.700'],
+  ['q', '-1', 0.1, '0.100'],
+  ['q', '99', 20, '20.000'],
+  ['gain', '7.555', 7.56, '7.56'],
+  ['gain', '0', 0, '0.00'],
+  ['gain', '-126', -125, '-125.00'],
+  ['gain', '25', 24, '24.00'],
+])(
+  'commits ordinary %s raw Text %s once as a bounded Double',
+  async (kind, text, expected, shown) => {
+    const q = kind === 'q';
+    const changed = await render(q ? 0.7 : 3, {
+      frequencyWheel: undefined,
+      deferTextCommit: true,
+      normalizeText: (raw, previousValue) =>
+        (q ? normalizeHfdManualQText : normalizeHfdManualGainText)(raw, { previousValue }),
+      formatValue: q ? formatHfdManualQValue : formatHfdManualGainValue,
+    });
+    await act(async () => field().focus());
+    await enter(text);
+    expect(changed).not.toHaveBeenCalled();
+    expect(field().value).toBe(text);
+    await key('Enter');
+    if (q && text === '0') expect(changed).not.toHaveBeenCalled();
+    else expect(changed).toHaveBeenCalledExactlyOnceWith(expected);
+    expect(field().value).toBe(shown);
+    if (text === '0.4005' || text === '7.555') expect(expected).not.toBe(Math.fround(expected));
+  },
+);
+
+it('formats imported Q/gain passively without committing on focus/blur or cancelled text', async () => {
+  const changed = await render(0.456789123456789, {
+    frequencyWheel: undefined,
+    deferTextCommit: true,
+    normalizeText: (raw, previousValue) => normalizeHfdManualQText(raw, { previousValue }),
+    formatValue: formatHfdManualQValue,
+  });
+  expect(field().value).toBe('0.457');
+  await act(async () => field().focus());
+  await act(async () => field().blur());
+  expect(changed).not.toHaveBeenCalled();
+  await act(async () => field().focus());
+  await enter('1.0005');
+  await key('Escape');
+  expect(changed).not.toHaveBeenCalled();
+  expect(field().value).toBe('0.457');
+});
+
+it('keeps generic wheel/arrow bounds separate from ordinary typed Q/gain limits', async () => {
+  const changed = await render(20, {
+    frequencyWheel: undefined,
+    min: 0.1,
+    max: 20,
+    step: 0.01,
+    adjustmentBounds: { min: 0.001, max: 100 },
+    deferTextCommit: true,
+    normalizeText: (raw, previousValue) => normalizeHfdManualQText(raw, { previousValue }),
+    formatValue: formatHfdManualQValue,
+  });
+  await key('ArrowUp');
+  expect(changed).toHaveBeenLastCalledWith(20.01);
+  await wheel(-120);
+  expect(changed).toHaveBeenLastCalledWith(20.020000000000003);
+  await act(async () => field().focus());
+  await enter('99');
+  await act(async () => field().blur());
+  expect(changed).toHaveBeenLastCalledWith(20);
 });
 
 it('drops a pending draft when the role or explicit project replacement context changes', async () => {

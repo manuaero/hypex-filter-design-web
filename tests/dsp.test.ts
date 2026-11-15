@@ -9,6 +9,7 @@ import {
   compileSector,
   effectiveSections,
   channelResponse,
+  stable,
 } from '../src/domain/dsp';
 import { FILTER_NAMES } from '../src/domain/dsp';
 import guiFixtures from './fixtures/hfd-gui-filter-coefficients.json';
@@ -99,6 +100,52 @@ describe('DSP numerical behavior', () => {
     expect(c.b0).toBeCloseTo(1.00079961585211, 12);
     expect(c.f1).toBeCloseTo(1.99837908331296, 12);
     expect(response(design(newFilter('allpass1')), 0)[0]).toBeCloseTo(-1, 12);
+  });
+  it('matches native minimum-gain real-root snapping while refusing its marginal pole', () => {
+    // V39 native10_GainMin: F2300/Q1.15/gain-125, Fs93750. These are
+    // literal native saved coefficients, not generated reference values.
+    const filter = { ...newFilter('peak'), frequency: 2300, q: 1.15, gain: -125 },
+      coefficients = design(filter),
+      native = {
+        b0: 4.49498817986139e-6,
+        b1: -8.32633707729407e-6,
+        b2: 3.93110969729619e-6,
+        f1: 1,
+        f2: 0,
+      };
+    for (const field of ['b0', 'b1', 'b2', 'f1', 'f2'] as const)
+      expect(Math.abs(coefficients[field] - native[field])).toBeLessThan(1e-18);
+    expect(coefficients.f1).toBe(1);
+    expect(stable(coefficients)).toBe(false);
+    // Pure integer representation does not authorize compilation/upload.
+    expect(
+      Array.from(
+        Int32Array.from(
+          [coefficients.b2, coefficients.b1, coefficients.b0, coefficients.f2, coefficients.f1],
+          q24,
+        ),
+      ),
+    ).toEqual([66, -140, 75, 0, 16777216]);
+    const channel = newProject().presets[0].channels[0];
+    channel.filters[0] = filter;
+    expect(() => encodeChannel(channel)).toThrow('Unstable or non-finite biquad');
+    channel.filters[0] = { ...filter, coefficients: native };
+    expect(() => encodeChannel(channel)).toThrow('Unstable or non-finite biquad');
+  });
+  it('keeps the nearby real-pole case and unrelated tiny coefficients unsnapped', () => {
+    // Independent unsnapped Double calculation at-124: 1-sqrt(...) is
+    // 1.053046538856961e-12, above the native inclusive1e-12 threshold.
+    const channel = newProject().presets[0].channels[0];
+    channel.filters[0] = { ...newFilter('peak'), frequency: 2300, q: 1.15, gain: -124 };
+    const coefficients = design(channel.filters[0]);
+    expect(coefficients.f1).toBeCloseTo(0.9999998881448119, 15);
+    expect(coefficients.f1).toBeLessThan(1);
+    expect(stable(coefficients)).toBe(true);
+    expect(() => encodeChannel(channel)).not.toThrow();
+    // This is not a general coefficient floor or an import normalization.
+    const tiny = design({ ...newFilter('lowpass1'), frequency: 1e-9 });
+    expect(tiny.b0).toBeGreaterThan(0);
+    expect(tiny.b0).toBeLessThan(1e-12);
   });
   it('compiles every supported filter kind and bypasses disabled raw data', () => {
     for (const kind of Object.keys(FILTER_NAMES)) {

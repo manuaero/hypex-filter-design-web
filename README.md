@@ -39,6 +39,8 @@ The app works offline for design tasks. No amplifier or agent connection is need
 
 Manual crossover frequency text commits on Enter or blur, using HFD's one-decimal conversion and Single storage. Ordinary edits use 10–50,000 Hz; incomplete drafts stay local, and typing zero retains the previous value. Imported and untouched parameters retain their original precision. Changing shape preserves bypass, including each role's independent Enabled state during linked replacement. Preview Add/Replace still uses an explicit Apply action.
 
+Ordinary crossover Q1/Q2 and BQ gain now share native raw-text commits in the inspector, palette and MCP. Recovered FA503 defaults are Q 0.1–20 with three decimals and gain −125…24 dB with two decimals; both store Double. Zero retains the previous Q, while gain zero is accepted. Passive display leaves imported values untouched. Native nonfinite caches remain rejected, and extreme filters that fail coefficient stability checks remain unprogrammable. See [verification](docs/VERIFICATION.md).
+
 Remove/Delete keeps a section's slot identity, Enabled flag and latent parameters while making its transfer Unity. The broader Reset remains separate, and Add can reuse an enabled Unity slot. A valid fresh native zero-gain Peak cache is accepted when the gain multiplier is exactly one, while nonunit and inverted-cache ambiguity guards remain. See [verification](docs/VERIFICATION.md) for the bounded acceptance and remaining limits.
 
 The v36 development checkpoint compares four actual offline HFD manual-filter states—low/high asymmetric shelves and a high Shelf2 at ±6 dB—using saved coefficients and independent screenshot measurements. It also corrects filter-point positions to follow each section's own unbypassed response. Actual Studio marker and typed-edit checks passed for those fixed states; this is bounded software acceptance, not complete native or hardware parity. See [verification](docs/VERIFICATION.md).
@@ -68,6 +70,8 @@ The server prints a loopback MCP URL, a WebSocket bridge URL and a newly generat
 See [MCP setup and workflow guidance](docs/MCP.md).
 
 ## Checks and build
+
+V39 development-source checks passed **2,627/2,627 tests across 183 files**, with zero failures or pending tests, two workers, unchanged timeouts and an unchanged 373-file source snapshot. Global typecheck and formatting passed. Actual Studio acceptance recorded **38 accepted browser checks**, with one obstructed initial QA assertion retained separately and the corrected command/Undo checks passing. The public checkout passed **2,626 tests plus the sole optional-PDF skip: 2,627 total in 183 files**, typecheck, Next production build and Worker packaging. The private deployment succeeded with MCP enabled and unchanged owner-only access. The V38 results below remain historical evidence.
 
 V38 development-source checks passed **2,560 tests in 181 files**, with zero failures, two workers, unchanged timeouts, global typecheck and formatting passing. Actual Studio acceptance passed **31 bounded browser checks**, covering committed frequency precision, retained bypass, paired shape changes, Undo, imported values and reload. The fresh public checkout passed **2,559 tests plus one optional-PDF skip: 2,560 total in 181 files**, typecheck, Next production build and Worker packaging. The private deployment succeeded with MCP enabled and unchanged owner-only access. See [verification](docs/VERIFICATION.md) for exact scope and retained test corrections.
 

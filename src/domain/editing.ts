@@ -1,5 +1,6 @@
 import { rootChannel } from './links';
 import { normalizeHfdManualFrequencyText } from './manual-frequency';
+import { normalizeHfdManualQText, normalizeHfdManualGainText } from './manual-parameter';
 import {
   CHANNELS,
   emptyFir,
@@ -17,7 +18,8 @@ export function editManualFilter(
   {
     redesign = false,
     manualFrequency = true,
-  }: { redesign?: boolean; manualFrequency?: boolean } = {},
+    manualParameters = true,
+  }: { redesign?: boolean; manualFrequency?: boolean; manualParameters?: boolean } = {},
 ): Filter {
   const next = { ...current, ...patch, id: current.id };
   if (Object.hasOwn(current, 'sourceId')) next.sourceId = current.sourceId;
@@ -29,6 +31,14 @@ export function editManualFilter(
       next[field] = normalizeHfdManualFrequencyText(String(patch[field]), {
         previousValue: current[field],
       }).value;
+    }
+  }
+  if (manualParameters) {
+    for (const field of ['q', 'q2', 'gain'] as const) {
+      if (patch[field] === undefined) continue;
+      if (!Number.isFinite(patch[field])) throw new Error('Manual parameter must be finite');
+      const normalize = field === 'gain' ? normalizeHfdManualGainText : normalizeHfdManualQText;
+      next[field] = normalize(String(patch[field]), { previousValue: current[field] }).value;
     }
   }
   if (redesign && next.kind !== 'raw' && patch.coefficients === undefined) {

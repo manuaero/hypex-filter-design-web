@@ -94,6 +94,75 @@ function setup(options: { microphone?: boolean } = {}) {
   };
   return { execute: createToolExecutor(adapter), state: () => state, remember };
 }
+it('uses shared Double Q/gain commits with independent Both zero values and preserves wider diagnostic validation', async () => {
+  const { execute, state } = setup();
+  Object.assign(state().documents.left.presets[0].channels[0].filters[0], {
+    q: 0.4,
+    q2: 0.7,
+    gain: 6,
+    enabled: false,
+  });
+  Object.assign(state().documents.right.presets[0].channels[0].filters[0], {
+    q: 1.3,
+    q2: 2.5,
+    gain: -6,
+    enabled: true,
+  });
+  const before = structuredClone(state().documents);
+  expect(
+    await execute('fusion_filter_set', {
+      target: 'both',
+      preset: 1,
+      channel: 1,
+      index: 1,
+      patch: { q: 0.4005, q2: 0, gain: 7.555 },
+      redesign: false,
+    }),
+  ).toMatchObject({ ok: true });
+  for (const slot of ['left', 'right'] as const) {
+    const filter = state().documents[slot].presets[0].channels[0].filters[0];
+    expect(filter.q).toBe(0.401);
+    expect(filter.q).not.toBe(Math.fround(filter.q));
+    expect(filter.q2).toBe(before[slot].presets[0].channels[0].filters[0].q2);
+    expect(filter.gain).toBe(7.56);
+    expect(filter.enabled).toBe(before[slot].presets[0].channels[0].filters[0].enabled);
+  }
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(before);
+  expect(
+    await execute('fusion_filter_set', {
+      target: 'left',
+      preset: 1,
+      channel: 1,
+      index: 1,
+      patch: { q: -5, q2: 99, gain: -999 },
+    }),
+  ).toMatchObject({ ok: true });
+  expect(state().documents.left.presets[0].channels[0].filters[0]).toMatchObject({
+    q: 0.1,
+    q2: 20,
+    gain: -125,
+  });
+  expect(state().documents.right).toEqual(before.right);
+  const frozen = structuredClone(state().documents);
+  for (const patch of [{ q: NaN }, { q2: Infinity }, { gain: -Infinity }, { gain: 3, extra: true }])
+    expect(
+      await execute('fusion_filter_set', {
+        target: 'both',
+        preset: 1,
+        channel: 1,
+        index: 1,
+        patch,
+      }),
+    ).toMatchObject({ ok: false });
+  expect(state().documents).toEqual(frozen);
+  expect(
+    await execute('fusion_preview_filter', {
+      filter: { kind: 'lowpass1', frequency: 1000, q: 50, gain: -96 },
+      frequencies: [1000],
+    }),
+  ).toMatchObject({ ok: true });
+});
 it('commits explicit manual frequencies with native Text semantics while preserving independent Both bypass and untouched imports', async () => {
   const { execute, state } = setup();
   const left = state().documents.left.presets[0].channels[0].filters[0];

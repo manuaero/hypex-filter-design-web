@@ -451,6 +451,9 @@ const filterPatch = z
 const manualFilterPatch = filterPatch.extend({
   frequency: finite.optional(),
   frequency2: finite.optional(),
+  q: finite.optional(),
+  q2: finite.optional(),
+  gain: finite.optional(),
 });
 const eqFilterPatch = z
   .object({
@@ -1626,7 +1629,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     'Import a local HFD XML or Fusion JSON design without applying saved device settings.',
   fusion_project_export: 'Return a project file as text for saving.',
   fusion_filter_set:
-    'Edit a manual crossover biquad. Explicit frequency/F2 commits use canonical decimal Text, 10–50,000 Hz bounds, one decimal and Single storage; exact zero retains the previous field value. Untouched imported values stay unchanged. A shape change preserves Enabled unless explicitly supplied. Redesign explicitly replaces preserved imported coefficients.',
+    'Edit a manual crossover biquad. Explicit frequency/F2 commits use canonical decimal Text, 10–50,000 Hz bounds, one decimal and Single storage. Ordinary FA Q/Q2 commits use 0.1–20, three decimals and Double storage; BQ gain uses −125…24 dB, two decimals and Double storage. Exact zero retains the previous frequency/Q field value; gain zero is accepted. These are recovered profile defaults, not all native custom preference settings. Untouched imported values stay unchanged. A shape change preserves Enabled unless explicitly supplied. Redesign explicitly replaces preserved imported coefficients.',
   fusion_biquad_exchange:
     'Exchange two same-channel biquad parameter sets while preserving physical graph slots and read-only linked channels.',
   fusion_channel_copy:

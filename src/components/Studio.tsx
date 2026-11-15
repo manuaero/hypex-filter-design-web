@@ -19,6 +19,14 @@ import {
   editManualFilter,
 } from '../domain/editing';
 import { normalizeHfdManualFrequencyText } from '../domain/manual-frequency';
+import {
+  normalizeHfdManualQText,
+  normalizeHfdManualGainText,
+  formatHfdManualQValue,
+  formatHfdManualGainValue,
+  HFD_MANUAL_Q_BOUNDS,
+  HFD_MANUAL_GAIN_BOUNDS,
+} from '../domain/manual-parameter';
 import InteractivePlot, { type PlotRange } from './InteractivePlot';
 import { createPlotViewController } from '../application/plot-view';
 import {
@@ -1686,7 +1694,14 @@ export default function Studio() {
         f.kind = 'peak';
         f.gain = 0;
       }
-      Object.assign(f, editManualFilter(f, patch, { redesign, manualFrequency: false }));
+      Object.assign(
+        f,
+        editManualFilter(f, patch, {
+          redesign,
+          manualFrequency: false,
+          manualParameters: false,
+        }),
+      );
       if (redesign && f.kind !== 'raw') {
         delete f.coefficients;
         delete f.provenance;
@@ -1729,11 +1744,15 @@ export default function Studio() {
     });
     return true;
   }
-  function updatePalette(patch: Partial<Filter>) {
+  function updatePalette(patch: Partial<Filter>, manualParameters = true) {
     setPaletteFailure('');
     if (Object.hasOwn(patch, 'enabled')) paletteEnabledExplicit.current = true;
     setPaletteDraft((old) => {
-      const next = palette?.eq ? { ...old, ...patch } : editManualFilter(old, patch);
+      const next = palette?.eq
+        ? { ...old, ...patch }
+        : editManualFilter(old, patch, {
+            manualParameters,
+          });
       if (next.kind !== 'raw') {
         delete next.coefficients;
         delete next.provenance;
@@ -2233,7 +2252,7 @@ export default function Studio() {
         <FilterPalette
           mode={palette.mode}
           draft={paletteDraft}
-          onDraft={updatePalette}
+          onDraft={(patch) => updatePalette(patch, false)}
           preset={w.documents[palette.slot].presets[palette.preset]}
           channelIndex={palette.channel}
           sectionIndex={palette.index}
@@ -3396,8 +3415,17 @@ export default function Studio() {
                       precision={3}
                       value={filter.q}
                       onChange={(q) => editFilter({ q }, true)}
-                      min={0.001}
-                      max={100}
+                      deferTextCommit={tab !== 'Input EQ'}
+                      normalizeText={
+                        tab === 'Input EQ'
+                          ? undefined
+                          : (text, previousValue) =>
+                              normalizeHfdManualQText(text, { previousValue })
+                      }
+                      formatValue={tab === 'Input EQ' ? undefined : formatHfdManualQValue}
+                      min={tab === 'Input EQ' ? 0.001 : HFD_MANUAL_Q_BOUNDS.min}
+                      max={tab === 'Input EQ' ? 100 : HFD_MANUAL_Q_BOUNDS.max}
+                      adjustmentBounds={tab === 'Input EQ' ? undefined : { min: 0.001, max: 100 }}
                       step={0.01}
                     />
                   )}
@@ -3409,9 +3437,18 @@ export default function Studio() {
                       contextKey={`${w.slot}:${w.preset}:${w.channel}:${tab}:${filter.id}:${filter.kind}:${documentEpochs[w.slot]}:gain`}
                       value={filter.gain}
                       onChange={(gain) => editFilter({ gain }, true)}
+                      deferTextCommit={tab !== 'Input EQ'}
+                      normalizeText={
+                        tab === 'Input EQ'
+                          ? undefined
+                          : (text, previousValue) =>
+                              normalizeHfdManualGainText(text, { previousValue })
+                      }
+                      formatValue={tab === 'Input EQ' ? undefined : formatHfdManualGainValue}
                       unit="dB"
-                      min={tab === 'Input EQ' ? -32 : -60}
-                      max={tab === 'Input EQ' ? 32 : 60}
+                      min={tab === 'Input EQ' ? -32 : HFD_MANUAL_GAIN_BOUNDS.min}
+                      max={tab === 'Input EQ' ? 32 : HFD_MANUAL_GAIN_BOUNDS.max}
+                      adjustmentBounds={tab === 'Input EQ' ? undefined : { min: -60, max: 60 }}
                       step={0.1}
                     />
                   )}
@@ -3456,6 +3493,14 @@ export default function Studio() {
                       precision={3}
                       value={filter.q2}
                       onChange={(q2) => editFilter({ q2 }, true)}
+                      deferTextCommit
+                      normalizeText={(text, previousValue) =>
+                        normalizeHfdManualQText(text, { previousValue })
+                      }
+                      formatValue={formatHfdManualQValue}
+                      min={HFD_MANUAL_Q_BOUNDS.min}
+                      max={HFD_MANUAL_Q_BOUNDS.max}
+                      adjustmentBounds={{}}
                       step={0.01}
                     />
                   </>

@@ -2,6 +2,29 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V39 manual Q/gain implementation checkpoint
+
+Eighteen completed offline HFD 5.2.4.24 saves cover ordinary Q1/Q2 and BQ gain commits, type-entry cache behavior, and first-/second-order all-pass cases. Actual Q text `0.4005` committed to Double 0.401; `0.0001` clamped to 0.100 and `100.0001` to 20.000. Q zero restored the previous value. Asymmetric Q2 `1.3005` committed to Double 1.301, and its following zero save was byte-identical. Gain `7.555` committed to Double 7.56; zero was accepted; `-125.0001` and `24.0001` clamped to −125.00 and 24.00. The recovered ordinary profile defaults are Q 0.1–20 and BQ gain −125…24 dB, separate from input EQ, channel gain and hardware controls.
+
+Raw Text conversion, passive Double display and the model are distinct. The shared bounded Extended parser/formatter now handles manual frequency and Q/gain commits without duplicating the parser. Frequency retains Single storage; Q/gain retain Double. Opening, selecting or displaying an imported field does not normalize its canonical value. Existing wheel/arrow behavior remains a browser extension rather than new native gesture acceptance.
+
+Direct HP2-to-Peak at Q0.4/gain0 also saved NaN coefficients. The earlier Unity-dropdown observation is therefore not exclusive; a later Q commit repaired the native cache. The importer still refuses nonfinite values. All-pass acceptance uses saved coefficients and independent complex-response/Q24 predictions; phase screenshots remain qualitative and are not numeric phase-raster or physical readback evidence.
+
+The minimum-gain Peak exposed a specific native arithmetic stage: complex construction zeroes the tiny real-pair `1−sqrt(...)` term when its absolute value is at most `1e-12`, before a later large multiplication. The implementation now matches only that proved factor stage, reproducing the native saved coefficients within `1e-18`. No global complex zeroing, imported-cache rewrite or tolerance relaxation was introduced. Both imported and regenerated versions have a pole exactly at one and are correctly refused by the strict compiler guard. Accepted −125 dB metadata is not a claim that this Peak is stable or programmable.
+
+| V39 check | Current result |
+|---|---|
+| Full development-source suite | **2,627 passed / 2,627 total across 183 files**, zero failures/pending, two workers, no omissions or timeout increases. |
+| Frozen source | All **373 source/test/configuration files**, including 17 reviewed changed paths, remained unchanged during the full run. |
+| Global typecheck / formatting | Passed for the owner-frozen source used by the full run. |
+| Actual Studio browser acceptance | **38 accepted checks** across two passes; one obstructed initial assertion is retained separately. Ignored QA fixes changed no production source. |
+| Fresh public tests, typecheck and production/Worker builds | **2,626 passed plus the sole optional-PDF skip: 2,627 total across 183 files**; global typecheck, Next production build and Worker packaging passed. The reviewed export has **381 source files plus 13 public docs/assets: 394 files**. |
+| Amplifier programming / acoustics | Not established by this software checkpoint. |
+
+The registry remains **89 commands**. The initial browser report retains test-disclosure, locator and tab-binding issues. One final assertion initially ran after a mouse click obstructed by the ignored QA status panel, with no result or project/history change. The observed command then succeeded with keyboard Space, the same assertion passed, and Undo restored both projects. This is 38 accepted checks plus one retained unsuccessful attempt, not 39 initially passing assertions. Harness corrections changed no production source. These checks exercise the actual UI/shared command layer; they do not prove MCP transport or browser download delivery.
+
+Private publication succeeded with MCP enabled and unchanged owner-only access. Public Worker/client smoke checks confirmed the optional-manual fallback without bundling vendor PDFs. Source and build privacy scans passed all five categories. These results do not establish two-amplifier behavior, new firmware support, hardware programming or complete HFD equivalence. The dated earlier physical baseline remains separate.
+
 ## V38 manual frequency and retained-bypass checkpoint
 
 Nine new offline HFD 5.2.4.24 checkpoints cover ordinary frequency commits,

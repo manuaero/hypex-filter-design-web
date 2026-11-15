@@ -5,6 +5,14 @@ import { type Filter, type FilterKind, type Preset } from '../domain/model';
 import { design, response, presetResponse, encodeChannel, FILTER_NAMES } from '../domain/dsp';
 import Numeric from './Numeric';
 import { normalizeHfdManualFrequencyText } from '../domain/manual-frequency';
+import {
+  normalizeHfdManualQText,
+  normalizeHfdManualGainText,
+  formatHfdManualQValue,
+  formatHfdManualGainValue,
+  HFD_MANUAL_Q_BOUNDS,
+  HFD_MANUAL_GAIN_BOUNDS,
+} from '../domain/manual-parameter';
 
 export const FILTER_LABELS: Record<FilterKind, string> = {
   unity: 'Empty section',
@@ -385,8 +393,16 @@ export default function FilterPalette({
                   label="Amount"
                   value={draft.gain}
                   onChange={(gain) => onDraft({ gain })}
-                  min={eq ? -32 : -60}
-                  max={eq ? 32 : 60}
+                  deferTextCommit={!eq}
+                  normalizeText={
+                    eq
+                      ? undefined
+                      : (text, previousValue) => normalizeHfdManualGainText(text, { previousValue })
+                  }
+                  formatValue={eq ? undefined : formatHfdManualGainValue}
+                  min={eq ? -32 : HFD_MANUAL_GAIN_BOUNDS.min}
+                  max={eq ? 32 : HFD_MANUAL_GAIN_BOUNDS.max}
+                  adjustmentBounds={eq ? undefined : { min: -60, max: 60 }}
                   unit="dB"
                   step={0.5}
                 />
@@ -397,8 +413,16 @@ export default function FilterPalette({
                   label={draft.kind === 'asymmetric' ? 'Zero Q' : 'Width · Q'}
                   value={draft.q}
                   onChange={(q) => onDraft({ q })}
-                  min={0.001}
-                  max={100}
+                  deferTextCommit={!eq}
+                  normalizeText={
+                    eq
+                      ? undefined
+                      : (text, previousValue) => normalizeHfdManualQText(text, { previousValue })
+                  }
+                  formatValue={eq ? undefined : formatHfdManualQValue}
+                  min={eq ? 0.001 : HFD_MANUAL_Q_BOUNDS.min}
+                  max={eq ? 100 : HFD_MANUAL_Q_BOUNDS.max}
+                  adjustmentBounds={eq ? undefined : { min: 0.001, max: 100 }}
                   step={0.05}
                 />
               )}
@@ -424,8 +448,14 @@ export default function FilterPalette({
                     label="Pole Q"
                     value={draft.q2}
                     onChange={(q2) => onDraft({ q2 })}
-                    min={0.001}
-                    max={100}
+                    deferTextCommit
+                    normalizeText={(text, previousValue) =>
+                      normalizeHfdManualQText(text, { previousValue })
+                    }
+                    formatValue={formatHfdManualQValue}
+                    min={HFD_MANUAL_Q_BOUNDS.min}
+                    max={HFD_MANUAL_Q_BOUNDS.max}
+                    adjustmentBounds={{ min: 0.001, max: 100 }}
                     step={0.05}
                   />
                   <label className="field-label">

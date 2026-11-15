@@ -129,11 +129,15 @@ beforeEach(async () => {
   Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: vi.fn() });
   Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
     configurable: true,
-    value: vi.fn(),
+    value: vi.fn(function (this: HTMLDialogElement) {
+      this.setAttribute('open', '');
+    }),
   });
   Object.defineProperty(HTMLDialogElement.prototype, 'close', {
     configurable: true,
-    value: vi.fn(),
+    value: vi.fn(function (this: HTMLDialogElement) {
+      this.removeAttribute('open');
+    }),
   });
   await ensureWorkspaceHydrated();
   useWorkspace.setState({
@@ -960,6 +964,144 @@ async function typeNumeric(field: HTMLInputElement, text: string) {
     field.dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
+
+it('actual Q1/Q2 fields retain imported Double precision until explicit dirty commits and isolate Undo', async () => {
+  importedAsymmetric();
+  Object.assign(selectedFilter(), { q: 0.456789123456789, q2: 1.3, enabled: false });
+  const before = structuredClone(state().documents);
+  await mount();
+  const inspector = host.querySelector('#selected-filter-inspector')!;
+  const zero = inspector.querySelector<HTMLInputElement>('[aria-label="Zero Q"]')!;
+  const pole = inspector.querySelector<HTMLInputElement>('[aria-label="Pole Q"]')!;
+  expect(zero.value).toBe('0.457');
+  expect(pole.value).toBe('1.300');
+  expect(pole.getAttribute('aria-valuemin')).toBe('0.1');
+  expect(pole.getAttribute('aria-valuemax')).toBe('20');
+  await act(async () => zero.focus());
+  await act(async () => zero.blur());
+  expect(state().documents).toEqual(before);
+  await typeNumeric(zero, '0.4005');
+  expect(state().documents).toEqual(before);
+  expect(zero.value).toBe('0.4005');
+  await act(async () => zero.blur());
+  expect(selectedFilter().q).toBe(0.401);
+  expect(selectedFilter().q).not.toBe(Math.fround(selectedFilter().q));
+  expect(selectedFilter().q2).toBe(1.3);
+  expect(selectedFilter().enabled).toBe(false);
+  expect(state().documents.right).toEqual(before.right);
+  expect(state().past).toHaveLength(1);
+  await act(async () => seen.adapter!.undo());
+  expect(state().documents).toEqual(before);
+  await typeNumeric(pole, '0');
+  await act(async () => pole.blur());
+  expect(state().documents).toEqual(before);
+  await typeNumeric(pole, '999');
+  await act(async () => pole.blur());
+  expect(selectedFilter().q2).toBe(20);
+});
+
+it('actual BQ gain uses raw two-decimal Double commits and native typed limits without changing the other project', async () => {
+  Object.assign(selectedFilter(), { kind: 'peak', gain: 3.123456789, enabled: false });
+  const before = structuredClone(state().documents);
+  await mount();
+  const gain = host.querySelector<HTMLInputElement>(
+    '#selected-filter-inspector [aria-label="Filter gain"]',
+  )!;
+  expect(gain.value).toBe('3.12');
+  await act(async () => gain.focus());
+  await act(async () => gain.blur());
+  expect(state().documents).toEqual(before);
+  await typeNumeric(gain, '7.555');
+  expect(state().documents).toEqual(before);
+  await act(async () => gain.blur());
+  expect(selectedFilter()).toMatchObject({ gain: 7.56, enabled: false });
+  expect(selectedFilter().gain).not.toBe(Math.fround(selectedFilter().gain));
+  expect(gain.value).toBe('7.56');
+  expect(state().documents.right).toEqual(before.right);
+  await typeNumeric(gain, '-126');
+  await act(async () => gain.blur());
+  expect(selectedFilter().gain).toBe(-125);
+  expect(gain.value).toBe('-125.00');
+  await typeNumeric(gain, '0');
+  await act(async () => gain.blur());
+  expect(selectedFilter().gain).toBe(0);
+  expect(gain.value).toBe('0.00');
+});
+
+it('actual palette commits Q/gain draft Text before Apply and preserves mixed Enabled states in Both', async () => {
+  Object.assign(selectedFilter(), { kind: 'peak', enabled: false, q: 0.4, gain: 6 });
+  Object.assign(selectedFilter('right'), { kind: 'peak', enabled: true, q: 1.3, gain: -6 });
+  useWorkspace.setState({ linkedEdits: true });
+  const before = structuredClone(state().documents);
+  await mount();
+  await act(async () => host.querySelector<HTMLButtonElement>('.inspector-shape')!.click());
+  const dialog = host.querySelector<HTMLDialogElement>('dialog[aria-label="Change filter type"]')!;
+  const q = dialog.querySelector<HTMLInputElement>('[aria-label="Width · Q"]')!;
+  const gain = dialog.querySelector<HTMLInputElement>('[aria-label="Amount"]')!;
+  await typeNumeric(q, '0.4005');
+  expect(state().documents).toEqual(before);
+  await act(async () => q.blur());
+  expect(q.value).toBe('0.401');
+  await typeNumeric(gain, '7.555');
+  expect(state().documents).toEqual(before);
+  await act(async () => gain.blur());
+  expect(gain.value).toBe('7.56');
+  await act(async () =>
+    [...dialog.querySelectorAll('button')]
+      .find((button) => button.textContent === 'Apply shape')!
+      .click(),
+  );
+  expect(selectedFilter()).toMatchObject({ q: 0.401, gain: 7.56, enabled: false });
+  expect(selectedFilter('right')).toMatchObject({ q: 0.401, gain: 7.56, enabled: true });
+  expect(state().past).toHaveLength(1);
+  await act(async () => seen.adapter!.undo());
+  expect(state().documents).toEqual(before);
+});
+
+it('palette generic Q/gain wheels retain browser extension bounds while raw manual commands use native defaults', async () => {
+  Object.assign(selectedFilter(), {
+    kind: 'peak',
+    enabled: true,
+    frequency: 1000,
+    q: 20,
+    gain: 24,
+  });
+  await mount();
+  const before = structuredClone(state().documents);
+  await act(async () => host.querySelector<HTMLButtonElement>('.inspector-shape')!.click());
+  const dialog = host.querySelector<HTMLDialogElement>('dialog[aria-label="Change filter type"]')!;
+  const q = dialog.querySelector<HTMLInputElement>('[aria-label="Width · Q"]')!;
+  const gain = dialog.querySelector<HTMLInputElement>('[aria-label="Amount"]')!;
+  const frequency = dialog.querySelector<HTMLInputElement>('[aria-label="Frequency"]')!;
+  await spin(frequency, -120);
+  const paletteDraft = () =>
+    (seen.adapter!.viewState!() as { palette: { draft: { frequency: number } } }).palette.draft;
+  expect(paletteDraft().frequency).toBe(1068.0999755859375);
+  expect(paletteDraft().frequency).not.toBe(1068.1);
+  await act(async () => q.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true })));
+  await act(async () =>
+    gain.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true })),
+  );
+  expect(q.value).toBe('20.050');
+  expect(gain.value).toBe('24.50');
+  expect(state().documents).toEqual(before);
+  const execute = (name: string, args: unknown) => createToolExecutor(seen.adapter!)(name, args);
+  await act(async () => {
+    await execute('fusion_filter_palette', { action: 'update', draft: { q: 20.05, gain: 24.5 } });
+  });
+  expect(q.value).toBe('20.000');
+  expect(gain.value).toBe('24.00');
+  expect(paletteDraft().frequency).toBe(1068.0999755859375);
+  expect(state().documents).toEqual(before);
+  await act(async () => {
+    await execute('fusion_filter_palette', { action: 'update', draft: { frequency: 106.2 } });
+  });
+  await act(async () =>
+    frequency.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })),
+  );
+  expect(paletteDraft().frequency).toBe(107.19999694824219);
+  expect(paletteDraft().frequency).not.toBe(107.2);
+});
 
 it('actual inspector retains raw F2 drafts until commit, uses 50k manual bounds independently of viewport, and preserves imported values/Undo', async () => {
   importedAsymmetric();

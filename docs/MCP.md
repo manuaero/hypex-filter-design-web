@@ -76,7 +76,7 @@ Add a design section to an explicit destination:
 
 That design edit does not upload the section. Inspect state and use Undo when appropriate. Hardware upload is a separate operation.
 
-## Manual frequency commits and retained bypass
+## Manual crossover parameter commits and retained bypass
 
 `fusion_filter_set`, `fusion_filter_add` and manual palette draft edits use the
 same ordinary crossover frequency normalizer as the visible fields. Numeric
@@ -86,6 +86,23 @@ zero uses the corresponding role's previous field value. Unsupported text,
 NaN and Infinity are rejected. Diagnostic `fusion_preview_filter` and input EQ
 retain their separate contracts.
 
+`fusion_filter_set` Q/Q2 and BQ gain patches, and manual palette updates, also use shared raw-text normalization. Ordinary FA503 defaults are Q **0.1–20**, three decimals, and BQ gain **−125…24 dB**, two decimals. Both store IEEE Double. Numeric command arguments deliberately use `String(number)` as canonical decimal text: `q: 0.4005` commits to 0.401, while `gain: 7.555` commits to 7.56. Exact Q zero reuses that field's own previous Value before three-decimal formatting for each target; gain zero is accepted. This explicit commit can therefore round higher-precision imported Q metadata. Only supplied fields are normalized. These defaults do not import every native custom preference or replace the separate input-EQ, channel-gain, diagnostic or hardware contracts.
+
+```json
+{
+  "name": "fusion_filter_set",
+  "arguments": {
+    "target": "left",
+    "preset": 1,
+    "channel": 1,
+    "index": 1,
+    "patch": { "q": 0.4005, "gain": 7.555 }
+  }
+}
+```
+
+This edits the design; it does not send an amplifier write. A numerically stored value can still fail compilation. The observed native Peak at −125 dB has a pole exactly at one; imported and regenerated versions are both refused by the unchanged stability guard. No invalid native coefficient is silently repaired to make an Upload succeed.
+
 Only explicitly supplied frequencies are normalized. Opening an imported
 project, inspecting it, or changing only its kind does not rewrite latent
 frequency precision. Type changes preserve Enabled unless it is explicitly
@@ -93,6 +110,8 @@ provided. A Both palette replacement retains each destination's independent
 Enabled flag; an explicit draft Enabled value overrides both. Add creates an
 enabled new section. Explicit Unity produces a valid Unity response; the
 native dropdown's observed Boost/Cut/NaN edge case is not reproduced.
+
+V39 also observed a NaN cache after a direct HP2-to-Peak type change, so this is not a Unity-only native edge case. A later native Q edit repaired that saved cache. Nonfinite imported caches remain refused; finite zero-gain Peak cancellation is a separate accepted case.
 
 These are design edits. Apply commits a preview to the design; Upload remains
 a separate amplifier action.

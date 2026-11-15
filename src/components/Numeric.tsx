@@ -17,6 +17,8 @@ export default function Numeric({
   commitOnly = false,
   deferTextCommit = false,
   normalizeText,
+  formatValue,
+  adjustmentBounds,
   begin,
   end,
   precision = 8,
@@ -38,6 +40,10 @@ export default function Numeric({
   /** Keep typed text local until blur/Enter without requiring focus for wheel edits. */
   deferTextCommit?: boolean;
   normalizeText?: (text: string, previousValue: number) => { text: string; value: number };
+  /** Passive display only; never commits or bounds the canonical value. */
+  formatValue?: (value: number) => string;
+  /** Separate bounds for existing wheel/arrow extensions, independent of typed commits. */
+  adjustmentBounds?: { min?: number; max?: number };
   begin?: () => void;
   end?: (cancel?: boolean) => void;
   precision?: number;
@@ -49,11 +55,13 @@ export default function Numeric({
   contextKey?: string | number;
 }) {
   const format = (n: number) =>
-    frequencyWheel === 'advanced'
-      ? formatHfdAdvancedFrequency(n)
-      : Number.isFinite(n)
-        ? String(+n.toFixed(precision))
-        : '';
+    formatValue && Number.isFinite(n)
+      ? formatValue(n)
+      : frequencyWheel === 'advanced'
+        ? formatHfdAdvancedFrequency(n)
+        : Number.isFinite(n)
+          ? String(+n.toFixed(precision))
+          : '';
   const [draft, setDraft] = useState(format(value)),
     [focused, setFocused] = useState(false);
   const input = useRef<HTMLInputElement>(null),
@@ -74,7 +82,7 @@ export default function Numeric({
     liveEmission.current = undefined;
     previousValue.current = value;
     setDraft(format(value));
-  }, [contextKey, value, frequencyWheel, precision]);
+  }, [contextKey, value, frequencyWheel, precision, formatValue]);
   useLayoutEffect(() => {
     if (previousValue.current === value) return;
     previousValue.current = value;
@@ -86,15 +94,19 @@ export default function Numeric({
       submitted.current = undefined;
       setDraft(format(value));
     }
-  }, [value, focused, frequencyWheel, precision]);
+  }, [value, focused, frequencyWheel, precision, formatValue]);
   useEffect(() => {
     // A new canonical value (including external Undo) ends submission deduplication.
     // Otherwise repeating the same wheel edit after Undo could be suppressed.
     submitted.current = undefined;
     if (!focused) setDraft(format(value));
-  }, [value, focused, frequencyWheel, precision]);
+  }, [value, focused, frequencyWheel, precision, formatValue]);
   const parse = (s: string) => (s.trim() === '' ? NaN : Number(s.replace(',', '.')));
-  const commit = (n: number, bounds = { min, max }, boundedAlready = false) => {
+  const commit = (
+    n: number,
+    bounds: { min?: number; max?: number } = { min, max },
+    boundedAlready = false,
+  ) => {
     if (draftContext.current !== contextKey) {
       dirty.current = false;
       setDraft(format(value));
@@ -114,9 +126,13 @@ export default function Numeric({
   const adjust = (direction: -1 | 1, wheel = false) => {
     const n = parse(draft),
       current = Number.isFinite(n) ? n : value,
+      ordinaryBounds = adjustmentBounds ?? { min, max },
       bounds = wheel
-        ? { min: frequencyWheelMin ?? min, max: frequencyWheelMax ?? max }
-        : { min, max };
+        ? {
+            min: frequencyWheelMin ?? ordinaryBounds.min,
+            max: frequencyWheelMax ?? ordinaryBounds.max,
+          }
+        : ordinaryBounds;
     commit(
       wheel && frequencyWheel === 'advanced'
         ? hfdAdvancedFrequencyWheelNext(draft === format(value) ? value : current, direction, {
