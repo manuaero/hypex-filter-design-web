@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { newFilter, newProject, unity, type Channel } from '../src/domain/model';
+import { newFilter, newProject, unity, type Channel, type Filter } from '../src/domain/model';
 import { channelResponse, response } from '../src/domain/dsp';
 import { designHfd } from '../src/domain/hfd-math';
 import { useHfdNative } from '../src/domain/hfd-measurement';
@@ -8,8 +8,10 @@ import {
   selectedSectionCoefficients,
   selectedSectionResponse,
   selectedSectionAnalysisChannel,
+  filterMarkerAnchor,
   buildMagnitudeLayers,
 } from '../src/domain/plot-layers';
+import manualNative from './fixtures/hfd-gui-manual-filter-coefficients.json';
 
 function measurement(channel: Channel, amplitude = 1, phase = 0) {
   channel.measurement = {
@@ -186,6 +188,95 @@ describe('native isolated selected section', () => {
     expect(
       selectedSectionAnalysisChannel(channel, channel.filters[0], 0).filters[0].coefficients,
     ).not.toEqual(unity());
+  });
+});
+
+describe('native manual filter marker anchors', () => {
+  // Independently evaluated from the saved native coefficient literals at f1,
+  // before the native marker's final Double-to-Single store.
+  const literalCenterDb = [
+    4.582832114903331, -7.458367711656704, 3.0000003736199545, -3.0000003736203062,
+  ];
+  it.each(
+    manualNative.cases.map((fixture, index) => ({ fixture, expected: literalCenterDb[index] })),
+  )(
+    'places $fixture.name at its own native response instead of the gain parameter',
+    ({ fixture, expected }) => {
+      const f: Filter = {
+        ...newFilter(fixture.kind as Filter['kind']),
+        frequency: Number(fixture.parameters.f1),
+        frequency2: Number(fixture.parameters.f2),
+        q: Number(fixture.parameters.q1),
+        q2: Number(fixture.parameters.q2),
+        gain: Number(fixture.parameters.gain),
+        shelfDirection: fixture.direction as 'low' | 'high',
+        enabled: false,
+        provenance: 'hfd',
+        // Disabled/effective direct caches are not the native roots/Kz source.
+        coefficients: unity(),
+      };
+      const before = structuredClone(f);
+      expect(filterMarkerAnchor(f)).toEqual({
+        frequency: Math.fround(Number(fixture.parameters.f1)),
+        db: Math.fround(expected),
+      });
+      expect(f).toEqual(before);
+      f.coefficients = { b0: 12, b1: -24, b2: 12, f1: 0.8, f2: -0.2 };
+      expect(filterMarkerAnchor(f)?.db).toBe(Math.fround(expected));
+    },
+  );
+  it('stores both coordinates at Single precision without normalizing the filter parameters', () => {
+    const f = {
+      ...newFilter('asymmetric'),
+      frequency: 1000.123456789,
+      frequency2: 400,
+      q: 0.7,
+      q2: 1.3,
+      shelfDirection: 'high' as const,
+    };
+    const before = structuredClone(f),
+      frequency = Math.fround(f.frequency),
+      doubleDb = 20 * Math.log10(Math.hypot(...selectedSectionResponse(f, frequency))),
+      anchor = filterMarkerAnchor(f)!;
+    expect(frequency).not.toBe(f.frequency);
+    expect(Math.fround(doubleDb)).not.toBe(doubleDb);
+    expect(anchor).toEqual({ frequency, db: Math.fround(doubleDb) });
+    expect(f).toEqual(before);
+  });
+  it('evaluates every existing manual type and keeps raw/unity or malformed sections unavailable', () => {
+    const kinds = [
+      'lowpass1',
+      'lowpass2',
+      'highpass1',
+      'highpass2',
+      'peak',
+      'lowshelf1',
+      'highshelf1',
+      'lowshelf2',
+      'highshelf2',
+      'asymmetric',
+      'allpass1',
+      'allpass2',
+    ] as const;
+    for (const kind of kinds) {
+      const f = { ...newFilter(kind), frequency: 1500, gain: 6, q: 0.65 };
+      expect(filterMarkerAnchor(f)).toMatchObject({ frequency: 1500 });
+      expect(Number.isFinite(filterMarkerAnchor(f)?.db)).toBe(true);
+    }
+    for (const kind of ['lowshelf1', 'highshelf1'] as const)
+      expect(filterMarkerAnchor({ ...newFilter(kind), frequency: 1500, gain: 6 })!.db).toBeCloseTo(
+        3,
+        3,
+      );
+    for (const f of [
+      newFilter(),
+      newFilter('raw'),
+      { ...newFilter('peak'), frequency: NaN },
+      { ...newFilter('peak'), frequency: 1e-50 },
+      { ...newFilter('peak'), q: 0 },
+      { ...newFilter('asymmetric'), frequency2: Infinity },
+    ])
+      expect(filterMarkerAnchor(f)).toBeUndefined();
   });
 });
 

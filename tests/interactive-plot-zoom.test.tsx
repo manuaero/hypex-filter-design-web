@@ -4,7 +4,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import InteractivePlot, { DEFAULT_RANGE, type PlotRange } from '../src/components/InteractivePlot';
 import type { PlotMode } from '../src/components/ResponsePlot';
-import { newProject } from '../src/domain/model';
+import { newFilter, newProject, unity, type Channel, type Filter } from '../src/domain/model';
+import type { MagnitudeLayers } from '../src/domain/plot-layers';
+import manualNative from './fixtures/hfd-gui-manual-filter-coefficients.json';
 
 vi.mock('../src/components/ResponsePlot', () => ({ default: () => null }));
 let host: HTMLDivElement, root: Root;
@@ -101,7 +103,13 @@ afterEach(async () => {
 async function mount(mode: PlotMode, contextKey?: string) {
   await act(async () => root.render(<Harness mode={mode} contextKey={contextKey} />));
 }
-async function pointer(type: string, x: number, y: number, button = 1) {
+async function pointer(
+  type: string,
+  x: number,
+  y: number,
+  button = 1,
+  target: Element = host.querySelector('.plot-interaction')!,
+) {
   const event = new MouseEvent(type, {
     bubbles: true,
     cancelable: true,
@@ -111,7 +119,7 @@ async function pointer(type: string, x: number, y: number, button = 1) {
     buttons: type === 'pointerup' ? 0 : button === 1 ? 4 : 1,
   });
   Object.defineProperty(event, 'pointerId', { value: 1 });
-  await act(async () => host.querySelector('.plot-interaction')!.dispatchEvent(event));
+  await act(async () => target.dispatchEvent(event));
 }
 async function drag(start = { x: 148, y: 74 }, stop = { x: 348, y: 174 }) {
   await pointer('pointerdown', start.x, start.y);
@@ -241,4 +249,203 @@ it('reverse rectangles commit only after native reverse geometry has restored th
   await reverse();
   expect(viewGestures).toEqual(['start:zoom', 'range', 'commit']);
   expect(updates.at(-1)).toEqual(initial);
+});
+
+const nativeCenterDb = [
+  4.582832114903331, -7.458367711656704, 3.0000003736199545, -3.0000003736203062,
+];
+function markerChannels(fixtureIndex = 2) {
+  const channels = newProject().presets[0].channels,
+    fixture = manualNative.cases[fixtureIndex];
+  channels[0].filters[0] = {
+    ...newFilter(fixture.kind as Filter['kind']),
+    frequency: Number(fixture.parameters.f1),
+    frequency2: Number(fixture.parameters.f2),
+    q: Number(fixture.parameters.q1),
+    q2: Number(fixture.parameters.q2),
+    gain: Number(fixture.parameters.gain),
+    shelfDirection: fixture.direction as 'low' | 'high',
+    enabled: false,
+    coefficients: unity(),
+    provenance: 'hfd',
+  };
+  return channels;
+}
+let markerState: Channel[];
+function MarkerHarness({
+  source,
+  measured = false,
+  layers,
+}: {
+  source: Channel[];
+  measured?: boolean;
+  layers?: MagnitudeLayers;
+}) {
+  const [channels, setChannels] = useState(source),
+    [selected, setSelected] = useState(0);
+  markerState = channels;
+  return (
+    <InteractivePlot
+      channels={channels}
+      mode="Magnitude"
+      sum={true}
+      measured={measured}
+      magnitudeLayers={layers}
+      nativeCentered={true}
+      activeChannel={0}
+      activeFilter={selected}
+      range={initial}
+      onRange={vi.fn()}
+      onSelect={setSelected}
+      onChange={(patch) => {
+        changed(patch);
+        setChannels((current) => {
+          const next = structuredClone(current);
+          Object.assign(next[0].filters[selected], patch);
+          return next;
+        });
+      }}
+      onAdd={vi.fn()}
+      onRemove={vi.fn()}
+      onToggle={vi.fn()}
+      begin={begin}
+      end={end}
+    />
+  );
+}
+const marker = (index = 0) => host.querySelector<HTMLButtonElement>(`[data-filter="${index}"]`)!;
+const coordinates = (element: HTMLElement) => ({
+  x: Number.parseFloat(element.style.left),
+  y: Number.parseFloat(element.style.top),
+});
+const expectedMarker = (frequency: number, db: number) => ({
+  x:
+    48 +
+    (Math.log(Math.fround(frequency) / initial.frequencyMin) /
+      Math.log(initial.frequencyMax / initial.frequencyMin)) *
+      400,
+  y: 24 + ((initial.dbMax - Math.fround(db)) / (initial.dbMax - initial.dbMin)) * 200,
+});
+
+it.each(manualNative.cases.map((fixture, index) => ({ fixture, index })))(
+  'actual graph places the bypassed native $fixture.name marker on the own-section response',
+  async ({ fixture, index }) => {
+    const channels = markerChannels(index),
+      before = structuredClone(channels);
+    await act(async () => root.render(<MarkerHarness source={channels} />));
+    const expected = expectedMarker(Number(fixture.parameters.f1), nativeCenterDb[index]),
+      actual = coordinates(marker());
+    // DOM style serialization rounds CSS pixel values to three decimals.
+    expect(actual.x).toBeCloseTo(expected.x, 2);
+    expect(actual.y).toBeCloseTo(expected.y, 2);
+    expect(marker().classList.contains('bypassed')).toBe(true);
+    expect(channels).toEqual(before);
+    expect(changed).not.toHaveBeenCalled();
+  },
+);
+
+it('keeps electrical marker anchors independent of external processing, measured centering and layer visibility', async () => {
+  const channels = markerChannels();
+  await act(async () => root.render(<MarkerHarness source={channels} />));
+  const baseline = coordinates(marker());
+  const processed = structuredClone(channels),
+    channel = processed[0];
+  channel.gain = 12;
+  channel.additionalGain = -3;
+  channel.invert = true;
+  channel.muted = true;
+  channel.delayUs = 1200;
+  channel.globalDelayUs = -100;
+  channel.fir = { name: 'synthetic', enabled: true, taps: [4, 2] };
+  channel.filters[0].coefficients = { ...unity(), b0: 8 };
+  channel.filters[1] = { ...newFilter('peak'), frequency: 300, gain: 18 };
+  channel.measurement = {
+    name: 'synthetic',
+    sampleRate: 48000,
+    frequency: [10, 1000, 20000],
+    magnitude: [100, 100, 100],
+    hfdMagnitude: { frequency: [10, 1000, 20000], linearMagnitude: [1e5, 1e5, 1e5], medianDb: 100 },
+  };
+  channel.hfdMeasurement = {
+    sampleRate: 48000,
+    localStart: 0,
+    stopInclusive: 65535,
+    phaseStart: -1,
+    sharedStart: -1,
+    sharedGroupId: -1,
+    fftLength: 65536,
+    smoothBw: 0.0125,
+    smoothPostBw: 1,
+    applyMicCorrection: false,
+  };
+  await act(async () =>
+    root.render(
+      <MarkerHarness
+        key="processed"
+        source={processed}
+        measured
+        layers={{
+          rawMeasurements: [true, true, true],
+          currentResult: false,
+          otherResults: false,
+          section: false,
+        }}
+      />,
+    ),
+  );
+  expect(coordinates(marker())).toEqual(baseline);
+  expect(changed).not.toHaveBeenCalled();
+});
+
+it('omits one malformed marker without fabricating zero dB or dropping valid/manual neighbors', async () => {
+  const channels = markerChannels(1);
+  channels[0].filters[1] = { ...newFilter('peak'), frequency: NaN };
+  channels[0].filters[2] = { ...newFilter('raw'), coefficients: { ...unity(), b0: 0.5 } };
+  await act(async () => root.render(<MarkerHarness source={channels} />));
+  expect(host.querySelectorAll('[data-filter]')).toHaveLength(1);
+  expect(coordinates(marker()).y).toBeCloseTo(expectedMarker(800, nativeCenterDb[1]).y, 2);
+});
+
+it('fans overlapping markers while preserving true electrical leader endpoints and anchor hit selection', async () => {
+  const channels = markerChannels();
+  channels[0].filters[1] = { ...channels[0].filters[0], id: 'synthetic-second-marker' };
+  await act(async () => root.render(<MarkerHarness source={channels} />));
+  const anchor = expectedMarker(1500, nativeCenterDb[2]),
+    fanned = coordinates(marker(1)),
+    line = host.querySelector('line')!;
+  expect(Math.hypot(fanned.x - anchor.x, fanned.y - anchor.y)).toBeGreaterThanOrEqual(24 - 1e-7);
+  expect(Number(line.getAttribute('x1'))).toBeCloseTo(anchor.x, 10);
+  expect(Number(line.getAttribute('y1'))).toBeCloseTo(anchor.y, 10);
+  expect(Number(line.getAttribute('x2'))).toBeCloseTo(fanned.x, 2);
+  expect(Number(line.getAttribute('y2'))).toBeCloseTo(fanned.y, 2);
+  await pointer('contextmenu', anchor.x, anchor.y, 2);
+  expect(
+    [...host.querySelectorAll('.plot-menu button')].filter((b) =>
+      b.textContent?.startsWith('Select BQ'),
+    ),
+  ).toHaveLength(2);
+});
+
+it('keeps native relative shelf dragging free of anchor/fan-out bias and does not double the gain delta', async () => {
+  const channels = markerChannels();
+  channels[0].filters[1] = { ...channels[0].filters[0], id: 'synthetic-drag-marker' };
+  await act(async () => root.render(<MarkerHarness source={channels} />));
+  const target = marker(1),
+    start = coordinates(target);
+  await pointer('pointerdown', start.x, start.y, 0, target);
+  await pointer('pointermove', start.x, start.y, 0);
+  expect(changed.mock.lastCall?.[0]).toEqual({ frequency: 1500, gain: 6 });
+  await pointer('pointermove', start.x + 20, start.y, 0);
+  const frequency = 1500 * (initial.frequencyMax / initial.frequencyMin) ** (20 / 400);
+  expect(changed.mock.lastCall?.[0]).toEqual({ frequency, gain: 6 });
+  await pointer('pointermove', start.x + 20, start.y - 20, 0);
+  expect(changed.mock.lastCall?.[0]).toEqual({ frequency, gain: 12 });
+  await pointer('pointermove', start.x + 20, start.y - 20, 0);
+  expect(changed.mock.lastCall?.[0]).toEqual({ frequency, gain: 12 });
+  await pointer('pointerup', start.x + 20, start.y - 20, 0);
+  expect(markerState[0].filters[0].gain).toBe(6);
+  expect(markerState[0].filters[1]).toMatchObject({ frequency, gain: 12, enabled: false });
+  expect(begin).toHaveBeenCalledTimes(1);
+  expect(end).toHaveBeenCalledTimes(1);
+  expect(end).toHaveBeenCalledWith();
 });

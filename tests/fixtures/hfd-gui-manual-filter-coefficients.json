@@ -1,0 +1,102 @@
+{
+  "source": "HFD 5.2.4.24; classic screenshot-operated synthetic offline FA503, saved native Config.xml",
+  "scope": "Saved decimal coefficient literals. Expected Q24 words are nearest-even encodings of those literals, not physical amplifier readback.",
+  "cases": [
+    {
+      "name": "asymmetric Low normalization",
+      "kind": "asymmetric",
+      "direction": "low",
+      "parameters": {
+        "filtertype": "ftAsymShelf",
+        "f1": "800",
+        "f2": "400",
+        "q1": "0.7",
+        "q2": "1.3",
+        "gain": "0",
+        "shelfhl": "stLowShelf"
+      },
+      "coefficients": {
+        "b0": "1.02833350329289",
+        "b1": "-1.97799760650254",
+        "b2": "0.952509225064035",
+        "a1": "1.97887815703734",
+        "a2": "-0.979589437531044",
+        "sconst": "1",
+        "zconst": "1.02833350329289"
+      },
+      "q24WireWords": [15980453, -33185293, 17252573, -16434784, 33200066]
+    },
+    {
+      "name": "asymmetric High normalization",
+      "kind": "asymmetric",
+      "direction": "high",
+      "parameters": {
+        "filtertype": "ftAsymShelf",
+        "f1": "800",
+        "f2": "400",
+        "q1": "0.7",
+        "q2": "1.3",
+        "gain": "0",
+        "shelfhl": "stHighShelf"
+      },
+      "coefficients": {
+        "b0": "0.257083375823221",
+        "b1": "-0.494499401625636",
+        "b2": "0.238127306266009",
+        "a1": "1.97887815703734",
+        "a2": "-0.979589437531044",
+        "sconst": "0.25",
+        "zconst": "0.257083375823221"
+      },
+      "q24WireWords": [3995113, -8296323, 4313143, -16434784, 33200066]
+    },
+    {
+      "name": "second-order high shelf +6 dB",
+      "kind": "highshelf2",
+      "direction": "high",
+      "parameters": {
+        "filtertype": "ftShelf2",
+        "f1": "1500",
+        "f2": "400",
+        "q1": "0.65",
+        "q2": "1.3",
+        "gain": "6",
+        "shelfhl": "stHighShelf"
+      },
+      "coefficients": {
+        "b0": "1.94262909663418",
+        "b1": "-3.63519141409948",
+        "b2": "1.70558735980571",
+        "a1": "1.81906273198764",
+        "a2": "-0.832087773047958",
+        "sconst": "1.99526231496888",
+        "zconst": "1.94262909663418"
+      },
+      "q24WireWords": [28615008, -60988392, 32591908, -13960116, 30518808]
+    },
+    {
+      "name": "second-order high shelf -6 dB",
+      "kind": "highshelf2",
+      "direction": "high",
+      "parameters": {
+        "filtertype": "ftShelf2",
+        "f1": "1500",
+        "f2": "400",
+        "q1": "0.65",
+        "q2": "1.3",
+        "gain": "-6",
+        "shelfhl": "stHighShelf"
+      },
+      "coefficients": {
+        "b0": "0.51476630393965",
+        "b1": "-0.936392199179639",
+        "b2": "0.428330747485272",
+        "a1": "1.87127404834914",
+        "a2": "-0.877978901253369",
+        "sconst": "0.501187233627272",
+        "zconst": "0.51476630393965"
+      },
+      "q24WireWords": [7186197, -15710054, 8636345, -14730042, 31394769]
+    }
+  ]
+}

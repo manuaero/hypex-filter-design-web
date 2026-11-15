@@ -37,6 +37,8 @@ The app works offline for design tasks. No amplifier or agent connection is need
 - Offline firmware file inspection and explicit runtime identity reports for known 5.7/core 5.1 and 5.82/core 5.5 profiles. File recognition does not prove the installed image; core 5.5 remains diagnostic-only and production firmware programming is unavailable.
 - A local MCP server and optional authenticated hosted bridge. The current registry exposes **88 commands**; the running server’s `tools/list` is authoritative.
 
+The v36 development checkpoint compares four actual offline HFD manual-filter states—low/high asymmetric shelves and a high Shelf2 at ±6 dB—using saved coefficients and independent screenshot measurements. It also corrects filter-point positions to follow each section's own unbypassed response. Actual Studio marker and typed-edit checks passed for those fixed states; this is bounded software acceptance, not complete native or hardware parity. See [verification](docs/VERIFICATION.md).
+
 Filter and measurement edits update the design directly. Validated numeric settings commit on Enter or blur where appropriate. Consequential changes use adjacent **Apply**, **Save**, **Update** or **Upload** actions. The developer command console is optional; normal editing never requires a generic Run command.
 
 ## Preserve your work
@@ -69,7 +71,9 @@ pnpm test
 pnpm build
 ```
 
-The v35 public checkout passed **2,464 tests plus one optional-PDF skip: 2,465 total across 178 files**, with two workers, unchanged timeouts, typecheck and production builds passing. V35 corrects selected-reference floating-grid Fit truncated bounds, supported by independent native graph comparisons and actual Studio/MCP browser checks. These checks qualify the tested behavior, not complete HFD or hardware parity. The development-source first full run had one timeout; that test passed in isolation and the full rerun passed. See [verification](docs/VERIFICATION.md) for exact results, historical v34 numbers and remaining limits.
+The v36 public checkout passed **2,482 tests plus one optional-PDF skip: 2,483 total across 178 files**, with zero failures, two workers, unchanged timeouts, typecheck, Next production build and Worker packaging passing. The development-source suite also passed all 2,483 tests. See [verification](docs/VERIFICATION.md) for exact build results and native/browser acceptance limits. These are public-source checks; no public hosted deployment is claimed.
+
+The prior v35 public checkout passed **2,464 tests plus one optional-PDF skip: 2,465 total across 178 files**, with two workers, unchanged timeouts, typecheck and production builds passing. V35 corrects selected-reference floating-grid Fit truncated bounds, supported by independent native graph comparisons and actual Studio/MCP browser checks. These checks qualify the tested behavior, not complete HFD or hardware parity. The development-source first full run had one timeout; that test passed in isolation and the full rerun passed. See [verification](docs/VERIFICATION.md) for exact results, historical v34 numbers and remaining limits.
 
 The build produces the static application in `out/` and a packaged optional hosted Worker in `dist/server/index.js`. Hosted authentication, database and object-storage bindings require separate deployment configuration. The local app and local MCP server do not require that hosting platform.
 

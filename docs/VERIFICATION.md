@@ -2,6 +2,138 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V36 manual-filter and graph-point checkpoint
+
+Four manual-filter states were created and saved through actual mouse/keyboard
+interaction in classic HFD 5.2.4.24, using a new native FA503 project. A verified
+exclusive interface handle kept native HFD disconnected. It closed normally
+before the handle was released. No amplifier setting, bridge, power, filter
+Upload, firmware, noise or audio Take operation was performed. No fresh
+hardware-sector hash was captured in v36; the preceding v35 read-only match
+remains separate evidence.
+
+The frozen development source passed **2,483 of 2,483 tests in 178 files**, with
+zero failures or pending tests, two workers, no filters/omissions and unchanged
+timeouts. Source/test/configuration hashes stayed unchanged during that run.
+The earlier 2,469-test pass preceded the marker fix and is not its final test
+result. Focused point/interaction checks passed 84 tests across seven files,
+with global typecheck and formatting passing on the frozen source.
+
+| Check                                                       | V36 result                                                                                                             |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Development-source full suite                               | 2,483 passed; zero failures/pending, 178 files, two workers.                                                           |
+| Frozen-source focused checks                                | 84 passed across seven files; global typecheck and formatting passed.                                                  |
+| Actual repaired Studio marker/typed-edit browser acceptance | Passed: eight checks on actual Studio components in an isolated origin.                                                |
+| Fresh public-checkout suite                                 | **2,482 passed, 1 skipped, 0 failed; 2,483 total across 178 files.**                                                   |
+| Fresh public-checkout typecheck                             | Passed.                                                                                                                |
+| Fresh public-checkout production build/Worker checks        | Next production build and Worker packaging passed.                                                                     |
+| Private v36 deployment                                      | Private deployment succeeded with MCP enabled and unchanged owner-only access; no public hosted deployment is claimed. |
+
+Fresh public verification completed on **2026-11-15 at 15:22:15 UTC**, using
+Node.js 24.22.1. The sole skip remains the optional exact installed vendor-PDF
+identity test; the PDF is absent and synthetic fallback/routing tests ran. No
+cases were omitted and no test timeout was changed.
+
+The build contains **24 static assets totaling 1,894,867 bytes** and a
+**3,094,112-byte Worker**, SHA-256:
+`a671d1d5ca09847f8109c1855f6ccf29aba7ed8ba8fa478cc3ef2b1f66abc04f`.
+The actual compiled client and Worker both report the manual `bundled: false`,
+`optional: true`. The actual packaged Worker returned 200 for home and 404 for
+the absent manual in an isolated runtime without `process`. Source and built
+privacy scans found zero matches in their checked categories; these bounded
+pattern checks are not exhaustive secret detection. The generated Next
+environment file stayed unchanged. No public hosting acceptance follows from
+these builds or from the separately completed private deployment.
+
+Commands run from the public checkout:
+
+```sh
+node node_modules/typescript/bin/tsc --noEmit --incremental false
+node node_modules/vitest/vitest.mjs run --maxWorkers=2 --reporter=default --reporter=json --outputFile=../hypex-filter-design-web-public-v36.tests.json
+node node_modules/next/dist/bin/next build
+node scripts/build-worker.mjs
+```
+
+### Native values and independent response evidence
+
+The native-created baseline stores product 18 / module 9 / 93,750 Hz, with 135
+disabled Unity sections. Only the selected first section changed in these
+cases; the other 134 remained Unity and all unrelated XML values were retained.
+
+| Native filter   | Entered and saved parameters                                   | Largest public coefficient error |
+| --------------- | -------------------------------------------------------------- | -------------------------------- |
+| Asymmetric low  | Zeros 800 Hz / Q 0.700; poles 400 Hz / Q 1.300; low direction. | 5.11e−15                         |
+| Asymmetric high | Same four parameters; only high direction selected.            | 6.66e−16                         |
+| High Shelf2 +6  | 1500 Hz / Q 0.650 / +6.00 dB.                                  | 6.22e−15                         |
+| High Shelf2 −6  | Same center/Q/direction; only gain changed to −6.00 dB.        | 1.55e−15                         |
+
+The parser preserves the literal saved coefficient Numbers. Cacheless design
+matches all five coefficients within the fixed 1e−10 analysis threshold; the
+sanitized regressions check them within 1e−12. Local nearest-even Q8.24 words
+also match. These are local numerical checks, not measured wire bytes or an
+amplifier upload.
+
+The native asymmetric direction change scales the numerator by 0.25 while
+retaining feedback and all four pole/zero parameters, giving a 12.0412 dB shift
+without changing phase. Shelf2 deliberately retains inactive secondary fields
+from the earlier asymmetric state. Its native ±6 pair is reciprocal: center
+magnitudes are approximately ±3.00000037 dB, and the largest complex product
+error from unity across 14 numerical samples is 3.45e−13. The latter is a
+saved-coefficient calculation, not a native phase screenshot result.
+
+An independent raster analysis evaluates the native literal coefficients,
+without relying on the public designer. Twelve asymmetric magnitude samples
+match within 0.06541 dB; 16 signed-Shelf2 samples match within 0.02485 dB, each
+against a declared ±0.25 dB pixel tolerance. Clipped peaks and selection-marker
+regions are excluded. These finite samples do not qualify all frequencies,
+parameter limits, phase plots or physical writes.
+
+### Point correction and remaining acceptance
+
+The browser's original asymmetric points were at 0 dB and its Shelf2 points at
+±6 dB, despite the correct curves. Native points are on the section's own
+response: approximately +4.5828/−7.4584 dB at 800 Hz for the asymmetric pair,
+and ±3.00000037 dB at 1500 Hz for Shelf2. The source correction uses
+single-precision frequency/dB from the isolated unbypassed parametric response.
+It excludes channel gain, FIR, input EQ, measurement, centering and gain-baked
+imported caches; invalid/non-finite sections and raw/Unity markers are omitted.
+A previous browser check proved numerical edits, cache invalidation, role
+isolation and Undo, while exposing the wrong point. It is not reported as
+post-fix visual acceptance.
+
+The one-times relative gain drag for shelves/Peak is retained: gain changes by
+its original value plus vertical dB movement, without doubling the movement.
+Asymmetric dragging remains horizontal. Broader existing Q gestures are browser
+extensions, not newly accepted native gesture equivalence.
+
+The final actual Studio browser run passed **eight checks** in an isolated
+origin with no hardware use. All four rendered markers matched independently
+calculated single-precision anchors within 0.001 dB / 0.05 Hz for DOM/style
+serialization. Direct asymmetric direction/frequency edits and Undo, and the
+Right shelf −6→+6 edit, invalidated imported caches and matched local Q24
+references while preserving the opposite complete project. Dot selection
+revealed the parameter inspector without scrolling. Both complete projects
+retained their pre-reload canonical hashes after reload; IndexedDB persistence
+was Ready with no unsaved changes and an empty blocked-I/O ledger.
+
+A local three-channel compilation retained the expected native +6 shelf words
+and complete pre-fix compiled bytes. The marker correction therefore did not
+change the DSP output bytes. These are local compiler values, not observed
+amplifier wire traffic or an upload. Native HFD was closed and the exclusive
+interface handle released before these browser checks; no v36 hardware sector
+read or setter occurred. The completed public-source build checks and separate private deployment are
+recorded above; they do not establish full hardware parity or a public hosted
+instance.
+
+Input-EQ Default GUI acceptance remains open: the disconnected native main
+preset editor was unavailable, and its graph EQ inclusion toggle is not that
+editor. Connected Save reads physically saved banks, not an unsaved native
+editor draft. Production firmware programming remains missing and disabled;
+loader correlation, transition/reply handling and safe reconnect/recovery need
+an established adapter. An automatic full original-program backup is not an
+invented prerequisite. Two physical amplifiers, macOS and full hardware parity
+remain unqualified. V35 and earlier results below remain historical evidence.
+
 ## V35 native graph and Fit truncated checkpoint
 
 The development-source suite passed **2,465 of 2,465 tests across 178 files** with

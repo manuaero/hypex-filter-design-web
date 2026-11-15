@@ -5,8 +5,73 @@ import { HFD_TEMPLATE } from '../src/domain/hfd-template';
 import { importHfd, exportHfd, resolveGainCache } from '../src/domain/files';
 import { newProject, newFilter } from '../src/domain/model';
 import { effectiveSections, encodeChannel, design } from '../src/domain/dsp';
+import manualNative from './fixtures/hfd-gui-manual-filter-coefficients.json';
 const document = (xml: string) => new DOMParser().parseFromString(xml, 'application/xml');
 const serialize = (doc: Document) => new XMLSerializer().serializeToString(doc);
+
+// Only native semantic parameters and saved literals are retained in this
+// fixture; the original complete project and machine paths remain private.
+it.each(manualNative.cases)(
+  'imports and regenerates screenshot-operated HFD $name with exact native field mapping',
+  (fixture) => {
+    const doc = document(HFD_TEMPLATE),
+      node = doc.querySelector(
+        'preset[index="1"] processobj[processtype="ptBiQuad"][groupid="1"]',
+      )!;
+    node.setAttribute('enabled', 'true');
+    for (const [key, value] of Object.entries({
+      ...fixture.parameters,
+      ...fixture.coefficients,
+    }))
+      node.querySelector(`:scope > ${key}`)!.setAttribute('value', value);
+    const project = importHfd(serialize(doc), 'Native manual filter fixture'),
+      channel = project.presets[0].channels[0],
+      filter = channel.filters[0],
+      native = {
+        b0: Number(fixture.coefficients.b0),
+        b1: Number(fixture.coefficients.b1),
+        b2: Number(fixture.coefficients.b2),
+        f1: Number(fixture.coefficients.a1),
+        f2: Number(fixture.coefficients.a2),
+      };
+    // For AsymShelf F1/Q1 are zeros, F2/Q2 are poles. Shelf2 retains
+    // the latent second pair but must use its own kind and signed gain.
+    expect(filter).toMatchObject({
+      kind: fixture.kind,
+      frequency: fixture.kind === 'asymmetric' ? 800 : 1500,
+      q: fixture.kind === 'asymmetric' ? 0.7 : 0.65,
+      frequency2: 400,
+      q2: 1.3,
+      gain: Number(fixture.parameters.gain),
+      enabled: true,
+      shelfDirection: fixture.direction,
+    });
+    expect(channel.gain).toBe(0);
+    expect(channel.additionalGain ?? 0).toBe(0);
+    expect(channel.invert).toBe(false);
+    expect(filter.coefficients).toEqual(native);
+
+    // Remove the imported coefficient cache so this exercises parameter design
+    // as well as exact native-cache import. Expected values are native literals.
+    const rebuiltChannel = structuredClone(channel);
+    delete rebuiltChannel.filters[0].coefficients;
+    delete rebuiltChannel.filters[0].provenance;
+    const regenerated = design(rebuiltChannel.filters[0]);
+    for (const key of ['b0', 'b1', 'b2', 'f1', 'f2'] as const)
+      expect(Math.abs(regenerated[key] - native[key])).toBeLessThan(1e-12);
+
+    // Five signed wire words begin after the delay word, in b2,b1,b0,a2,a1
+    // order. These fixed words encode the native literals, not model output.
+    for (const candidate of [channel, rebuiltChannel]) {
+      const bytes = encodeChannel(candidate),
+        view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      expect(Array.from({ length: 5 }, (_, i) => view.getInt32(4 + i * 4, true))).toEqual(
+        fixture.q24WireWords,
+      );
+    }
+  },
+);
+
 it('accepts HFD’s screenshot-created offline FA503 and rejects other offline models', () => {
   const p = importHfd(HFD_TEMPLATE, 'Blank');
   expect(p.presets).toHaveLength(3);

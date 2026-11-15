@@ -8,7 +8,7 @@ import {
   type Filter,
   type Preset,
 } from './model';
-import { channelResponse, presetResponse, response } from './dsp';
+import { channelResponse, presetResponse, response, FILTER_NAMES } from './dsp';
 import { designHfd } from './hfd-math';
 import { measurementResponse } from './measurement';
 import { hfdSmoothPlot } from './hfd-measurement';
@@ -77,6 +77,33 @@ export function selectedSectionCoefficients(filter: Filter): Coefficients {
 export function selectedSectionResponse(filter: Filter, frequency: number): [number, number] {
   if (!Number.isFinite(frequency) || frequency < 0) throw new Error('Invalid response frequency');
   return response(selectedSectionCoefficients(filter), frequency);
+}
+
+/** Native c608f8/c6dd90 stores Single(f1), then Single(dB) from the same
+ * section's unbypassed matched-z roots/Kz (a8edc8), not its direct gain cache.
+ * No channel processing, measurement or graph centering enters this anchor. */
+export function filterMarkerAnchor(filter: Filter): { frequency: number; db: number } | undefined {
+  if (
+    !filter ||
+    !Object.hasOwn(FILTER_NAMES, filter.kind) ||
+    filter.kind === 'unity' ||
+    filter.kind === 'raw' ||
+    ![filter.frequency, filter.q, filter.gain].every(Number.isFinite) ||
+    (filter.kind === 'asymmetric' && ![filter.frequency2, filter.q2].every(Number.isFinite))
+  )
+    return undefined;
+  const frequency = Math.fround(filter.frequency);
+  if (!Number.isFinite(frequency) || frequency <= 0) return undefined;
+  try {
+    const db = Math.fround(
+      20 * Math.log10(Math.hypot(...selectedSectionResponse(filter, frequency))),
+    );
+    return Number.isFinite(db) ? { frequency, db } : undefined;
+  } catch {
+    // A malformed section must not place an invented zero-dB handle or prevent
+    // the remaining valid sections from being inspected.
+    return undefined;
+  }
 }
 
 /** A detached analysis-only channel for the ordinary Magnitude/Phase renderer.

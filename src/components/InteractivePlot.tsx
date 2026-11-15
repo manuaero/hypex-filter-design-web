@@ -12,7 +12,7 @@ import {
 } from './plot-zoom-geometry';
 import { defaultPlotRange, type PlotRange } from '../domain/plot-viewport';
 export { DEFAULT_RANGE, type PlotRange } from '../domain/plot-viewport';
-import type { MagnitudeLayers } from '../domain/plot-layers';
+import { filterMarkerAnchor, type MagnitudeLayers } from '../domain/plot-layers';
 import type { PhaseViewState } from '../application/graph-view';
 const gainType = (f: Filter) => f.kind === 'peak' || f.kind.includes('shelf');
 const qType = (f: Filter) =>
@@ -138,21 +138,21 @@ export default function InteractivePlot({
     );
   const timeAt = (x: number, r = range) =>
     r.timeMinMs + ((x - L) / W) * (r.timeMaxMs - r.timeMinMs);
-  const position = (f: Filter) => ({
-    x:
-      L +
-      (Math.log(f.frequency / range.frequencyMin) /
-        Math.log(range.frequencyMax / range.frequencyMin)) *
-        W,
-    y: T + ((range.dbMax - (gainType(f) ? f.gain : 0)) / (range.dbMax - range.dbMin)) * H,
-  });
   const handles = useMemo(
     () =>
       W > 0 && H > 0
         ? layoutFilterHandles(
             channel?.filters.flatMap((f, index) => {
-              if (f.kind === 'unity' || f.kind === 'raw') return [];
-              const p = position(f);
+              const anchor = filterMarkerAnchor(f);
+              if (!anchor) return [];
+              const p = {
+                x:
+                  L +
+                  (Math.log(anchor.frequency / range.frequencyMin) /
+                    Math.log(range.frequencyMax / range.frequencyMin)) *
+                    W,
+                y: T + ((range.dbMax - anchor.db) / (range.dbMax - range.dbMin)) * H,
+              };
               return p.x < L || p.x > size.width - R || p.y < T || p.y > size.height - B
                 ? []
                 : [{ index, ...p }];
