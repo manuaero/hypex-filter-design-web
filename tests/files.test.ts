@@ -235,6 +235,52 @@ it('detects base and gain-effective first-section caches without double gain', (
     encodeChannel(base.presets[0].channels[0]),
   );
 });
+it.each(['ftBoostCut', 'ftFree'])(
+  'retains original first-section Double coefficients with AdditionalGain for %s',
+  (filterType) => {
+    // Actual V40 native save22: the original b1 loses one ULP if reconstructed
+    // by dividing and multiplying by the AdditionalGain10 multiplier.
+    const doc = document(HFD_TEMPLATE),
+      node = doc.querySelector(
+        'preset[index="1"] processobj[processtype="ptBiQuad"][groupid="1"]',
+      )!,
+      gainNode = doc.querySelector(
+        'preset[index="1"] processobj[processtype="ptGain"][groupid="1"]',
+      )!,
+      literals = {
+        b0: '1.28734873744321',
+        b1: '-1.92017414830364',
+        b2: '0.655018836373937',
+        a1: '1.85236017184606',
+        a2: '-0.874553956539528',
+      },
+      native = {
+        b0: Number(literals.b0),
+        b1: Number(literals.b1),
+        b2: Number(literals.b2),
+        f1: Number(literals.a1),
+        f2: Number(literals.a2),
+      };
+    gainNode.querySelector('additionalgain')!.setAttribute('value', '10');
+    node.setAttribute('enabled', 'true');
+    for (const [name, value] of Object.entries({
+      filtertype: filterType,
+      f1: '2300',
+      q1: '1.15',
+      gain: '14.05',
+      ...literals,
+    }))
+      node.querySelector(`:scope > ${name}`)!.setAttribute('value', value);
+    const project = importHfd(serialize(doc), 'Native AdditionalGain cache'),
+      channel = project.presets[0].channels[0];
+    expect((native.b1 / 10 ** (10 / 20)) * 10 ** (10 / 20)).not.toBe(native.b1);
+    expect(channel.filters[0].coefficients).toEqual(native);
+    expect(channel.coefficientCache).toBe(filterType === 'ftFree' ? 'unresolved' : 'base');
+    if (filterType === 'ftFree') expect(() => encodeChannel(channel)).toThrow('Resolve');
+    const reopened = importHfd(exportHfd(project), 'Reopened AdditionalGain cache');
+    expect(reopened.presets[0].channels[0].filters[0].coefficients).toEqual(native);
+  },
+);
 it('requires a decision for inconsistent/custom first coefficients before compiling', () => {
   const doc = document(HFD_TEMPLATE);
   doc.querySelector('preset processobj[processtype="ptGain"] gain')!.setAttribute('value', '-6');

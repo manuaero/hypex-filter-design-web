@@ -2,6 +2,45 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V40 ordinary parameter wheel checkpoint
+
+Ordinary output Q1/Q2 and BQ-gain wheels now share the recovered native behavior across the inspector, creation palette and `fusion_filter_adjust`. A delivered event applies one factory step, **0.04 for Q/Q2** or **0.1 dB for gain**, using its direction. Actual native +120 and +360 events each produced one step. Q/Q2 use three displayed decimals and 0.1–20 bounds; gain uses two decimals and −125…24 dB. Both store Double. Inspector wheels edit the design; palette wheels remain local until Apply. Unchanged formatted Text normally retains exact imported values, caches and history. Frequency's Single path, keyboard increments, graph gestures and input EQ remain separate. This supersedes the V39 wheel-as-extension statement below for these ordinary output parameter wheels only.
+
+The AdditionalGain ceiling has distinct visible and stored results:
+
+| Native observed field after one positive event | Saved BQ gain | Saved AdditionalGain |
+| --- | ---: | ---: |
+| 14.00 from typed 17.95 | 18.05 | 10 |
+| 14.00 from typed 13.95 | 14.05 | 10 |
+
+A once-inhibited native notification changes the visible field without replacing the preceding canonical value. The browser retains that transient field state during continuous wheel events and displays an adjacent **Stored … dB** detail. Analysis, compilation and exports use the saved canonical value. Passive refresh or blur ends the transient state. Commands return Text and value separately and deliberately start from a fresh passive field on every call; they do not share a human field's private state. The default Both basis advances each role independently; an explicit source basis mirrors its changed stored value. All targets validate before one document transaction, and unchanged sources do not overwrite the other role.
+
+Classic HFD 5.2.4.24 screenshot/mouse/keyboard work produced **22 actual native saves**, with one synthetic input counted separately. Reverse Q/Q2/gain events restored several earlier saved files byte for byte. The endpoint cases that included typing before the wheel had no intermediate save, so their screenshots establish the visible bound no-op; their complete XML differences are not misattributed to the wheel alone. Focused Up-key checks changed neither Q nor gain in their two tested contexts, without qualifying every keyboard/focus path.
+
+The synthetic input changed only AdditionalGain 0→6 in an owned copy. Native reopening and immediate Save, without filter selection or parameter input, changed only AdditionalGain 6→10 and gainlowered false→true. The web importer preserves the supplied metadata instead of silently reproducing that native load normalization. Saved coefficients and independently evaluated Q24/response predictions remain separate from native display or hardware acceptance.
+
+One native save exposed a one-ULP importer loss: divide/multiply reconstruction changed b1 from −1.92017414830364 to −1.9201741483036399. Base and unresolved classification now retain the original native Doubles directly. The initial failing comparison is retained, and exact-cache regressions cover both the parameter section and custom/raw ambiguity. No tolerance, ambiguity or stability guard was weakened. Native −125 and −124.9 dB Peak caches have a pole exactly at one: imported and regenerated coefficients agree, while both compiler paths correctly refuse them. Scalar Q24 predictions do not establish safe programming data.
+
+| V40 check | Verified result |
+| --- | --- |
+| Complete development-source suite | **2,691 passed / 2,691 total across 185 files**, zero failures/pending, two workers, no omissions or timeout increases. |
+| Frozen test inputs | All **377 source/test/configuration files** and the separately checked `.gitignore` remained unchanged. |
+| Global typecheck / formatting | Passed for the frozen owners' source. |
+| Actual Studio browser acceptance | **29/29 checks passed** in Chrome with genuine tab-scoped wheel input and the shared command console; zero failures or blocked I/O attempts. All 160 bundled product source files remained unchanged. |
+| Shared command registry | **90 commands**; `fusion_filter_adjust` is a stateless design action. |
+| Fresh V40 public tests, typecheck and Next/Worker builds | **2,690 passed plus the sole optional-PDF skip: 2,691 total across 185 files**; global typecheck, Next production build and Worker packaging passed. The reviewed export has **385 source files plus 13 protected public files: 398 total**. |
+| V40 publication / physical qualification | Private V40 deployment succeeded with MCP enabled and unchanged owner-only access. No new amplifier programming or physical sector read was performed. |
+
+Fresh V40 public verification completed at **2026-11-15T20:12:45.008Z**, using Node.js v24.22.1. The full suite used two workers, unchanged timeouts and no omissions. The one skip is the optional exact installed-PDF identity test; the public source omits that vendor PDF and its fallback tests ran. The generated Next environment file stayed unchanged.
+
+The build produced **24 static assets totaling 1,911,164 bytes** and a **3,118,426-byte Worker**, SHA-256 `541e830fb314897934af4aaf0de9a038326a6444a7944c08a68d433f9996ecc1`. Actual compiled client and Worker registries report manual `bundled: false`, `optional: true`; the actual packaged Worker returns home 200/manual 404 in an isolated process-free runtime. Source and built-output pattern scans found zero matches in all five categories; these are bounded scans, not exhaustive secret detection. These are public-source build checks, not a public hosted deployment or additional physical acceptance.
+
+An ignored generated QA stylesheet was formatted after bundling; the initial strict asset-hash failure is retained, while an independent comparison established formatting-only changes with all 160 product sources and the original JavaScript unchanged; reconstruction checks and later unused fixture guards add no browser qualification.
+
+Browser checks cover independent roles, field-local drafts and continuous wheel state, displayed/stored gain, source and each-role command bases, preserved imported precision/cache, no-op history, strict unstable-filter refusal, whole-project Undo and reload. They use actual Studio with synthetic/native-file seeds, not two physical amplifiers or remote MCP transport. Download delivery is not established.
+
+Native HFD stayed disconnected under verified metadata-only exclusion and closed normally before release; recorded checks reported zero explicit transfers and healthy device presence afterward. Saved Settings changed only in the recent-project region, with all other bytes and the three empty saved ASIO names retained. This is no fresh physical-read claim. The earlier dated V35 single-unit IIR evidence remains separate. Complete HFD parity, remaining raw/cache/type/gesture/view and conditional-device cases, two physical amplifiers, macOS USB, acoustic capture/output, download delivery and qualified production firmware programming/reconnect/recovery remain open. No unqualified upload attempt is inferred from numerical agreement.
+
 ## V39 manual Q/gain implementation checkpoint
 
 Eighteen completed offline HFD 5.2.4.24 saves cover ordinary Q1/Q2 and BQ gain commits, type-entry cache behavior, and first-/second-order all-pass cases. Actual Q text `0.4005` committed to Double 0.401; `0.0001` clamped to 0.100 and `100.0001` to 20.000. Q zero restored the previous value. Asymmetric Q2 `1.3005` committed to Double 1.301, and its following zero save was byte-identical. Gain `7.555` committed to Double 7.56; zero was accepted; `-125.0001` and `24.0001` clamped to −125.00 and 24.00. The recovered ordinary profile defaults are Q 0.1–20 and BQ gain −125…24 dB, separate from input EQ, channel gain and hardware controls.

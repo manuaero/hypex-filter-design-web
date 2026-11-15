@@ -174,3 +174,127 @@ export function formatManualNumberValue(value: number, places: ManualNumberPlace
   if (!Number.isFinite(value) || Math.abs(value) >= 1e17 || ![1, 2, 3].includes(places)) return '';
   return fixed(double(value), places);
 }
+
+declare const wheelStateBrand: unique symbol;
+/** Opaque transient FloatEdit state. No numeric representation is public. */
+export interface ManualNumberWheelState {
+  readonly [wheelStateBrand]: true;
+}
+export interface ManualNumberWheelOptions {
+  parameter: 'q' | 'gain';
+  displayedText?: string;
+  state?: ManualNumberWheelState;
+  step: number;
+  min: number;
+  max: number;
+  places: 2 | 3;
+  zeroAllowed: boolean;
+  additionalGain: number;
+}
+export interface ManualNumberWheelResult extends ManualNumberResult {
+  changed: boolean;
+  state: ManualNumberWheelState;
+}
+interface WheelMemory {
+  internal: Ratio;
+  text: string;
+  value: number;
+  parameter: 'q' | 'gain';
+}
+const wheelMemory = new WeakMap<ManualNumberWheelState, WheelMemory>();
+const addExtended = (a: Ratio, b: Ratio) => extended({ n: a.n * b.d + b.n * a.d, d: a.d * b.d });
+
+/** Extended->Double store, including subnormal rounding. Kept private so callers
+ * cannot accidentally replace native Extended addition with binary64 addition. */
+function storeDouble(value: Ratio): number {
+  if (value.n === 0n) return 0;
+  const e = exponent(value),
+    shift = e < -1022 ? 1074 : 52 - e,
+    mantissa = nearest(
+      shift >= 0 ? value.n * pow2(shift) : value.n,
+      shift >= 0 ? value.d : value.d * pow2(-shift),
+    );
+  return Number(mantissa) * 2 ** -shift;
+}
+
+/** Internal ba6a48 AddValue, ba6ecc bounds, and changed-Text OnChange model
+ * publication. A passive field starts with its exact canonical Double; a
+ * returned state also retains private Extended changes when Text stays equal.
+ * Unlike native RTL NAN/INF support, this browser path admits only bounded
+ * finite decimal Text. Native arrow keys and zero-delta UI events are separate. */
+export function adjustManualNumberWheel(
+  value: number,
+  direction: -1 | 1,
+  options: ManualNumberWheelOptions,
+): ManualNumberWheelResult {
+  const { parameter, step, min, max, places, zeroAllowed, additionalGain } = options;
+  if (
+    !['q', 'gain'].includes(parameter) ||
+    (direction !== -1 && direction !== 1) ||
+    ![2, 3].includes(places) ||
+    [value, step, min, max, additionalGain].some(
+      (number) => !Number.isFinite(number) || Math.abs(number) >= 1e17,
+    ) ||
+    min > max
+  )
+    throw new Error('Invalid manual wheel value, direction or bounds');
+
+  const previous = options.state === undefined ? undefined : wheelMemory.get(options.state);
+  if (
+    options.state !== undefined &&
+    (!previous || previous.parameter !== parameter || !Object.is(previous.value, value))
+  )
+    throw new Error('Manual wheel state does not match the current field value');
+  let text = options.displayedText ?? previous?.text ?? fixed(double(value), places);
+  if (previous && text !== previous.text)
+    throw new Error('Manual wheel state does not match the displayed text');
+  // Strict dirty-Text admission is intentional; do not turn malformed/NAN/INF
+  // input into zero or silently substitute the canonical model value.
+  if (!Number.isFinite(storeDouble(parse(text, 'Wheel value'))))
+    throw new Error('Wheel value cannot be stored as Double');
+  let internal = previous?.internal ?? double(value),
+    model = value;
+  const minimum = double(min),
+    maximum = double(max),
+    delta = double(direction * step);
+
+  function setBounded(candidate: Ratio, notify = true) {
+    if (!zeroAllowed && candidate.n === 0n) {
+      // ba6ee3 skips exact0 and retains the previous internal Extended Value.
+    } else if (compare(candidate, minimum) < 0n) internal = minimum;
+    else if (compare(candidate, maximum) > 0n) internal = maximum;
+    else internal = candidate;
+    const nextText = fixed(internal, places);
+    if (nextText === text) return; // 811768: no Text assignment, callback or model edit.
+    text = nextText;
+    if (!notify) return;
+    // c64990 sets InhibitOnChangeEventOnce (ba7664/+533) while normalizing
+    // changed Text, then the outer Q/gain callback performs its qword store.
+    setBounded(parse(text, 'Wheel value'), false);
+    model = storeDouble(parse(text, 'Wheel value'));
+  }
+
+  if (delta.n !== 0n) {
+    const skipZero =
+        !zeroAllowed &&
+        fixed(addExtended(internal, delta), places) === fixed({ n: 0n, d: 1n }, places),
+      amount = skipZero ? extended({ n: delta.n * 2n, d: delta.d }) : delta;
+    setBounded(addExtended(parse(text, 'Wheel value'), amount));
+  }
+
+  if (parameter === 'gain') {
+    // c64323: Text is narrowed to Double, then channel AdditionalGain is added
+    // in Extended. This ceiling follows AddValue even when its delta was0.
+    const parsed = storeDouble(parse(text, 'Wheel value'));
+    if (!Number.isFinite(parsed)) throw new Error('Wheel value cannot be stored as Double');
+    if (compare(addExtended(double(parsed), double(additionalGain)), maximum) > 0n)
+      // c64359..8b inhibits this Text change's OnChange once. The visible field
+      // is capped, but the BQ model retains the preceding AddValue callback.
+      setBounded(addExtended(maximum, double(-additionalGain)), false);
+  }
+
+  if (!Number.isFinite(model)) throw new Error('Wheel value cannot be stored as Double');
+  const state = Object.freeze({}) as ManualNumberWheelState;
+  wheelMemory.set(state, { internal, text, value: model, parameter });
+  return { text, value: model, changed: !Object.is(model, value), state };
+}

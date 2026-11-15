@@ -92,8 +92,204 @@ function setup(options: { microphone?: boolean } = {}) {
     progress: () => {},
     view: () => {},
   };
-  return { execute: createToolExecutor(adapter), state: () => state, remember };
+  return { execute: createToolExecutor(adapter), state: () => state, remember, adapter };
 }
+it('exposes one strict wheel event with atomic independent Both changes, no-op preservation and one Undo', async () => {
+  const { execute, state, adapter } = setup();
+  const edits = vi.spyOn(adapter, 'edit');
+  Object.assign(state().documents.left.presets[0].channels[0].filters[0], {
+    kind: 'peak',
+    q: 0.7,
+    enabled: false,
+  });
+  Object.assign(state().documents.right.presets[0].channels[0].filters[0], {
+    kind: 'lowpass2',
+    q: 1.3,
+    enabled: true,
+  });
+  const before = structuredClone(state().documents);
+  expect(TOOL_DEFINITIONS.find((tool) => tool.name === 'fusion_filter_adjust')).toBeDefined();
+  expect(TOOL_DEFINITIONS).toHaveLength(90);
+  const event = {
+    target: 'both',
+    preset: 1,
+    channel: 1,
+    index: 1,
+    parameter: 'q',
+    direction: 'up',
+  };
+  expect(await execute('fusion_filter_adjust', event)).toMatchObject({
+    ok: true,
+    changed: true,
+    basis: 'each',
+    roles: [
+      { slot: 'left', value: 0.74 },
+      { slot: 'right', value: 1.34 },
+    ],
+  });
+  expect(edits).toHaveBeenCalledTimes(1);
+  for (const slot of ['left', 'right'] as const)
+    expect(state().documents[slot].presets[0].channels[0].filters[0].enabled).toBe(
+      before[slot].presets[0].channels[0].filters[0].enabled,
+    );
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(before);
+  Object.assign(state().documents.left.presets[0].channels[0].filters[0], {
+    q: 20.00001,
+    coefficients: { b0: 0.9, b1: 0, b2: 0, f1: 0.1, f2: 0 },
+    provenance: 'hfd',
+  });
+  const documents = state().documents,
+    left = state().documents.left;
+  edits.mockClear();
+  expect(await execute('fusion_filter_adjust', { ...event, basis: 'left' })).toMatchObject({
+    ok: true,
+    changed: false,
+  });
+  expect(edits).not.toHaveBeenCalled();
+  expect(state().documents).toBe(documents);
+  expect(await execute('fusion_filter_adjust', event)).toMatchObject({ ok: true, changed: true });
+  expect(edits).toHaveBeenCalledExactlyOnceWith(['right'], expect.any(Function));
+  expect(state().documents.left).toEqual(left);
+});
+
+it('wheel preflight refuses inactive/linked roles atomically, while fixed-source mirror allows latent destinations', async () => {
+  const { execute, state, adapter } = setup();
+  const edits = vi.spyOn(adapter, 'edit');
+  Object.assign(state().documents.left.presets[0].channels[0].filters[0], {
+    kind: 'peak',
+    gain: 7.5,
+    enabled: false,
+  });
+  Object.assign(state().documents.right.presets[0].channels[0].filters[0], {
+    kind: 'lowpass1',
+    gain: 3,
+    enabled: true,
+  });
+  const before = structuredClone(state().documents);
+  const event = {
+    target: 'both',
+    preset: 1,
+    channel: 1,
+    index: 1,
+    parameter: 'gain',
+    direction: 'up',
+  };
+  expect(await execute('fusion_filter_adjust', event)).toMatchObject({ ok: false });
+  expect(edits).not.toHaveBeenCalled();
+  expect(state().documents).toEqual(before);
+  expect(await execute('fusion_filter_adjust', { ...event, basis: 'left' })).toMatchObject({
+    ok: true,
+    roles: [{ value: 7.6 }, { value: 7.6 }],
+  });
+  expect(state().documents.right.presets[0].channels[0].filters[0]).toMatchObject({
+    kind: 'lowpass1',
+    enabled: true,
+    gain: 7.6,
+  });
+  await execute('fusion_history', { action: 'undo' });
+  state().documents.right.presets[0].channels[0].linkedTo = 1;
+  const linked = structuredClone(state().documents);
+  edits.mockClear();
+  expect(await execute('fusion_filter_adjust', { ...event, basis: 'left' })).toMatchObject({
+    ok: false,
+  });
+  expect(edits).not.toHaveBeenCalled();
+  expect(state().documents).toEqual(linked);
+});
+
+it('wheel schema accepts single each/matching basis and rejects other roles or any custom arithmetic state', async () => {
+  const { execute, state } = setup();
+  Object.assign(state().documents.left.presets[0].channels[0].filters[0], { kind: 'peak', q: 0.7 });
+  const event = {
+    target: 'left',
+    preset: 1,
+    channel: 1,
+    index: 1,
+    parameter: 'q',
+    direction: 'up',
+  };
+  expect(await execute('fusion_filter_adjust', { ...event, basis: 'each' })).toMatchObject({
+    ok: true,
+  });
+  expect(await execute('fusion_filter_adjust', { ...event, basis: 'left' })).toMatchObject({
+    ok: true,
+  });
+  const frozen = state().documents;
+  for (const patch of [
+    { basis: 'right' },
+    { step: 0.5 },
+    { state: {} },
+    { displayedText: '0.7' },
+    { additionalGain: 0 },
+    { direction: 120 },
+    { parameter: 'frequency' },
+  ])
+    expect(await execute('fusion_filter_adjust', { ...event, ...patch })).toMatchObject({
+      ok: false,
+    });
+  expect(state().documents).toBe(frozen);
+});
+it('reports guarded native gain Text separately from stored values for independent Both and source-basis mirrors', async () => {
+  const { execute, state, adapter } = setup();
+  const edits = vi.spyOn(adapter, 'edit');
+  for (const slot of ['left', 'right'] as const) {
+    const channel = state().documents[slot].presets[0].channels[0];
+    Object.assign(channel.filters[0], {
+      kind: 'peak',
+      gain: slot === 'left' ? 17.95 : 7.5,
+      enabled: slot === 'right',
+    });
+    channel.additionalGain = slot === 'left' ? 10 : 0;
+    channel.gain = -12;
+  }
+  const before = structuredClone(state().documents);
+  const event = {
+    target: 'both',
+    preset: 1,
+    channel: 1,
+    index: 1,
+    parameter: 'gain',
+    direction: 'up',
+  };
+  expect(await execute('fusion_filter_adjust', event)).toMatchObject({
+    ok: true,
+    changed: true,
+    basis: 'each',
+    roles: [
+      { slot: 'left', value: 18.05, text: '14.00' },
+      { slot: 'right', value: 7.6, text: '7.60' },
+    ],
+  });
+  expect(state().documents.left.presets[0].channels[0].filters[0].gain).toBe(18.05);
+  expect(state().documents.right.presets[0].channels[0].filters[0].gain).toBe(7.6);
+  expect(edits).toHaveBeenCalledTimes(1);
+  // A new command opens a fresh passive field from its canonical model. It
+  // intentionally does not inherit the human widget's retained Text 14.00.
+  expect(await execute('fusion_filter_adjust', event)).toMatchObject({
+    ok: true,
+    roles: [
+      { value: 18.15, text: '14.00' },
+      { value: 7.7, text: '7.70' },
+    ],
+  });
+  expect(state().documents.left.presets[0].channels[0].filters[0].gain).toBe(18.15);
+  await execute('fusion_history', { action: 'undo' });
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(before);
+  expect(await execute('fusion_filter_adjust', { ...event, basis: 'left' })).toMatchObject({
+    ok: true,
+    basis: 'left',
+    roles: [
+      { slot: 'left', value: 18.05, text: '14.00' },
+      { slot: 'right', value: 18.05, text: '14.00' },
+    ],
+  });
+  for (const slot of ['left', 'right'] as const)
+    expect(state().documents[slot].presets[0].channels[0].filters[0].gain).toBe(18.05);
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(before);
+});
 it('uses shared Double Q/gain commits with independent Both zero values and preserves wider diagnostic validation', async () => {
   const { execute, state } = setup();
   Object.assign(state().documents.left.presets[0].channels[0].filters[0], {

@@ -14,6 +14,8 @@ import {
   deleteBiquad,
   isUnusedBiquad,
   editManualFilter,
+  planManualFilterWheel,
+  applyManualFilterWheel,
 } from '../domain/editing';
 import { copyPresetBetween } from '../domain/preset-copy';
 import {
@@ -932,6 +934,25 @@ const schemas = {
       redesign: z.boolean().default(true),
     })
     .strict(),
+  fusion_filter_adjust: z
+    .object({
+      target,
+      preset,
+      channel,
+      index,
+      parameter: z.enum(['q', 'q2', 'gain']),
+      direction: z.enum(['up', 'down']),
+      basis: z.enum(['each', 'left', 'right']).default('each'),
+    })
+    .strict()
+    .superRefine((value, context) => {
+      if (value.target !== 'both' && value.basis !== 'each' && value.basis !== value.target)
+        context.addIssue({
+          code: 'custom',
+          message: 'Wheel source must be a selected role',
+          path: ['basis'],
+        });
+    }),
   fusion_biquad_exchange: z
     .object({ target, preset, channel, first: index, second: index })
     .strict(),
@@ -1630,6 +1651,8 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   fusion_project_export: 'Return a project file as text for saving.',
   fusion_filter_set:
     'Edit a manual crossover biquad. Explicit frequency/F2 commits use canonical decimal Text, 10–50,000 Hz bounds, one decimal and Single storage. Ordinary FA Q/Q2 commits use 0.1–20, three decimals and Double storage; BQ gain uses −125…24 dB, two decimals and Double storage. Exact zero retains the previous frequency/Q field value; gain zero is accepted. These are recovered profile defaults, not all native custom preference settings. Untouched imported values stay unchanged. A shape change preserves Enabled unless explicitly supplied. Redesign explicitly replaces preserved imported coefficients.',
+  fusion_filter_adjust:
+    'Apply one stateless native ordinary Q/Q2 or BQ-gain wheel event from a freshly/passively displayed canonical value, using factory steps 0.04 or 0.1. Continuous human wheel gestures retain separate field-local Text/state; commands do not share that transient state. Returns stored value and visible native Text independently because the AdditionalGain guard may change only Text. Preset/channel/index are one-based. Both basis:each advances each active field independently; basis:left/right computes that selected source event and mirrors its changed stored value, including inactive destination latent fields. A single target accepts each or its matching role only. Every target must be editable/unlinked before any mutation. Uses channel AdditionalGain, never ordinary channel gain. Unchanged source Text and all-bound no-ops retain exact coefficients, metadata and history. Only changed values redesign. No amplifier I/O; keyboard arrows, graph gestures and Input EQ remain separate.',
   fusion_biquad_exchange:
     'Exchange two same-channel biquad parameter sets while preserving physical graph slots and read-only linked channels.',
   fusion_channel_copy:
@@ -1819,6 +1842,7 @@ export function createToolExecutor(adapter: ToolAdapter) {
         [
           'fusion_filter_add',
           'fusion_filter_set',
+          'fusion_filter_adjust',
           'fusion_filter_move',
           'fusion_filter_reset',
           'fusion_filter_delete',
@@ -2142,6 +2166,31 @@ export function createToolExecutor(adapter: ToolAdapter) {
             }
           });
           break;
+        }
+        case 'fusion_filter_adjust': {
+          const p = schemas.fusion_filter_adjust.parse(a);
+          const plan = planManualFilterWheel(state.documents, roles(p.target), {
+            presetIndex: p.preset - 1,
+            channelIndex: p.channel - 1,
+            filterIndex: p.index - 1,
+            parameter: p.parameter,
+            direction: p.direction === 'up' ? 1 : -1,
+            basis: p.basis,
+          });
+          if (plan.changedSlots.length)
+            adapter.edit(plan.changedSlots, (project) => applyManualFilterWheel(project, plan));
+          return {
+            ok: true,
+            changed: plan.changedSlots.length > 0,
+            basis: p.basis,
+            roles: plan.roles.map(({ slot, before, value, text, changed }) => ({
+              slot,
+              before,
+              value,
+              text,
+              changed,
+            })),
+          };
         }
         case 'fusion_biquad_exchange': {
           const p = schemas.fusion_biquad_exchange.parse(a);

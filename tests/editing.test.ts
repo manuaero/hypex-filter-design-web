@@ -4,6 +4,8 @@ import {
   copyChannelProcessing,
   exchangeBiquads,
   editManualFilter,
+  planManualFilterWheel,
+  applyManualFilterWheel,
 } from '../src/domain/editing';
 import { effectiveSections, encodeChannel } from '../src/domain/dsp';
 import { linkChannel } from '../src/domain/links';
@@ -162,6 +164,100 @@ describe('explicit manual filter commits', () => {
       );
     },
   );
+});
+
+describe('shared native parameter wheel planning', () => {
+  const request = {
+    presetIndex: 0,
+    channelIndex: 0,
+    filterIndex: 0,
+    parameter: 'q' as const,
+    direction: 1 as const,
+  };
+  function documents() {
+    const docs = { left: varied(), right: varied() };
+    Object.assign(docs.left.presets[0].channels[0].filters[0], {
+      kind: 'peak',
+      enabled: false,
+      q: 0.7,
+    });
+    Object.assign(docs.right.presets[0].channels[0].filters[0], {
+      kind: 'lowpass2',
+      enabled: true,
+      q: 1.3,
+    });
+    return docs;
+  }
+  it('plans each role independently without mutation, then redesigns only changed fields and keeps identities/bypass', () => {
+    const docs = documents(),
+      before = structuredClone(docs);
+    const plan = planManualFilterWheel(docs, ['left', 'right'], request);
+    expect(docs).toEqual(before);
+    expect(plan.roles.map((role) => role.value)).toEqual([0.74, 1.34]);
+    for (const slot of plan.changedSlots) applyManualFilterWheel(docs[slot], plan);
+    for (const slot of ['left', 'right'] as const) {
+      const filter = docs[slot].presets[0].channels[0].filters[0],
+        old = before[slot].presets[0].channels[0].filters[0];
+      expect(filter.id).toBe(old.id);
+      expect(filter.sourceId).toBe(old.sourceId);
+      expect(filter.enabled).toBe(old.enabled);
+      expect(filter.frequency2).toBe(old.frequency2);
+      expect(filter.coefficients).toBeUndefined();
+      expect(filter.provenance).toBeUndefined();
+      expect(docs[slot].presets[0].channels[0].coefficientCache).toBe('base');
+    }
+  });
+  it('refuses inactive or linked targets before mutation and permits inactive latent destination fields only in source mirror', () => {
+    const docs = documents();
+    Object.assign(docs.right.presets[0].channels[0].filters[0], { kind: 'raw', q: 3 });
+    const before = structuredClone(docs);
+    expect(() => planManualFilterWheel(docs, ['left', 'right'], request)).toThrow(/inactive/);
+    expect(docs).toEqual(before);
+    const plan = planManualFilterWheel(docs, ['left', 'right'], { ...request, basis: 'left' });
+    for (const slot of plan.changedSlots) applyManualFilterWheel(docs[slot], plan);
+    expect(docs.left.presets[0].channels[0].filters[0].q).toBe(0.74);
+    expect(docs.right.presets[0].channels[0].filters[0]).toMatchObject({
+      kind: 'raw',
+      q: 0.74,
+      coefficients: before.right.presets[0].channels[0].filters[0].coefficients,
+    });
+    docs.right.presets[0].channels[0].linkedTo = 1;
+    const linked = structuredClone(docs);
+    expect(() =>
+      planManualFilterWheel(docs, ['left', 'right'], { ...request, basis: 'left' }),
+    ).toThrow(/read-only/);
+    expect(docs).toEqual(linked);
+  });
+  it('keeps bound no-ops including imported excess precision/cache, and a no-op source never mirrors', () => {
+    const docs = documents();
+    docs.left.presets[0].channels[0].filters[0].q = 20.00001;
+    const before = structuredClone(docs);
+    const mirrored = planManualFilterWheel(docs, ['left', 'right'], { ...request, basis: 'left' });
+    expect(mirrored.changedSlots).toEqual([]);
+    expect(mirrored.roles.map((role) => role.changed)).toEqual([false, false]);
+    expect(docs).toEqual(before);
+    const each = planManualFilterWheel(docs, ['left', 'right'], request);
+    expect(each.changedSlots).toEqual(['right']);
+    applyManualFilterWheel(docs.right, each);
+    expect(docs.left).toEqual(before.left);
+    expect(docs.right.presets[0].channels[0].filters[0].q).toBe(1.34);
+  });
+  it('uses AdditionalGain for the post-step ceiling and does not use ordinary channel gain', () => {
+    const docs = documents();
+    for (const slot of ['left', 'right'] as const) {
+      const channel = docs[slot].presets[0].channels[0];
+      channel.filters[0].kind = 'peak';
+      channel.filters[0].gain = 20;
+      channel.gain = -12;
+    }
+    docs.left.presets[0].channels[0].additionalGain = 10;
+    docs.right.presets[0].channels[0].additionalGain = 0;
+    const plan = planManualFilterWheel(docs, ['left', 'right'], { ...request, parameter: 'gain' });
+    // The native post-step guard suppresses its model callback: only Text
+    // becomes 14.00. Both actual canonical models still receive the wheel step.
+    expect(plan.roles.map((role) => role.value)).toEqual([20.1, 20.1]);
+    expect(plan.roles.map((role) => role.text)).toEqual(['14.00', '20.10']);
+  });
 });
 
 describe('biquad parameter exchange', () => {

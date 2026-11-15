@@ -4,6 +4,7 @@ import { ArrowRight, Check, X, SlidersHorizontal } from 'lucide-react';
 import { type Filter, type FilterKind, type Preset } from '../domain/model';
 import { design, response, presetResponse, encodeChannel, FILTER_NAMES } from '../domain/dsp';
 import Numeric from './Numeric';
+import { isManualFilterParameterActive } from '../domain/editing';
 import { normalizeHfdManualFrequencyText } from '../domain/manual-frequency';
 import {
   normalizeHfdManualQText,
@@ -38,9 +39,8 @@ const family = (kind: FilterKind) =>
       : kind === 'raw'
         ? 'Advanced'
         : 'EQ';
-export const hasQ = (kind: FilterKind) =>
-  !['unity', 'raw', 'lowpass1', 'highpass1', 'allpass1', 'lowshelf1', 'highshelf1'].includes(kind);
-export const hasGain = (kind: FilterKind) => kind === 'peak' || kind.includes('shelf');
+export const hasQ = (kind: FilterKind) => isManualFilterParameterActive({ kind }, 'q');
+export const hasGain = (kind: FilterKind) => isManualFilterParameterActive({ kind }, 'gain');
 export function FilterGlyph({ kind, className = '' }: { kind: FilterKind; className?: string }) {
   let path = '';
   try {
@@ -127,6 +127,7 @@ export default function FilterPalette({
   failure?: string;
   frequencyMaximum?: number;
 }) {
+  const parameterContext = JSON.stringify([draft.id, draft.kind, eq, targets]);
   const [previewContext, setPreviewContext] = useState<'section' | 'driver'>('section'),
     phaseMode = draft.kind.startsWith('allpass'),
     axisMax = phaseMode ? 180 : 20,
@@ -391,8 +392,11 @@ export default function FilterPalette({
               {hasGain(draft.kind) && (
                 <Numeric
                   label="Amount"
+                  contextKey={eq ? undefined : `${parameterContext}:gain`}
                   value={draft.gain}
                   onChange={(gain) => onDraft({ gain })}
+                  parameterWheel={eq ? undefined : 'gain'}
+                  parameterWheelAdditionalGain={preset.channels[channelIndex].additionalGain ?? 0}
                   deferTextCommit={!eq}
                   normalizeText={
                     eq
@@ -411,8 +415,11 @@ export default function FilterPalette({
                 <Numeric
                   precision={3}
                   label={draft.kind === 'asymmetric' ? 'Zero Q' : 'Width · Q'}
+                  contextKey={eq ? undefined : `${parameterContext}:q`}
                   value={draft.q}
                   onChange={(q) => onDraft({ q })}
+                  parameterWheel={eq ? undefined : 'q'}
+                  parameterWheelAdditionalGain={preset.channels[channelIndex].additionalGain ?? 0}
                   deferTextCommit={!eq}
                   normalizeText={
                     eq
@@ -446,8 +453,11 @@ export default function FilterPalette({
                   <Numeric
                     precision={3}
                     label="Pole Q"
+                    contextKey={`${parameterContext}:q2`}
                     value={draft.q2}
                     onChange={(q2) => onDraft({ q2 })}
+                    parameterWheel="q"
+                    parameterWheelAdditionalGain={preset.channels[channelIndex].additionalGain ?? 0}
                     deferTextCommit
                     normalizeText={(text, previousValue) =>
                       normalizeHfdManualQText(text, { previousValue })

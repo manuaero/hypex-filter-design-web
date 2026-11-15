@@ -4,6 +4,7 @@ out/
 .sites/
 test-results/
 playwright-report/
+.vitest/
 *.tsbuildinfo
 .env*
 !.env.example

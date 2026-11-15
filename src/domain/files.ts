@@ -642,7 +642,15 @@ export function importHfd(xml: string, name: string): Project {
       // original cache; near-unit and inverted caches still need detection.
       channel.coefficientCache = cacheIsBase || multiplier === 1 ? 'base' : 'effective';
       if (!cacheIsBase && multiplier !== 1 && first.coefficients) {
-        const stored = first.coefficients;
+        // Read original native Doubles directly: dividing then multiplying to
+        // undo speculative de-embedding can change a cache by one ULP.
+        const original = {
+          b0: num(bqs[0], 'b0', 1),
+          b1: num(bqs[0], 'b1'),
+          b2: num(bqs[0], 'b2'),
+          f1: num(bqs[0], 'a1'),
+          f2: num(bqs[0], 'a2'),
+        };
         let base;
         try {
           base = designHfd({ ...first, enabled: true });
@@ -657,13 +665,6 @@ export function importHfd(xml: string, name: string): Project {
               b1: base.b1 * multiplier,
               b2: base.b2 * multiplier,
             };
-          // The map above de-embedded by default. Reconstruct original storage.
-          const original = {
-            ...stored,
-            b0: stored.b0 * multiplier,
-            b1: stored.b1 * multiplier,
-            b2: stored.b2 * multiplier,
-          };
           const matches = (expected: typeof base) =>
             keys.every(
               (k) => Math.abs(original[k] - expected[k]) / (1 + Math.abs(expected[k])) < 1e-9,
@@ -679,12 +680,7 @@ export function importHfd(xml: string, name: string): Project {
             );
           }
         } else if (Math.abs(multiplier - 1) > 1e-12) {
-          first.coefficients = {
-            ...stored,
-            b0: stored.b0 * multiplier,
-            b1: stored.b1 * multiplier,
-            b2: stored.b2 * multiplier,
-          };
+          first.coefficients = original;
           channel.coefficientCache = 'unresolved';
         }
       }

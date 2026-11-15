@@ -1,6 +1,7 @@
 import { rootChannel } from './links';
 import { normalizeHfdManualFrequencyText } from './manual-frequency';
 import { normalizeHfdManualQText, normalizeHfdManualGainText } from './manual-parameter';
+import { hfdManualParameterWheelNext, type HfdManualWheelResult } from './parameter-wheel';
 import {
   CHANNELS,
   emptyFir,
@@ -9,7 +10,163 @@ import {
   type Filter,
   type Preset,
   type Project,
+  type Slot,
 } from './model';
+
+export type ManualFilterParameter = 'q' | 'q2' | 'gain';
+export interface ManualFilterWheelRequest {
+  presetIndex: number;
+  channelIndex: number;
+  filterIndex: number;
+  parameter: ManualFilterParameter;
+  direction: -1 | 1;
+  basis?: 'each' | Slot;
+}
+export interface ManualFilterWheelPlan {
+  request: ManualFilterWheelRequest;
+  changedSlots: Slot[];
+  roles: {
+    slot: Slot;
+    before: number;
+    value: number;
+    text: string;
+    changed: boolean;
+    beforeFilter: Filter;
+    additionalGain: number;
+  }[];
+}
+export function isManualFilterParameterActive(
+  filter: Pick<Filter, 'kind'>,
+  parameter: ManualFilterParameter,
+): boolean {
+  if (parameter === 'q2') return filter.kind === 'asymmetric';
+  if (parameter === 'gain')
+    return ['peak', 'lowshelf1', 'highshelf1', 'lowshelf2', 'highshelf2'].includes(filter.kind);
+  return [
+    'lowpass2',
+    'highpass2',
+    'peak',
+    'lowshelf2',
+    'highshelf2',
+    'asymmetric',
+    'allpass2',
+  ].includes(filter.kind);
+}
+
+/** Preflight every target before any workspace edit. Source-basis events mirror
+ * one native callback; a source unchanged-Text event does not invoke a mirror. */
+export function planManualFilterWheel(
+  documents: Record<Slot, Project>,
+  slots: readonly Slot[],
+  request: ManualFilterWheelRequest,
+  sourceEvent?: {
+    slot: Slot;
+    filterId: string;
+    before: number;
+    additionalGain: number;
+    result: Pick<HfdManualWheelResult, 'value' | 'text' | 'changed'>;
+  },
+): ManualFilterWheelPlan {
+  if (
+    !slots.length ||
+    slots.length > 2 ||
+    new Set(slots).size !== slots.length ||
+    slots.some((slot) => slot !== 'left' && slot !== 'right')
+  )
+    throw new Error('Invalid wheel targets');
+  if (
+    !['q', 'q2', 'gain'].includes(request.parameter) ||
+    (request.direction !== -1 && request.direction !== 1)
+  )
+    throw new Error('Invalid parameter wheel action');
+  const basis = request.basis ?? 'each';
+  if (basis !== 'each' && !slots.includes(basis))
+    throw new Error('Wheel source must be a selected role');
+  const targets = slots.map((slot) => {
+    const preset = presetAt(documents[slot], request.presetIndex);
+    const channel = editableChannel(preset, request.channelIndex);
+    index(request.filterIndex, channel.filters.length, 'biquad');
+    const filter = channel.filters[request.filterIndex],
+      additionalGain = channel.additionalGain ?? 0;
+    if (!Number.isFinite(additionalGain)) throw new Error('Additional gain must be finite');
+    if (
+      (basis === 'each' || basis === slot) &&
+      !isManualFilterParameterActive(filter, request.parameter)
+    )
+      throw new Error(`${request.parameter} is inactive for ${slot} ${filter.kind}`);
+    return { slot, filter, additionalGain };
+  });
+  const next = (target: (typeof targets)[number]) =>
+    hfdManualParameterWheelNext(target.filter[request.parameter], request.direction, {
+      parameter: request.parameter === 'gain' ? 'gain' : 'q',
+      additionalGain: target.additionalGain,
+    });
+  let sourceResult: Pick<HfdManualWheelResult, 'value' | 'text' | 'changed'> | undefined;
+  if (basis !== 'each') {
+    const source = targets.find((target) => target.slot === basis)!;
+    if (sourceEvent) {
+      if (
+        sourceEvent.slot !== basis ||
+        sourceEvent.filterId !== source.filter.id ||
+        sourceEvent.before !== source.filter[request.parameter] ||
+        sourceEvent.additionalGain !== source.additionalGain ||
+        !Number.isFinite(sourceEvent.result.value)
+      )
+        throw new Error('The parameter wheel source changed');
+      sourceResult = sourceEvent.result;
+    } else sourceResult = next(source);
+  } else if (sourceEvent) throw new Error('A UI source event requires a fixed source basis');
+  const roles = targets.map((target) => {
+    const result = sourceResult ?? next(target);
+    const before = target.filter[request.parameter];
+    const changed = result.changed && result.value !== before;
+    return {
+      slot: target.slot,
+      before,
+      value: changed ? result.value : before,
+      text: result.text,
+      changed,
+      beforeFilter: structuredClone(target.filter),
+      additionalGain: target.additionalGain,
+    };
+  });
+  return {
+    request: { ...request, basis },
+    roles,
+    changedSlots: roles.filter((role) => role.changed).map((role) => role.slot),
+  };
+}
+
+/** Apply only a preflighted changed slot. Matching complete filter/context values
+ * avoids relying on a workspace adapter's callback order or project UUIDs. */
+export function applyManualFilterWheel(project: Project, plan: ManualFilterWheelPlan): void {
+  const { presetIndex, channelIndex, filterIndex, parameter } = plan.request;
+  const preset = presetAt(project, presetIndex),
+    channel = editableChannel(preset, channelIndex);
+  index(filterIndex, channel.filters.length, 'biquad');
+  const current = channel.filters[filterIndex];
+  const matches = plan.roles.filter(
+    (role) =>
+      role.changed &&
+      role.additionalGain === (channel.additionalGain ?? 0) &&
+      JSON.stringify(role.beforeFilter) === JSON.stringify(current),
+  );
+  if (!matches.length || matches.some((role) => role.value !== matches[0].value))
+    throw new Error('The parameter wheel target changed');
+  const value = matches[0].value;
+  if (value === current[parameter]) return;
+  channel.filters[filterIndex] = editManualFilter(
+    current,
+    { [parameter]: value },
+    {
+      redesign: true,
+      manualFrequency: false,
+      manualParameters: false,
+    },
+  );
+  if (filterIndex === 0 && current.kind !== 'raw') channel.coefficientCache = 'base';
+  synchronizeFollowers(preset, channelIndex);
+}
 
 /** Explicit manual edits only: never normalize imported or untouched fields. */
 export function editManualFilter(

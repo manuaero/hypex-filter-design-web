@@ -2,7 +2,7 @@
 
 Agents use the same controllers and validation as the human interface. Normal users can work entirely through visible controls; the optional command console is a development aid.
 
-The current registry contains **89 commands**, including shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
+The current registry contains **90 commands**, including stateless native parameter-wheel adjustments, shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
 
 ## Pair a local client
 
@@ -116,6 +116,37 @@ V39 also observed a NaN cache after a direct HP2-to-Peak type change, so this is
 These are design edits. Apply commits a preview to the design; Upload remains
 a separate amplifier action.
 
+## Ordinary parameter wheel adjustments
+
+`fusion_filter_adjust` applies one native ordinary output Q/Q2 or BQ-gain wheel event to the design. The registry now has **90 commands**. This action does not access an amplifier and does not require the optional command console for human editing.
+
+```json
+{
+  "name": "fusion_filter_adjust",
+  "arguments": {
+    "target": "both",
+    "preset": 1,
+    "channel": 1,
+    "index": 1,
+    "parameter": "q2",
+    "direction": "up",
+    "basis": "each"
+  }
+}
+```
+
+Preset/channel are 1–3 and filter index is 1–15. `parameter` is `q`, `q2` or `gain`; `direction` is `up` or `down`. The recovered factory step is 0.04 for Q/Q2 and 0.1 dB for gain, with Double storage and the ordinary bounds described above. Choose a parameter active in the selected source filter. One command is one event. Native +120 and +360 wheel events each produced one step; wheel magnitude is not an event multiplier.
+
+- `basis: "each"` is the default. Both roles advance from their own value and channel AdditionalGain context; the selected parameter must be active in each selected role.
+- `basis: "left"` or `"right"` computes an event from that active source parameter and mirrors its changed canonical value; an inactive counterpart field may retain that mirrored value as latent metadata. An unchanged source leaves the other role untouched. A single target accepts only `each` or its matching role.
+- All selected destinations must be editable and unlinked before one atomic document edit. Only changed values redesign cached coefficients; an all-bound no-op adds no history entry. A source-based mirror follows the existing manual-field rules for inactive destination parameters.
+
+Results return the computed native event `text` and stored `value` separately. For a source-basis mirror, `text` describes the source event, not a destination widget’s display. The native AdditionalGain post-step ceiling suppresses one notification: with AdditionalGain 10, one event from 13.95 displayed `14.00` but saved gain **14.05**; another from 17.95 displayed `14.00` but saved **18.05**. Analysis, compilation and export use the stored value. Human fields show **Stored … dB** whenever that value differs from their visible text.
+
+Each MCP call begins from a fresh passive field. It never imports or retains a browser field's private transient wheel state. Continuous human wheel gestures may therefore differ from separate commands in this inhibited-ceiling case. `fusion_filter_set` remains the separate absolute text-commit action. These semantics do not qualify keyboard arrows, graph gestures or input EQ.
+
+Native reopening of the synthetic AdditionalGain-6 input normalized it to 10, but passive web imports preserve the supplied metadata. That native load behavior is not a request to rewrite browser projects. Exact native cached numerator Doubles are also retained during base/custom interpretation; ambiguity and stability guards remain unchanged. The native −125/−124.9 Peak cases match numerically while both imported and regenerated versions still refuse compilation at a pole of one. Scalar Q24 predictions are not accepted upload packets. See [V40 verification](VERIFICATION.md#v40-ordinary-parameter-wheel-checkpoint).
+
 ## Native Delete, broader Reset and reusable slots
 
 The normal card Remove and graph Delete actions share `fusion_filter_delete`:
@@ -155,7 +186,7 @@ for the bounded native/browser evidence and completed public-source checks.
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | State, selection and history | `fusion_state`, `fusion_select`, `fusion_view`, `fusion_history`                                                                                                                                                 |
 | Projects and storage         | `fusion_project_new`, `fusion_project_import`, `fusion_project_export`, `fusion_project_save`, `fusion_workspace_storage`, `fusion_project_sources`, `fusion_project_directory`                                  |
-| Filters and channels         | `fusion_filter_palette`, `fusion_preview_filter`, `fusion_filter_add`, `fusion_filter_set`, `fusion_filter_delete`, `fusion_filter_reset`, `fusion_channel_set`, `fusion_channel_link`, `fusion_biquad_exchange` |
+| Filters and channels         | `fusion_filter_palette`, `fusion_preview_filter`, `fusion_filter_add`, `fusion_filter_set`, `fusion_filter_adjust`, `fusion_filter_delete`, `fusion_filter_reset`, `fusion_channel_set`, `fusion_channel_link`, `fusion_biquad_exchange` |
 | EQ and FIR                   | `fusion_eq_set`, `fusion_eq_bank`, `fusion_eq_read`, `fusion_eq_upload`, `fusion_fir_set`, `fusion_fir_read`, `fusion_fir_upload`                                                                                |
 | Measurements and analysis    | `fusion_hfd_measurement`, `fusion_microphone`, `fusion_analyze`, `fusion_time_analyze`, `fusion_audio`                                                                                                           |
 | Device state and settings    | `fusion_device_read`, `fusion_controls`, `fusion_amplifier_modes`, `fusion_limiter_editor`, `fusion_device_defaults`                                                                                             |

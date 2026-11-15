@@ -1058,7 +1058,7 @@ it('actual palette commits Q/gain draft Text before Apply and preserves mixed En
   expect(state().documents).toEqual(before);
 });
 
-it('palette generic Q/gain wheels retain browser extension bounds while raw manual commands use native defaults', async () => {
+it('palette native wheel bounds remain separate from legacy arrows and raw manual commands', async () => {
   Object.assign(selectedFilter(), {
     kind: 'peak',
     enabled: true,
@@ -1082,6 +1082,14 @@ it('palette generic Q/gain wheels retain browser extension bounds while raw manu
   await act(async () =>
     gain.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true })),
   );
+  expect(q.value).toBe('20.000');
+  expect(gain.value).toBe('24.00');
+  await act(async () =>
+    q.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })),
+  );
+  await act(async () =>
+    gain.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })),
+  );
   expect(q.value).toBe('20.050');
   expect(gain.value).toBe('24.50');
   expect(state().documents).toEqual(before);
@@ -1101,6 +1109,157 @@ it('palette generic Q/gain wheels retain browser extension bounds while raw manu
   );
   expect(paletteDraft().frequency).toBe(107.19999694824219);
   expect(paletteDraft().frequency).not.toBe(107.2);
+});
+
+it('native inspector wheel mirrors a selected source into inactive latent targets and Both each refuses atomically', async () => {
+  Object.assign(selectedFilter(), { kind: 'peak', q: 0.7, enabled: false });
+  Object.assign(selectedFilter('right'), { kind: 'lowpass1', q: 1.3, enabled: true });
+  useWorkspace.setState({ linkedEdits: true });
+  await mount();
+  const before = structuredClone(state().documents);
+  const q = host.querySelector<HTMLInputElement>(
+    '#selected-filter-inspector [aria-label="Q factor"]',
+  )!;
+  await spin(q, -120);
+  expect(selectedFilter()).toMatchObject({ q: 0.74, enabled: false });
+  expect(selectedFilter('right')).toMatchObject({ kind: 'lowpass1', q: 0.74, enabled: true });
+  expect(state().past).toHaveLength(1);
+  await act(async () => seen.adapter!.undo());
+  expect(state().documents).toEqual(before);
+  const revision = state().documentRevision;
+  await act(async () => {
+    const execute = createToolExecutor(seen.adapter!);
+    expect(
+      await execute('fusion_filter_adjust', {
+        target: 'both',
+        preset: 1,
+        channel: 1,
+        index: 1,
+        parameter: 'q',
+        direction: 'up',
+      }),
+    ).toMatchObject({ ok: false });
+  });
+  expect(state().documents).toEqual(before);
+  expect(state().documentRevision).toBe(revision);
+});
+
+it('native bound wheels retain imported excess precision, caches, revision and Undo history', async () => {
+  Object.assign(selectedFilter(), {
+    kind: 'peak',
+    q: 20.00001,
+    gain: 24.00001,
+    enabled: false,
+    coefficients: { b0: 0.9, b1: 0, b2: 0, f1: 0.1, f2: 0 },
+    provenance: 'hfd',
+  });
+  state().documents.left.presets[0].channels[0].coefficientCache = 'unresolved';
+  await mount();
+  const documents = state().documents,
+    before = structuredClone(documents),
+    revision = state().documentRevision;
+  const q = host.querySelector<HTMLInputElement>(
+    '#selected-filter-inspector [aria-label="Q factor"]',
+  )!;
+  const gain = host.querySelector<HTMLInputElement>(
+    '#selected-filter-inspector [aria-label="Filter gain"]',
+  )!;
+  await spin(q, -120);
+  await spin(gain, -120);
+  expect(state().documents).toBe(documents);
+  expect(state().documents).toEqual(before);
+  expect(state().past).toHaveLength(0);
+  expect(state().documentRevision).toBe(revision);
+  expect(q.value).toBe('20.000');
+  expect(gain.value).toBe('24.00');
+});
+
+it('native guarded gain keeps its visible Text and stored-value hint while Mirror and commands use the canonical callback', async () => {
+  Object.assign(selectedFilter(), { kind: 'peak', gain: 17.95, enabled: false });
+  state().documents.left.presets[0].channels[0].additionalGain = 10;
+  Object.assign(selectedFilter('right'), { kind: 'lowpass1', gain: 3, enabled: true });
+  useWorkspace.setState({ linkedEdits: true });
+  await mount();
+  const before = structuredClone(state().documents);
+  const inspector = host.querySelector('#selected-filter-inspector')!;
+  const gain = inspector.querySelector<HTMLInputElement>('[aria-label="Filter gain"]')!;
+  await spin(gain, -120);
+  expect(selectedFilter()).toMatchObject({ gain: 18.05, enabled: false });
+  expect(selectedFilter('right')).toMatchObject({ kind: 'lowpass1', gain: 18.05, enabled: true });
+  expect(gain.value).toBe('14.00');
+  expect(inspector.textContent).toContain('Stored 18.05 dB');
+  expect(state().past).toHaveLength(1);
+  await spin(gain, -120);
+  expect(selectedFilter().gain).toBe(14.1);
+  expect(selectedFilter('right').gain).toBe(14.1);
+  expect(gain.value).toBe('14.00');
+  await act(async () => seen.adapter!.undo());
+  expect(selectedFilter().gain).toBe(18.05);
+  expect(gain.value).toBe('18.05');
+  expect(inspector.textContent).not.toContain('Stored');
+  await act(async () => seen.adapter!.undo());
+  expect(state().documents).toEqual(before);
+  await act(async () => {
+    expect(
+      await createToolExecutor(seen.adapter!)('fusion_filter_adjust', {
+        target: 'both',
+        preset: 1,
+        channel: 1,
+        index: 1,
+        parameter: 'gain',
+        direction: 'up',
+        basis: 'left',
+      }),
+    ).toMatchObject({
+      ok: true,
+      roles: [
+        { value: 18.05, text: '14.00' },
+        { value: 18.05, text: '14.00' },
+      ],
+    });
+  });
+  expect(selectedFilter().gain).toBe(18.05);
+  expect(selectedFilter('right').gain).toBe(18.05);
+  // The external command changed the model; this passive field refresh uses
+  // canonical Text rather than pretending it retained a local native widget.
+  expect(gain.value).toBe('18.05');
+  expect(inspector.textContent).not.toContain('Stored');
+});
+
+it('native palette wheel stages one event locally, resets dirty state on kind change and applies once', async () => {
+  Object.assign(selectedFilter(), { kind: 'peak', q: 0.7, gain: 7.5, enabled: false });
+  await mount();
+  const before = structuredClone(state().documents);
+  await act(async () => host.querySelector<HTMLButtonElement>('.inspector-shape')!.click());
+  const dialog = host.querySelector<HTMLDialogElement>('dialog[aria-label="Change filter type"]')!;
+  let q = dialog.querySelector<HTMLInputElement>('[aria-label="Width · Q"]')!;
+  const gain = dialog.querySelector<HTMLInputElement>('[aria-label="Amount"]')!;
+  await spin(q, -120);
+  await spin(gain, -120);
+  expect(q.value).toBe('0.740');
+  expect(gain.value).toBe('7.60');
+  expect(state().documents).toEqual(before);
+  await typeNumeric(q, '0.99999');
+  await act(async () => {
+    await createToolExecutor(seen.adapter!)('fusion_filter_palette', {
+      action: 'update',
+      draft: { kind: 'highpass2' },
+    });
+  });
+  q = dialog.querySelector<HTMLInputElement>('[aria-label="Width · Q"]')!;
+  expect(q.value).toBe('0.740');
+  await spin(q, -120);
+  expect(q.value).toBe('0.780');
+  await act(async () =>
+    [...dialog.querySelectorAll('button')]
+      .find((button) => button.textContent === 'Apply shape')!
+      .click(),
+  );
+  expect(selectedFilter()).toMatchObject({ kind: 'highpass2', q: 0.78, gain: 7.6, enabled: false });
+  expect(state().documents.right).toEqual(before.right);
+  expect(state().past).toHaveLength(1);
+  await act(async () => seen.adapter!.undo());
+  expect(state().documents).toEqual(before);
 });
 
 it('actual inspector retains raw F2 drafts until commit, uses 50k manual bounds independently of viewport, and preserves imported values/Undo', async () => {

@@ -17,7 +17,11 @@ import {
   deleteBiquad,
   isUnusedBiquad,
   editManualFilter,
+  planManualFilterWheel,
+  applyManualFilterWheel,
+  type ManualFilterParameter,
 } from '../domain/editing';
+import type { HfdManualWheelResult } from '../domain/parameter-wheel';
 import { normalizeHfdManualFrequencyText } from '../domain/manual-frequency';
 import {
   normalizeHfdManualQText,
@@ -1710,6 +1714,50 @@ export default function Studio() {
       }
       if (tab === 'Input EQ') encodeEq(p.presets[w.preset].inputEq);
     });
+  };
+  const wheelFilter = (
+    parameter: ManualFilterParameter,
+    result: HfdManualWheelResult,
+    direction: -1 | 1,
+  ) => {
+    try {
+      const current = useWorkspace.getState();
+      if (
+        tab === 'Input EQ' ||
+        current.slot !== w.slot ||
+        current.preset !== w.preset ||
+        current.channel !== w.channel ||
+        current.filter !== w.filter
+      )
+        throw new Error('The parameter wheel target changed');
+      const slots: Slot[] = current.linkedEdits ? ['left', 'right'] : [current.slot];
+      const plan = planManualFilterWheel(
+        current.documents,
+        slots,
+        {
+          presetIndex: current.preset,
+          channelIndex: current.channel,
+          filterIndex: current.filter,
+          parameter,
+          direction,
+          basis: current.slot,
+        },
+        {
+          slot: current.slot,
+          filterId: filter.id,
+          before: filter[parameter],
+          additionalGain: channel.additionalGain ?? 0,
+          result,
+        },
+      );
+      if (plan.changedSlots.length)
+        current.editAt(plan.changedSlots, (project) => applyManualFilterWheel(project, plan));
+      setError('');
+      return true;
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+      return false;
+    }
   };
   function openPalette(mode: 'add' | 'replace', requestedIndex?: number, frequency?: number) {
     const eq = tab === 'Input EQ',
@@ -3415,6 +3463,13 @@ export default function Studio() {
                       precision={3}
                       value={filter.q}
                       onChange={(q) => editFilter({ q }, true)}
+                      parameterWheel={tab === 'Input EQ' ? undefined : 'q'}
+                      parameterWheelAdditionalGain={channel.additionalGain ?? 0}
+                      onParameterWheel={
+                        tab === 'Input EQ'
+                          ? undefined
+                          : (result, direction) => wheelFilter('q', result, direction)
+                      }
                       deferTextCommit={tab !== 'Input EQ'}
                       normalizeText={
                         tab === 'Input EQ'
@@ -3437,6 +3492,13 @@ export default function Studio() {
                       contextKey={`${w.slot}:${w.preset}:${w.channel}:${tab}:${filter.id}:${filter.kind}:${documentEpochs[w.slot]}:gain`}
                       value={filter.gain}
                       onChange={(gain) => editFilter({ gain }, true)}
+                      parameterWheel={tab === 'Input EQ' ? undefined : 'gain'}
+                      parameterWheelAdditionalGain={channel.additionalGain ?? 0}
+                      onParameterWheel={
+                        tab === 'Input EQ'
+                          ? undefined
+                          : (result, direction) => wheelFilter('gain', result, direction)
+                      }
                       deferTextCommit={tab !== 'Input EQ'}
                       normalizeText={
                         tab === 'Input EQ'
@@ -3493,6 +3555,9 @@ export default function Studio() {
                       precision={3}
                       value={filter.q2}
                       onChange={(q2) => editFilter({ q2 }, true)}
+                      parameterWheel="q"
+                      parameterWheelAdditionalGain={channel.additionalGain ?? 0}
+                      onParameterWheel={(result, direction) => wheelFilter('q2', result, direction)}
                       deferTextCommit
                       normalizeText={(text, previousValue) =>
                         normalizeHfdManualQText(text, { previousValue })

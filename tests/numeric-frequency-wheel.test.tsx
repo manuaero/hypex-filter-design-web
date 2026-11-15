@@ -185,6 +185,178 @@ it('keeps generic wheel/arrow bounds separate from ordinary typed Q/gain limits'
   expect(changed).toHaveBeenLastCalledWith(20);
 });
 
+it('native Q wheel ignores magnitude/zero, prevents scroll and remains separate from legacy arrows', async () => {
+  const changed = await render(0.7, {
+    frequencyWheel: undefined,
+    parameterWheel: 'q',
+    step: 0.01,
+    min: 0.1,
+    max: 20,
+    adjustmentBounds: { min: 0.001, max: 100 },
+    deferTextCommit: true,
+    formatValue: formatHfdManualQValue,
+    normalizeText: (raw, previousValue) => normalizeHfdManualQText(raw, { previousValue }),
+  });
+  expect((await wheel(-1)).defaultPrevented).toBe(true);
+  expect(changed).toHaveBeenLastCalledWith(0.74);
+  await wheel(-120);
+  expect(changed).toHaveBeenLastCalledWith(0.78);
+  const count = changed.mock.calls.length;
+  expect((await wheel(0)).defaultPrevented).toBe(false);
+  expect(changed).toHaveBeenCalledTimes(count);
+  await key('ArrowUp');
+  expect(changed).toHaveBeenLastCalledWith(0.79);
+  await wheel(-120);
+  expect(changed).toHaveBeenLastCalledWith(0.83);
+  expect(field().value).toBe('0.830');
+});
+
+it('native bound events retain imported precision and dirty Text rejects without a canonical edit', async () => {
+  const changed = await render(20.00001, {
+    frequencyWheel: undefined,
+    parameterWheel: 'q',
+    min: 0.1,
+    max: 20,
+    deferTextCommit: true,
+    formatValue: formatHfdManualQValue,
+  });
+  expect(field().value).toBe('20.000');
+  await wheel(-120);
+  await wheel(-1);
+  expect(changed).not.toHaveBeenCalled();
+  await wheel(120);
+  expect(changed).toHaveBeenCalledExactlyOnceWith(19.96);
+  await act(async () => field().focus());
+  await enter('NAN');
+  await wheel(-120);
+  expect(changed).toHaveBeenCalledTimes(1);
+  expect(field().value).toBe('19.960');
+});
+
+it('native gain wheel uses AdditionalGain and resets private state after external/context changes', async () => {
+  const changed = vi.fn();
+  let replace!: (next: number) => void;
+  function Controlled() {
+    const [value, setValue] = useState(20);
+    replace = setValue;
+    return (
+      <Numeric
+        label="Gain"
+        value={value}
+        parameterWheel="gain"
+        parameterWheelAdditionalGain={10}
+        min={-125}
+        max={24}
+        deferTextCommit
+        formatValue={formatHfdManualGainValue}
+        contextKey="gain-left"
+        onChange={(next) => {
+          changed(next);
+          setValue(next);
+        }}
+      />
+    );
+  }
+  await act(async () => root.render(<Controlled />));
+  await wheel(-120);
+  expect(changed).toHaveBeenLastCalledWith(20.1);
+  expect(field().value).toBe('14.00');
+  await act(async () => replace(7.5));
+  await wheel(-120);
+  expect(changed).toHaveBeenLastCalledWith(7.6);
+  await wheel(120);
+  expect(changed).toHaveBeenLastCalledWith(7.5);
+});
+
+it('retains guarded native gain Text on its own unfocused model acknowledgement and shows the stored value', async () => {
+  const changed = vi.fn();
+  function Controlled() {
+    const [value, setValue] = useState(17.95);
+    return (
+      <Numeric
+        label="Gain"
+        unit="dB"
+        value={value}
+        parameterWheel="gain"
+        parameterWheelAdditionalGain={10}
+        min={-125}
+        max={24}
+        deferTextCommit
+        formatValue={formatHfdManualGainValue}
+        contextKey="gain-left"
+        onChange={(next) => {
+          changed(next);
+          setValue(next);
+        }}
+      />
+    );
+  }
+  await act(async () => root.render(<Controlled />));
+  expect(document.activeElement).not.toBe(field());
+  await wheel(-120);
+  expect(changed).toHaveBeenLastCalledWith(18.05);
+  expect(field().value).toBe('14.00');
+  expect(host.textContent).toContain('Stored 18.05 dB');
+  await wheel(-360);
+  expect(changed).toHaveBeenLastCalledWith(14.1);
+  expect(field().value).toBe('14.00');
+  expect(host.textContent).toContain('Stored 14.10 dB');
+  await wheel(120);
+  expect(changed).toHaveBeenLastCalledWith(13.9);
+  expect(field().value).toBe('13.90');
+  expect(host.textContent).not.toContain('Stored');
+});
+
+it('discards guarded gain Text and its private state on blur, external value and context replacement', async () => {
+  const changed = vi.fn();
+  let replace!: (next: number) => void, context!: (next: string) => void;
+  function Controlled() {
+    const [value, setValue] = useState(17.95),
+      [key, setKey] = useState('left');
+    replace = setValue;
+    context = setKey;
+    return (
+      <Numeric
+        label="Gain"
+        unit="dB"
+        value={value}
+        parameterWheel="gain"
+        parameterWheelAdditionalGain={10}
+        min={-125}
+        max={24}
+        deferTextCommit
+        formatValue={formatHfdManualGainValue}
+        contextKey={key}
+        onChange={(next) => {
+          changed(next);
+          setValue(next);
+        }}
+      />
+    );
+  }
+  await act(async () => root.render(<Controlled />));
+  await act(async () => field().focus());
+  await wheel(-120);
+  expect(field().value).toBe('14.00');
+  await act(async () => field().blur());
+  expect(field().value).toBe('18.05');
+  expect(host.textContent).not.toContain('Stored');
+  await wheel(120);
+  expect(changed).toHaveBeenLastCalledWith(17.95);
+  expect(field().value).toBe('14.00');
+  await act(async () => replace(7.5));
+  expect(field().value).toBe('7.50');
+  expect(host.textContent).not.toContain('Stored');
+  await wheel(-120);
+  expect(changed).toHaveBeenLastCalledWith(7.6);
+  await act(async () => replace(17.95));
+  await wheel(-120);
+  expect(field().value).toBe('14.00');
+  await act(async () => context('right'));
+  expect(field().value).toBe('18.05');
+  expect(host.textContent).not.toContain('Stored');
+});
+
 it('drops a pending draft when the role or explicit project replacement context changes', async () => {
   const changed = vi.fn();
   await act(async () =>
