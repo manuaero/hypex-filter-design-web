@@ -80,6 +80,19 @@ Connected drivers make bridge, limiter, defaults, restore, Device templates and 
 
 ## Firmware boundary
 
+The narrow runtime reader accepts exact known reported FA503 5.7/core 5.1 and
+5.82/core 5.5 profiles. It sends only `06/01`, `66/00`, `03/08` and a 32-byte
+EEPROM serial read at `0x100`, twice. Captured object/session queues and final
+role/identity fences govern the read; a remembered interface is temporarily
+owned and closed, without a chooser or device enumeration. Two matched
+projections are not an atomic hardware snapshot.
+
+Ordinary core 5.5 controls remain blocked even after a diagnostic report. Exact
+local-file SHA profiles do not establish the installed image hash or
+descriptor/bootloader family. Research on 5.83/core 5.6 does not expand support.
+See [firmware files and runtime identity](FIRMWARE_RUNTIME.md) for explicit human
+Read/Clear and the shared MCP namespace.
+
 Firmware files can be inspected and staged per role. The source includes a bounded reference program engine and strict recovery journal for simulation. A journal records exact source content, known before-images, unknown preservation gaps, actual attempts and reconnect results.
 
 Physical firmware programming remains disabled until a qualified adapter proves bootloader identity/correlation, descriptor family, preservation, timeout behavior and recovery. A complete reconstructed packet plan or a successful simulated two-pass stream does not establish that adapter. No vendor firmware bundle or original firmware image is distributed here.

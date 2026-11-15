@@ -15,6 +15,7 @@ import type { DirectorySaveBinding } from '../src/application/project-directory-
 import type { WorkspaceAuthority } from '../src/application/workspace-authority';
 import type { DirectoryLegacyReview } from '../src/application/workspace-directory';
 import { WebHidTransport } from '../src/hardware/transport';
+import { SimulatedPanel } from '../src/hardware/simulator';
 import Studio from '../src/components/Studio';
 import { HELP_RESOURCES } from '../src/application/help-resources';
 import { ensureWorkspaceHydrated, useWorkspace } from '../src/state/workspace';
@@ -106,6 +107,7 @@ vi.mock('../src/state/workspace', async (importOriginal) => {
 });
 
 let host: HTMLDivElement, root: Root;
+let restoreTestHid: (() => void) | undefined;
 const state = () => useWorkspace.getState();
 const view = () =>
   seen.adapter!.viewState!() as {
@@ -157,6 +159,8 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await act(async () => root.unmount());
+  restoreTestHid?.();
+  restoreTestHid = undefined;
   host.remove();
   vi.restoreAllMocks();
 });
@@ -975,6 +979,187 @@ it('actual Studio adapter exposes the same cached native mixer controller and vi
   expect(state().documents).toEqual(before);
   expect(state().documentRevision).toBe(revision);
   expect(state().past).toHaveLength(0);
+});
+
+function runtimeHidFixture(serial: string) {
+  const panel = new SimulatedPanel(serial);
+  panel.name = 'Synthetic runtime';
+  panel.configuration[3] = 5;
+  panel.configuration[5] = panel.configuration[12] = 3;
+  new DataView(panel.configuration.buffer).setUint16(17, 82, true);
+  panel.deviceConfiguration[11] = 9;
+  panel.deviceConfiguration[13] = 1;
+  let forbidden = 0;
+  class SyntheticDevice extends EventTarget {
+    vendorId = 0x345e;
+    productId = 0x03e8;
+    productName = 'SYNTHETIC runtime';
+    opened = false;
+    open = vi.fn(async () => {
+      this.opened = true;
+    });
+    close = vi.fn(async () => {
+      this.opened = false;
+    });
+    sendReport = vi.fn(async (_id: number, data: BufferSource) => {
+      const request = new Uint8Array(data as ArrayBuffer);
+      if (!(
+        (request[0] === 6 && request[1] === 1) ||
+        (request[0] === 0x66 && request[1] === 0) ||
+        (request[0] === 3 && request[1] === 8) ||
+        (request[0] === 0x65 &&
+          request[1] === 32 &&
+          request[2] === 0 &&
+          request[3] === 1 &&
+          request[4] === 0 &&
+          request[5] === 0)
+      )) {
+        forbidden++;
+        throw new Error('Synthetic Studio forbids every setter and unrelated read');
+      }
+      const reply = await panel.exchange(request),
+        event = new Event('inputreport');
+      Object.defineProperties(event, {
+        reportId: { value: 0 },
+        data: { value: new DataView(reply.buffer, reply.byteOffset, reply.byteLength) },
+      });
+      this.dispatchEvent(event);
+    });
+  }
+  return {
+    panel,
+    device: new SyntheticDevice(),
+    get forbidden() {
+      return forbidden;
+    },
+  };
+}
+function installRuntimeHid(devices: ReturnType<typeof runtimeHidFixture>[]) {
+  const previous = Object.getOwnPropertyDescriptor(navigator, 'hid'),
+    hub = new EventTarget();
+  const api = Object.assign(hub, {
+    getDevices: vi.fn(async () => devices.map((value) => value.device)),
+    requestDevice: vi.fn(async () => devices.map((value) => value.device)),
+  });
+  Object.defineProperty(navigator, 'hid', { configurable: true, value: api });
+  restoreTestHid = () => {
+    if (previous) Object.defineProperty(navigator, 'hid', previous);
+    else Reflect.deleteProperty(navigator, 'hid');
+  };
+  return api;
+}
+
+it('actual Studio identifies core5.5 read-only, closes its chosen interface, leaves controls offline and exposes the same remembered read through MCP', async () => {
+  const f = runtimeHidFixture('SYNTHETIC-FW-RIGHT'),
+    api = installRuntimeHid([f]);
+  await mount();
+  const documents = structuredClone(state().documents),
+    revision = state().documentRevision,
+    actor = seen.authority!.localContext('manual');
+  let result: unknown;
+  await act(async () => {
+    result = await createToolExecutor(seen.adapter!)(
+      'fusion_connect',
+      { slot: 'right', serial: f.panel.serial },
+      actor,
+    );
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    error: expect.stringContaining('identified read-only'),
+    runtime: {
+      identity: { serial: f.panel.serial, core: '5.5', firmware: '5.82' },
+      controlsQualified: false,
+    },
+  });
+  expect(seen.adapter!.connections()).toEqual({});
+  expect(f.device.opened).toBe(false);
+  expect(f.device.close).toHaveBeenCalledTimes(1);
+  expect(api.requestDevice).not.toHaveBeenCalled();
+  expect(host.querySelector('[aria-label="Right runtime identity"]')?.textContent).toContain(
+    '5.82',
+  );
+  expect(seen.adapter!.viewState!()).toMatchObject({
+    firmwareRuntime: { roles: { right: { report: { identity: { core: '5.5' } } } } },
+  });
+  await act(async () => {
+    result = await createToolExecutor(seen.adapter!)(
+      'fusion_device_read',
+      { target: 'right', firmware: { action: 'runtime-read' } },
+      actor,
+    );
+  });
+  expect(result).toMatchObject({
+    ok: true,
+    runtime: {
+      busy: false,
+      roles: {
+        right: {
+          source: 'remembered-device',
+          stale: false,
+          report: { identity: { serial: f.panel.serial }, controlsQualified: false },
+        },
+      },
+    },
+  });
+  expect(f.device.open).toHaveBeenCalledTimes(2);
+  expect(f.device.close).toHaveBeenCalledTimes(2);
+  expect(f.device.opened).toBe(false);
+  expect(seen.adapter!.connections()).toEqual({});
+  expect(f.forbidden).toBe(0);
+  expect(f.panel.writes).toBe(0);
+  expect(state().documents).toEqual(documents);
+  expect(state().documentRevision).toBe(revision);
+  expect(state().past).toHaveLength(0);
+});
+
+it('actual serial reconnect skips a different permitted diagnostic device without retargeting the requested role', async () => {
+  const wrong = runtimeHidFixture('SYNTHETIC-FW-OTHER'),
+    chosen = runtimeHidFixture('SYNTHETIC-FW-CHOSEN');
+  installRuntimeHid([wrong, chosen]);
+  await mount();
+  let result: unknown;
+  await act(async () => {
+    result = await createToolExecutor(seen.adapter!)(
+      'fusion_connect',
+      { slot: 'right', serial: chosen.panel.serial },
+      seen.authority!.localContext('manual'),
+    );
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    runtime: { identity: { serial: chosen.panel.serial } },
+  });
+  expect(wrong.device.opened).toBe(false);
+  expect(chosen.device.opened).toBe(false);
+  expect(wrong.device.close).toHaveBeenCalledTimes(1);
+  expect(chosen.device.close).toHaveBeenCalledTimes(1);
+  expect(seen.adapter!.connections()).toEqual({});
+  expect(wrong.forbidden + chosen.forbidden).toBe(0);
+  expect(seen.adapter!.firmwareRuntime!.getSnapshot().roles.right.report?.identity.serial).toBe(
+    chosen.panel.serial,
+  );
+});
+
+it('actual Connect never borrows or closes an already-open unassigned interface', async () => {
+  const f = runtimeHidFixture('SYNTHETIC-OPEN-ELSEWHERE');
+  f.device.opened = true;
+  installRuntimeHid([f]);
+  await mount();
+  let result: unknown;
+  await act(async () => {
+    result = await createToolExecutor(seen.adapter!)(
+      'fusion_connect',
+      { slot: 'right', serial: f.panel.serial },
+      seen.authority!.localContext('manual'),
+    );
+  });
+  expect(result).toMatchObject({ ok: false });
+  expect(f.device.sendReport).not.toHaveBeenCalled();
+  expect(f.device.open).not.toHaveBeenCalled();
+  expect(f.device.close).not.toHaveBeenCalled();
+  expect(f.device.opened).toBe(true);
+  expect(seen.adapter!.connections()).toEqual({});
 });
 
 it('actual Studio gesture context includes channel identity and changes when a project replaces the selected channel at the same indices', async () => {

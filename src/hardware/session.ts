@@ -198,6 +198,15 @@ export class DeviceCloneStepError extends Error {
 }
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 let sessionSequence = 0;
+/** The normal controls dialect was refused. A separate read-only diagnostic
+ * may inspect an exact known runtime without weakening this admission gate. */
+export class UnsupportedPanelRuntimeError extends Error {
+  constructor() {
+    super('This release requires the recovered FA503 / DSP3-213 v5 protocol');
+    this.name = 'UnsupportedPanelRuntimeError';
+  }
+}
+
 export class PanelSession {
   readonly lockOrder = ++sessionSequence;
   private operations = new AsyncQueue();
@@ -255,7 +264,7 @@ export class PanelSession {
   async identifyInternal() {
     const c = await this.transport.exchange(packet(6, 1));
     if (c.length !== 64 || c[0] !== 6 || c[1] !== 22 || c[2] !== 5 || c[3] !== 1)
-      throw new Error('This release requires the recovered FA503 / DSP3-213 v5 protocol');
+      throw new UnsupportedPanelRuntimeError();
     const amplifier = await this.transport.exchange(packet(0x66, 0));
     if (
       amplifier.length !== 64 ||

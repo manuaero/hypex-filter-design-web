@@ -93,6 +93,29 @@ That design edit does not upload the section. Inspect state and use Undo when ap
 
 Some older clients cache tool names. Existing validated compatibility namespaces expose selected newer operations; use the server’s current schema rather than guessing nested arguments. Firmware inspection and authentication actions are available through `fusion_device_read` namespaces. Physical firmware programming remains disabled.
 
+## Read-only firmware runtime identity
+
+`fusion_device_read` exposes `firmware.action` values `runtime-status`,
+`runtime-read` and `runtime-clear` with an explicit `target` of `left`, `right`
+or `both`:
+
+```json
+{ "target": "both", "firmware": { "action": "runtime-read" } }
+```
+
+Status returns the shared cached reports and Clear invalidates them without
+device I/O. Read sends eight matched metadata requests per captured target. It
+uses the exact live Session or remembered granted HID object, with no chooser,
+device enumeration or VID/PID search. Both publishes new reports together or
+neither. A previous result can remain visibly stale after failure.
+
+Known reported 5.82/core 5.5 can be diagnosed without admitting ordinary
+controls. Staged exact-file SHA recognition is independent of reported runtime
+metadata; neither proves the installed image hash or bootloader family.
+Production firmware programming remains unavailable. The normal UI has explicit
+Read/Clear actions and does not require this console. See the
+[runtime workflow and exact file profiles](FIRMWARE_RUNTIME.md).
+
 ## Native digital User mixer
 
 `fusion_native_mixer` uses the same conditional editor and exact independent

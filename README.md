@@ -34,6 +34,7 @@ The app works offline for design tasks. No amplifier or agent connection is need
 - A conditional native OEM digital User mixer with independent per-preset Left/Right drafts, quantized previews, explicit coordinated Save and retained operation records.
 - Browser project persistence, a project library, granted-directory Open/Save, reviewed recovery and bounded large-file transfers.
 - A shared Native Save artifact for JSON, native folders and ZIPs, with fresh read-only physical settings/EQ capture for supported connected targets and an explicit Design only option.
+- Offline firmware file inspection and explicit runtime identity reports for known 5.7/core 5.1 and 5.82/core 5.5 profiles. File recognition does not prove the installed image; core 5.5 remains diagnostic-only and production firmware programming is unavailable.
 - A local MCP server and optional authenticated hosted bridge. The current registry exposes **88 commands**; the running server’s `tools/list` is authoritative.
 
 Filter and measurement edits update the design directly. Validated numeric settings commit on Enter or blur where appropriate. Consequential changes use adjacent **Apply**, **Save**, **Update** or **Upload** actions. The developer command console is optional; normal editing never requires a generic Run command.
@@ -68,7 +69,7 @@ pnpm test
 pnpm build
 ```
 
-The v33 public-checkout checks passed: **2,339 tests passed and one optional-PDF test skipped across 171 files**, with typecheck and production build passing. See [verification](docs/VERIFICATION.md) for the evidence and hardware qualification limits.
+The v34 public-checkout checks passed: **2,449 tests passed and one optional-PDF test skipped across 178 files**, with typecheck and production build passing. See [verification](docs/VERIFICATION.md) for the evidence and hardware qualification limits.
 
 The build produces the static application in `out/` and a packaged optional hosted Worker in `dist/server/index.js`. Hosted authentication, database and object-storage bindings require separate deployment configuration. The local app and local MCP server do not require that hosting platform.
 
@@ -81,6 +82,7 @@ The public source does not include vendor executables, firmware bundles or a ven
 - [MCP server](docs/MCP.md)
 - [USB protocol and operation boundaries](docs/USB_PROTOCOL.md)
 - [Native digital User mixer](docs/NATIVE_MIXER.md)
+- [Firmware files and read-only runtime identity](docs/FIRMWARE_RUNTIME.md)
 - [Verification and remaining qualification](docs/VERIFICATION.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security](SECURITY.md)

@@ -8,6 +8,7 @@ import {
 } from '../domain/firmware';
 import { MAX_UI_TEXT_CHARACTERS, MAX_UI_FILE_BYTES } from './file-budget';
 import type { UsbDescriptorProof } from '../hardware/usb-descriptor';
+import { lookupKnownFirmwareProfile, type KnownFirmwareProfile } from '../domain/firmware-profile';
 
 /** Ordinary connected-device identity, NOT a HID descriptor/product serial. */
 export interface FirmwareDeviceBinding {
@@ -26,6 +27,8 @@ export interface FirmwareStage {
   sha256: string;
   textBytes: number;
   family: FirmwareFamily;
+  /** Exact staged-file content only; not proof of the amplifier's running image. */
+  contentProfile?: KnownFirmwareProfile;
   /** Uninterpreted native uint32 header metadata, not file sizes or versions. */
   headerWords: readonly [number, number];
   recordCount: number;
@@ -355,12 +358,18 @@ export function createFirmwareWorkspace(options: FirmwareWorkspaceOptions): Firm
         const changed =
           JSON.stringify(bound) !== JSON.stringify(cloneBinding(options.binding(slot)));
         const target = targetFor(slot, bound, bundle.family);
+        const contentProfile = lookupKnownFirmwareProfile(hash);
+        if (contentProfile && contentProfile.family !== bundle.family)
+          throw new Error(
+            'Recognized firmware content hash disagrees with the parsed bundle family',
+          );
         const stage: FirmwareStage = immutable({
           id: `${slot}:${token}:${hash.toLowerCase()}`,
           name,
           sha256: hash.toLowerCase(),
           textBytes: bytes.byteLength,
           family: bundle.family,
+          ...(contentProfile ? { contentProfile } : {}),
           headerWords: [...bundle.headerWords] as [number, number],
           recordCount: bundle.records.length,
           dataBytes: bundle.dataBytes,

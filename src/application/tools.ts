@@ -94,6 +94,7 @@ import {
   type CaptureSnapshot,
 } from './measurement-capture';
 import type { FirmwareWorkspace } from './firmware-workspace';
+import { FirmwareRuntimeDiagnosticError, type FirmwareRuntimeController } from './firmware-runtime';
 import { DeviceAuthOperationError, type DeviceAuthController } from './device-auth';
 import { DeviceDefaultsError, type DeviceDefaultsController } from './device-defaults';
 import { AmplifierModesError, type AmplifierModesController } from './amplifier-modes';
@@ -198,6 +199,7 @@ export interface ToolAdapter {
   microphone?: { remember: (reference: HfdProjectCalibration | undefined) => void };
   capture?: CaptureController;
   firmware?: FirmwareWorkspace;
+  firmwareRuntime?: FirmwareRuntimeController;
   auth?: DeviceAuthController;
   deviceDefaults?: DeviceDefaultsController;
   deviceClone?: DeviceCloneController;
@@ -770,6 +772,9 @@ const firmwareToolSchema = z
       'usb-choose',
       'usb-revalidate',
       'usb-clear',
+      'runtime-status',
+      'runtime-read',
+      'runtime-clear',
     ]),
     content: z.string().max(MAX_UI_TEXT_CHARACTERS).optional(),
     name: z.string().min(1).max(4096).optional(),
@@ -1693,6 +1698,8 @@ TOOL_DESCRIPTIONS.fusion_configuration_restore =
   'Restore an identity-bound device configuration and verify every byte, retaining mute.';
 TOOL_DESCRIPTIONS.fusion_device_read =
   'Read fresh device options, hardware/accessory overview, native OEM protection report, limiter configuration and power statistics. Mask inventory and permitted operations are separate. Optional firmware actions inspect/status/clear files or preview up to 50 packets without a connection or device calls. usb-status/usb-choose/usb-revalidate/usb-clear share the browser runtime-descriptor verifier; choose requires one connected role and a manual browser gesture. These metadata operations never open, claim or transfer to a USB device. Proof requires the exact observed USB serial and captured EEPROM identity, with no family inference from a filename/product label. A valid runtime proof does not establish bootloader correlation, recovery or programming; programming remains unavailable.';
+TOOL_DESCRIPTIONS.fusion_device_read +=
+  ' firmware runtime-status/runtime-clear expose cached identity reports without I/O. runtime-read uses the exact captured live session or previously granted remembered HID interface, never a chooser or VID/PID search. It reads only matched configuration, amplifier metadata, DSP filename and EEPROM serial, with fixed role/session/owner fences. Both reports publish together or neither. Exact reported5.82/core5.5 can be identified without admitting controls; installed-image SHA and descriptor family are not established by these reports. File stages may separately recognize exact known content SHA profiles; those never prove the running image. Programming/reconnect/recovery qualification remains incomplete.';
 TOOL_DESCRIPTIONS.fusion_device_read +=
   ' Optional auth namespace uses the shared human authentication controller: status, unlock, password-change, email-read, email-set, oem-propose, oem-save and clear. Credentials use explicit ascii/windows-1252/utf-8/hex encoding; password-change requires exact next/confirm plus explicit recovery email. Choose one role for credentials; only status/clear accept both. Status never contains credentials or email. Email bytes are returned only by explicit email-read. OEM proposal is read-only and bound to its role/session; Save consumes its ID once and rechecks fresh permissions and prior mask. No password or OEM write is retried automatically.';
 TOOL_DESCRIPTIONS.fusion_device_read +=
@@ -3571,6 +3578,35 @@ export function createToolExecutor(adapter: ToolAdapter) {
             return { ok: true, auth: states(), result };
           }
           if (p.firmware) {
+            const runtimeCommand = p.firmware;
+            if (runtimeCommand.action.startsWith('runtime-')) {
+              if (!context)
+                throw new Error(
+                  'Firmware runtime inspection requires a trusted workspace execution context',
+                );
+              const runtime = adapter.firmwareRuntime;
+              if (!runtime)
+                throw new Error('Firmware runtime inspection is unavailable in this client');
+              const actor = {
+                ...parseExecutionPrincipal({ owner: context.owner, scope: context.scope }),
+                ...(signal ? { signal } : {}),
+              };
+              if (runtimeCommand.action === 'runtime-read') {
+                await runtime.read(p.target, actor);
+                adapter.view({ tab: 'Device settings' });
+              } else if (runtimeCommand.action === 'runtime-clear') runtime.clear(p.target, actor);
+              const state = runtime.status(actor);
+              return {
+                ok: true,
+                runtime: {
+                  busy: state.busy,
+                  revision: state.revision,
+                  roles: Object.fromEntries(
+                    roles(p.target).map((slot) => [slot, state.roles[slot]]),
+                  ),
+                },
+              };
+            }
             const service = adapter.firmware;
             if (!service) throw new Error('Firmware file staging is unavailable in this client');
             const command = p.firmware,
@@ -3884,6 +3920,7 @@ export function createToolExecutor(adapter: ToolAdapter) {
         ...(e instanceof NativeLimiterError && e.result ? { result: e.result } : {}),
         ...(e instanceof AmplifierModesError && e.result ? { result: e.result } : {}),
         ...(e instanceof NativeMixerError && e.result ? { result: e.result } : {}),
+        ...(e instanceof FirmwareRuntimeDiagnosticError ? { runtime: e.runtime } : {}),
         ...(e instanceof DeviceCloneError
           ? {
               persistence: e.persistence,

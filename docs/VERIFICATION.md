@@ -2,6 +2,65 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V34 runtime identity checkpoint
+
+The development source checkpoint passed **2,450 tests in 178 files**, global
+typecheck and changed-file formatting checks. The fresh public checkout passed
+**2,449 tests with one optional-PDF test skipped, zero failures, and 2,450 total
+tests across 178 files**. Public typecheck and production build also passed on
+2026-11-15 using Node.js 24.22.1. The v33 and earlier release totals below remain
+historical evidence.
+
+| Check                      | V34 public result                                                                                        |
+| -------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Static assets              | 24 assets totaling 1,894,092 bytes.                                                                      |
+| Packaged Worker            | 3,093,080 bytes.                                                                                         |
+| Optional manual            | Absent; actual compiled client and Worker registries report `bundled: false`, `optional: true`.          |
+| Worker runtime             | Home returned 200 and absent manual returned 404, with `process` absent in the isolated runtime.         |
+| Build privacy pattern scan | Zero matches for private Site IDs, token/key shapes, local user paths, actual serials or private labels. |
+
+Worker SHA-256:
+`f5036ae01197100bcf657f9ad92b070c28b8830353278dcb3b71a8e37f78a8ff`.
+The pattern scan is bounded evidence, not an exhaustive secret audit.
+
+Commands run from the public checkout:
+
+```sh
+node node_modules/typescript/bin/tsc --noEmit --incremental false
+node node_modules/vitest/vitest.mjs run --reporter=default --reporter=json --outputFile=../hypex-filter-design-web-public-v34.tests.json
+node node_modules/next/dist/bin/next build
+node scripts/build-worker.mjs
+```
+
+The intentional skip was `accepts the optional exact installed PDF bytes when
+supplied locally`; synthetic manual routing and fallback tests still ran. The
+client check evaluated the unchanged compiled registry initializer, and the
+Worker check executed the actual packaged bundle. Neither establishes browser
+download completion or physical device compatibility.
+
+The actual Studio interface was exercised over synthetic HID devices using the
+real transport, Session, inspector, controller and command executor. Reported
+5.82/core 5.5 followed diagnostic-only admission and remained Offline for normal
+controls. A mixed 5.7/core 5.1 and 5.82/core 5.5 Both read preserved independent
+roles, borrowed the live Session and closed the temporarily owned interface.
+These browser checks sent no setters and establish no physical core 5.5 or
+two-amplifier acceptance.
+
+One physical FA503 on 5.7/core 5.1 was then read through its live Session and,
+after disconnecting normal controls, through the exact remembered HID object.
+The final application state had both amplifier roles disconnected. No settings,
+mute, volume, power, bridge, flash, firmware, credential or audio setter was
+sent. Both complete projects and the selection matched their initial state;
+document revision stayed 28, both connection slots were empty before/after, and
+persistence was Ready with no unsaved changes.
+
+Browser firmware file selection was blocked by the browser-control extension's
+file-URL permission; no stage was created. Staging through that picker and
+browser download completion remain unverified. A second physical amplifier was
+unavailable, and native offline HFD GUI comparison still awaits verified USB
+absence. Production firmware programming remains unimplemented. See the
+[runtime workflow](FIRMWARE_RUNTIME.md) for the supported read-only boundary.
+
 ## Reproduce software checks
 
 ```sh

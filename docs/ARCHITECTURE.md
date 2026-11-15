@@ -68,6 +68,23 @@ manufacturing enable setter is provided. Human record download and agent
 chunked export expose the same retained journal. See the
 [native mixer workflow](NATIVE_MIXER.md).
 
+## Read-only firmware runtime identity
+
+`domain/firmware-profile.ts` recognizes exact known source-file hashes separately
+from runtime reports. `hardware/firmware-runtime-inspector.ts` performs eight
+literal read requests and validates two matching metadata projections for the
+known FA503 5.7/core 5.1 and 5.82/core 5.5 tuples. It cannot establish an installed
+image hash, descriptor family or setter capability.
+
+`application/firmware-runtime-source.ts` captures exact HID object/session
+ownership without choosing or enumerating devices. The shared
+`application/firmware-runtime.ts` controller owns role/owner/source fences,
+staleness, explicit Read/Clear and paired publication. Normal core 5.5 admission
+stays blocked: Connect can diagnose the chosen interface read-only, close it and
+retain a remembered diagnostic source while normal Live state stays Offline.
+The [runtime workflow](FIRMWARE_RUNTIME.md) remains separate from the
+unimplemented production firmware writer.
+
 ## State, history and durable commits
 
 The workspace has independent Left/Right projects, a selection and a monotonic document revision. Hydration gates edits. Asynchronous imports bind their role, preset, channel and expected revision before awaiting a picker, read or analysis. They cannot retarget themselves to a later selection.

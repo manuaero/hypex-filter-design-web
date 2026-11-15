@@ -81,6 +81,13 @@ import {
 } from '../application/native-limiter';
 import FirmwarePanel from './firmware-panel';
 import { createFirmwareWorkspace } from '../application/firmware-workspace';
+import {
+  createFirmwareRuntimeController,
+  FirmwareRuntimeDiagnosticError,
+} from '../application/firmware-runtime';
+import { createFirmwareRuntimeSourceProvider } from '../application/firmware-runtime-source';
+import { FirmwareRuntimeSerialMismatchError } from '../hardware/firmware-runtime-inspector';
+import { UnsupportedPanelRuntimeError } from '../hardware/session';
 import { createUsbDescriptorVerifier } from '../hardware/usb-descriptor';
 import DeviceAuthPanel from './DeviceAuthPanel';
 import { createDeviceAuthController } from '../application/device-auth';
@@ -835,6 +842,31 @@ export default function Studio() {
     pendingFile = useRef<((text: string, name: string) => void) | null>(null),
     liveRef = useRef(live);
   liveRef.current = live;
+  const firmwareCandidates = useRef<
+    Partial<
+      Record<
+        Slot,
+        {
+          key: string;
+          serial?: string;
+          device: HIDDevice;
+          session: PanelSession;
+        }
+      >
+    >
+  >({});
+  const firmwareRemembered = useRef<
+    Partial<
+      Record<
+        Slot,
+        {
+          key: string;
+          serial: string;
+          device: HIDDevice;
+        }
+      >
+    >
+  >({});
   const nativeProjectSave = useMemo(
     () =>
       createNativeProjectSaveController({
@@ -1103,6 +1135,42 @@ export default function Studio() {
       }),
     [descriptorVerifier],
   );
+  const firmwareRuntime = useMemo(
+    () =>
+      createFirmwareRuntimeController(
+        createFirmwareRuntimeSourceProvider({
+          live: (slot) => {
+            const connection = liveRef.current[slot];
+            return connection
+              ? {
+                  key: connection.connectionId,
+                  serial: connection.identity.serial,
+                  device: connection.device,
+                  session: connection.session,
+                }
+              : undefined;
+          },
+          candidate: (slot) => firmwareCandidates.current[slot],
+          remembered: (slot) => firmwareRemembered.current[slot],
+          allLive: () => Object.values(liveRef.current),
+          operate,
+        }),
+      ),
+    [],
+  );
+  const firmwareRuntimeSnapshot = useSyncExternalStore(
+    firmwareRuntime.subscribe,
+    firmwareRuntime.getSnapshot,
+    firmwareRuntime.getSnapshot,
+  );
+  const firmwareRuntimeLifetime = useRef(0);
+  useEffect(() => {
+    const lifetime = ++firmwareRuntimeLifetime.current;
+    return () =>
+      queueMicrotask(() => {
+        if (firmwareRuntimeLifetime.current === lifetime) firmwareRuntime.dispose();
+      });
+  }, [firmwareRuntime]);
   useEffect(() => {
     descriptorVerifier.refreshBindings();
     deviceAuth.refreshBindings();
@@ -1111,6 +1179,7 @@ export default function Studio() {
     amplifierModes.refreshBindings();
     nativeLimiter.refreshBindings();
     nativeMixer.refreshBindings();
+    firmwareRuntime.refreshBindings();
     noiseController.refreshBindings();
   }, [
     live,
@@ -1122,6 +1191,7 @@ export default function Studio() {
     amplifierModes,
     nativeLimiter,
     nativeMixer,
+    firmwareRuntime,
     noiseController,
   ]);
   const revealInspector = () => {
@@ -1353,10 +1423,11 @@ export default function Studio() {
         if (
           device.vendorId !== VID ||
           device.productId !== PID ||
+          device.opened ||
           Object.values(liveRef.current).some((l) => l.device === device)
         )
           continue;
-        if (!device.opened) await device.open();
+        await device.open();
         const session = new PanelSession(new WebHidTransport(device), saveBackup);
         try {
           const identity = await session.identify();
@@ -1371,6 +1442,11 @@ export default function Studio() {
             ...liveRef.current,
             [slot]: { session, identity, status, device, connectionId: crypto.randomUUID() },
           };
+          firmwareRemembered.current[slot] = {
+            key: crypto.randomUUID(),
+            serial: identity.serial,
+            device,
+          };
           descriptorVerifier.clear(slot);
           deviceAuth.clear(slot);
           liveRef.current = next;
@@ -1380,6 +1456,62 @@ export default function Studio() {
           );
           return;
         } catch (e) {
+          // A recognized newer runtime can be identified without admitting it
+          // to the ordinary controls dialect. The selected/previously-permitted
+          // interface is already owned by this Connecting operation.
+          if (e instanceof UnsupportedPanelRuntimeError) {
+            const candidate = {
+              key: crypto.randomUUID(),
+              ...(serial ? { serial } : {}),
+              device,
+              session,
+            };
+            firmwareCandidates.current[slot] = candidate;
+            try {
+              const result = await firmwareRuntime.read(
+                slot,
+                workspaceAuthority.localContext('manual'),
+              );
+              const report = result.roles[slot].report;
+              if (report) {
+                if (
+                  Object.entries(liveRef.current).some(
+                    ([role, connection]) =>
+                      role !== slot && connection.identity.serial === report.identity.serial,
+                  )
+                )
+                  throw new Error('This serial is already assigned to the other role');
+                firmwareRemembered.current[slot] = {
+                  key: crypto.randomUUID(),
+                  serial: report.identity.serial,
+                  device,
+                };
+                if (!report.controlsQualified) {
+                  setTab('Device settings');
+                  chooseWorkspace({ slot });
+                  throw new FirmwareRuntimeDiagnosticError(
+                    `Firmware ${report.identity.firmware} / DSP core ${report.identity.core} identified read-only. Controls for this runtime are unavailable.`,
+                    report,
+                  );
+                }
+              }
+            } catch (diagnostic) {
+              if (diagnostic instanceof FirmwareRuntimeDiagnosticError) {
+                await session.close();
+                throw diagnostic;
+              }
+              if (diagnostic instanceof FirmwareRuntimeSerialMismatchError) {
+                await session.close();
+                continue;
+              }
+              // Preserve the original controls-admission refusal if the narrow
+              // diagnostic reader could not establish a complete identity.
+            } finally {
+              if (firmwareCandidates.current[slot]?.key === candidate.key)
+                delete firmwareCandidates.current[slot];
+              firmwareRuntime.refreshBindings();
+            }
+          }
           await session.close();
           throw e;
         }
@@ -1730,6 +1862,7 @@ export default function Studio() {
     operate,
     capture: audioAccess?.controller,
     firmware: firmwareWorkspace,
+    firmwareRuntime,
     noise: noiseController,
     descriptorVerifier,
     sources: projectSources,
@@ -1784,6 +1917,7 @@ export default function Studio() {
       projectSaveCaptures: nativeSaveSnapshot,
       nativeLimiter: nativeLimiterSnapshotPage(nativeLimiterSnapshot),
       nativeMixer: nativeMixerSnapshot,
+      firmwareRuntime: firmwareRuntimeSnapshot,
       workspaceAuthority: workspaceAuthority.getSnapshot(),
       noise: noiseController.getSnapshot(),
       sourceOpen: sourceOpenStatus(),
@@ -3594,6 +3728,12 @@ export default function Studio() {
               )}
               <FirmwarePanel
                 workspace={firmwareWorkspace}
+                runtime={firmwareRuntime}
+                getContext={() =>
+                  (projectSourceContext.current ??= workspaceAuthority.localContext('ui'))
+                }
+                contextReady={authorityStatus.phase === 'ready'}
+                externalBusy={!!busy}
                 slot={w.slot}
                 descriptorVerifier={descriptorVerifier}
               />
