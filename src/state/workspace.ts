@@ -22,12 +22,18 @@ import type { TransferJson } from '../application/file-transfers';
 import { z } from 'zod';
 
 type Documents = Record<Slot, Project>;
+declare const gestureBrand: unique symbol;
+/** Store-issued identity, never a serialized permission or a shared global. */
+export type WorkspaceGestureToken = Readonly<{ [gestureBrand]: true }>;
 interface Workspace extends PersistedWorkspace {
   past: Documents[];
   future: Documents[];
   gesture?: Documents;
   beginGesture: () => void;
   endGesture: (cancel?: boolean) => void;
+  beginOwnedGesture: () => WorkspaceGestureToken;
+  endOwnedGesture: (token: WorkspaceGestureToken, cancel?: boolean) => void;
+  isOwnedGestureCurrent: (token: WorkspaceGestureToken) => boolean;
   choose: (
     patch: Partial<
       Pick<Workspace, 'slot' | 'preset' | 'channel' | 'filter' | 'linkedEdits' | 'linkedControls'>
@@ -36,8 +42,8 @@ interface Workspace extends PersistedWorkspace {
   edit: (change: (project: Project) => void, linkable?: boolean) => void;
   editAt: (
     slots: Slot[],
-    change: (project: Project) => void,
-    options?: { synchronizeLinks?: boolean },
+    change: (project: Project, slot: Slot) => void,
+    options?: { synchronizeLinks?: boolean; gestureToken?: WorkspaceGestureToken },
   ) => void;
   replace: (project: Project) => void;
   replaceAt: (slot: Slot, project: Project) => void;
@@ -99,16 +105,30 @@ export function createWorkspaceStore(
   backend: WorkspacePersistenceBackend = createIndexedDbWorkspaceBackend(),
 ) {
   let applyingHydration = false;
+  let ownedGesture: { token: WorkspaceGestureToken; start: Documents } | undefined;
   const persistence = createWorkspacePersistence(backend, (snapshot) => {
     if (!snapshot) return;
     applyingHydration = true;
     try {
+      ownedGesture = undefined;
       store.setState({ ...snapshot, past: [], future: [], gesture: undefined });
     } finally {
       applyingHydration = false;
     }
   });
   const guard = () => persistence.assertHydrated();
+  // Pure until the caller's complete mutation has been validated. An invalid
+  // foreign proposal must not retire a valid in-progress graph gesture.
+  const commitOwned = (state: Workspace): Workspace => {
+    if (!ownedGesture || state.gesture !== ownedGesture.start) return state;
+    return {
+      ...state,
+      gesture: undefined,
+      ...(state.documents === state.gesture
+        ? {}
+        : { past: [...state.past.slice(-49), state.gesture], future: [] }),
+    };
+  };
   const store = create<Workspace>()((set, get) => ({
     documents: { left: exampleProject(), right: exampleProject() },
     slot: 'left',
@@ -122,14 +142,20 @@ export function createWorkspaceStore(
     future: [],
     choose: (patch) => {
       guard();
-      set(patch);
+      const state = commitOwned(get());
+      ownedGesture = undefined;
+      set({ ...state, ...patch });
     },
     beginGesture: () => {
       guard();
-      if (!get().gesture) set({ gesture: get().documents });
+      const state = commitOwned(get());
+      ownedGesture = undefined;
+      if (!state.gesture) set({ past: state.past, future: state.future, gesture: state.documents });
     },
     endGesture: (cancel = false) => {
       guard();
+      // A legacy callback never owns a token-issued graph transaction.
+      if (ownedGesture) return;
       const s = get();
       if (!s.gesture) return;
       if (s.documents === s.gesture) {
@@ -140,20 +166,63 @@ export function createWorkspaceStore(
         set({ documents: s.gesture, documentRevision: nextRevision(s), gesture: undefined });
       else set({ past: [...s.past.slice(-49), s.gesture], future: [], gesture: undefined });
     },
+    beginOwnedGesture: () => {
+      guard();
+      let state = commitOwned(get());
+      if (state.gesture)
+        state = {
+          ...state,
+          ...(state.documents === state.gesture
+            ? {}
+            : { past: [...state.past.slice(-49), state.gesture], future: [] }),
+          gesture: undefined,
+        };
+      const token = Object.freeze({}) as WorkspaceGestureToken;
+      ownedGesture = { token, start: state.documents };
+      set({ past: state.past, future: state.future, gesture: state.documents });
+      return token;
+    },
+    isOwnedGestureCurrent: (token) =>
+      ownedGesture?.token === token && get().gesture === ownedGesture.start,
+    endOwnedGesture: (token, cancel = false) => {
+      guard();
+      if (ownedGesture?.token !== token || get().gesture !== ownedGesture.start) return;
+      const state = get();
+      const patch =
+        state.documents === state.gesture
+          ? { gesture: undefined }
+          : cancel
+            ? {
+                documents: state.gesture,
+                documentRevision: nextRevision(state),
+                gesture: undefined,
+              }
+            : { past: [...state.past.slice(-49), state.gesture!], future: [], gesture: undefined };
+      ownedGesture = undefined;
+      set(patch);
+    },
     editAt: (slots, change, options) => {
       guard();
+      if (options?.gestureToken !== undefined && !get().isOwnedGestureCurrent(options.gestureToken))
+        throw new Error('The owned graph gesture is stale');
+      if (slots.some((slot) => slot !== 'left' && slot !== 'right'))
+        throw new Error('Invalid edit destination');
       const s = get(),
         documents = structuredClone(s.documents);
       for (const slot of new Set(slots)) {
-        change(documents[slot]);
+        change(documents[slot], slot);
         if (options?.synchronizeLinks !== false)
           synchronizeLinks(documents[slot], s.documents[slot]);
         reconcileProjectHfdCalibration(documents[slot], s.documents[slot]);
       }
+      const revision = nextRevision(s),
+        base = options?.gestureToken === undefined ? commitOwned(s) : s;
+      if (options?.gestureToken === undefined) ownedGesture = undefined;
       set({
         documents,
-        documentRevision: nextRevision(s),
-        past: s.gesture ? s.past : [...s.past.slice(-49), s.documents],
+        documentRevision: revision,
+        gesture: base.gesture,
+        past: base.gesture ? base.past : [...base.past.slice(-49), s.documents],
         future: [],
       });
     },
@@ -168,32 +237,57 @@ export function createWorkspaceStore(
     replaceAt: (slot, project) => {
       guard();
       if (slot !== 'left' && slot !== 'right') throw new Error('Invalid project destination');
-      const s = get();
+      const s = get(),
+        documents = { ...s.documents, [slot]: structuredClone(project) },
+        revision = nextRevision(s),
+        base = commitOwned(s);
+      ownedGesture = undefined;
       set({
-        documents: { ...s.documents, [slot]: structuredClone(project) },
-        documentRevision: nextRevision(s),
-        past: [...s.past.slice(-49), s.documents],
+        documents,
+        documentRevision: revision,
+        gesture: base.gesture,
+        past: [...base.past.slice(-49), s.documents],
         future: [],
       });
     },
     undo: () => {
       guard();
-      const s = get();
-      if (!s.past.length) return;
+      const before = get(),
+        s = commitOwned(before);
+      if (!s.past.length) {
+        if (s !== before) {
+          ownedGesture = undefined;
+          set(s);
+        }
+        return;
+      }
+      const revision = nextRevision(s);
+      ownedGesture = undefined;
       set({
         documents: s.past[s.past.length - 1],
-        documentRevision: nextRevision(s),
+        documentRevision: revision,
+        gesture: s.gesture,
         past: s.past.slice(0, -1),
         future: [s.documents, ...s.future],
       });
     },
     redo: () => {
       guard();
-      const s = get();
-      if (!s.future.length) return;
+      const before = get(),
+        s = commitOwned(before);
+      if (!s.future.length) {
+        if (s !== before) {
+          ownedGesture = undefined;
+          set(s);
+        }
+        return;
+      }
+      const revision = nextRevision(s);
+      ownedGesture = undefined;
       set({
         documents: s.future[0],
-        documentRevision: nextRevision(s),
+        documentRevision: revision,
+        gesture: s.gesture,
         past: [...s.past, s.documents],
         future: s.future.slice(1),
       });
@@ -212,7 +306,9 @@ export function createWorkspaceStore(
       guard();
       const rememberedHfdCalibration =
         value == null ? undefined : structuredClone(hfdCalibrationSchema.parse(value));
-      set({ rememberedHfdCalibration });
+      const base = commitOwned(get());
+      ownedGesture = undefined;
+      set({ ...base, rememberedHfdCalibration });
     },
     lookupFileCommit: async (commitId, owner) => {
       guard();
@@ -251,7 +347,8 @@ export function createWorkspaceStore(
         return (await get().lookupFileCommit(commitId, principal.owner))!;
       }
       const s = get();
-      if (s.gesture) throw new Error('Finish the current graph edit before importing a file');
+      if (s.gesture && s.gesture !== ownedGesture?.start)
+        throw new Error('Finish the current graph edit before importing a file');
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision !== (s.documentRevision ?? 0))
         throw new Error(
           'The design changed after this transfer began. Start a new import for the current revision.',
@@ -291,14 +388,18 @@ export function createWorkspaceStore(
       };
       receipts[commitId] = receipt;
       const microphone = remember?.(documents);
+      const rememberedMicrophone = microphone
+        ? structuredClone(hfdCalibrationSchema.parse(microphone))
+        : undefined;
+      const base = commitOwned(s);
+      ownedGesture = undefined;
       set({
         documents,
         documentRevision: revision,
         fileCommitReceipts: receipts,
-        ...(microphone
-          ? { rememberedHfdCalibration: structuredClone(hfdCalibrationSchema.parse(microphone)) }
-          : {}),
-        past: [...s.past.slice(-49), s.documents],
+        ...(rememberedMicrophone ? { rememberedHfdCalibration: rememberedMicrophone } : {}),
+        gesture: base.gesture,
+        past: [...base.past.slice(-49), s.documents],
         future: [],
       });
       await persistence.flush();

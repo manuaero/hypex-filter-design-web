@@ -10,6 +10,11 @@ import { createNoiseController } from '../application/noise-control';
 import { type EqBank, editInputEqBand } from '../domain/equalizer';
 import { planSelectedFirPlacement } from '../domain/fir-state';
 import { supportsHfdGraphQ } from '../domain/manual-graph-q';
+import {
+  captureManualFilterDrag,
+  planManualFilterDrag,
+  applyManualFilterDrag,
+} from '../domain/graph-drag';
 import { EqBankUploadError } from '../hardware/eq-bank';
 import SignalChain from './SignalChain';
 import {
@@ -1926,6 +1931,75 @@ export default function Studio() {
       return false;
     }
   };
+  const startGraphDrag = (index: number) => {
+    try {
+      const initial = useWorkspace.getState();
+      if (
+        tabRef.current !== 'Crossover' ||
+        modeRef.current !== 'Magnitude' ||
+        initial.slot !== w.slot ||
+        initial.preset !== w.preset ||
+        initial.channel !== w.channel ||
+        initial.filter !== index
+      )
+        throw new Error('The ordinary graph drag target changed');
+      const slots: Slot[] = initial.linkedEdits ? ['left', 'right'] : [initial.slot];
+      const location = {
+        presetIndex: initial.preset,
+        channelIndex: initial.channel,
+        filterIndex: index,
+      };
+      let capture = captureManualFilterDrag(
+        initial.documents,
+        slots,
+        location,
+        initial.documentRevision,
+      );
+      const token = initial.beginOwnedGesture(),
+        sourceSlot = initial.slot,
+        linked = initial.linkedEdits;
+      return {
+        change: (pointer: import('../domain/manual-graph-drag').ManualGraphDragPointer) => {
+          try {
+            const current = useWorkspace.getState();
+            if (
+              !current.isOwnedGestureCurrent(token) ||
+              current.slot !== sourceSlot ||
+              current.preset !== location.presetIndex ||
+              current.channel !== location.channelIndex ||
+              current.filter !== location.filterIndex ||
+              current.linkedEdits !== linked ||
+              tabRef.current !== 'Crossover' ||
+              modeRef.current !== 'Magnitude'
+            )
+              throw new Error('The ordinary graph drag is stale');
+            const plan = planManualFilterDrag(
+              current.documents,
+              capture,
+              pointer,
+              current.documentRevision,
+            );
+            if (plan.changedSlots.length)
+              current.editAt(
+                plan.changedSlots,
+                (project, slot) => applyManualFilterDrag(project, slot, plan),
+                { gestureToken: token },
+              );
+            capture = plan.nextCapture;
+            setError('');
+            return true;
+          } catch (error) {
+            setError(error instanceof Error ? error.message : String(error));
+            return false;
+          }
+        },
+        end: (cancel = false) => useWorkspace.getState().endOwnedGesture(token, cancel),
+      };
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+      return false as const;
+    }
+  };
   const graphQFilter = (q: number) => {
     try {
       if (!Number.isFinite(q) || modeRef.current !== 'Magnitude' || tabRef.current !== tab)
@@ -2160,6 +2234,7 @@ export default function Studio() {
   const adapter: ToolAdapter = {
     state: () => useWorkspace.getState(),
     edit: (slots, fn, options) => useWorkspace.getState().editAt(slots, fn, options),
+    editByRole: (slots, fn, options) => useWorkspace.getState().editAt(slots, fn, options),
     choose: chooseWorkspace,
     undo: () => useWorkspace.getState().undo(),
     redo: () => useWorkspace.getState().redo(),
@@ -3342,6 +3417,7 @@ export default function Studio() {
                         onSelect={selectFilter}
                         onChange={(patch) => editFilter(patch, true)}
                         onGraphQChange={graphQFilter}
+                        onGraphDragStart={tab === 'Input EQ' ? undefined : startGraphDrag}
                         qGestureProfile={tab === 'Input EQ' ? 'input-eq' : 'ordinary'}
                         onAdd={(frequency) => openPalette('add', undefined, frequency)}
                         onRemove={() =>

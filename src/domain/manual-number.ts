@@ -243,6 +243,50 @@ function storeDouble(value: Ratio): number {
   return Number(mantissa) * 2 ** -shift;
 }
 
+/** One x87 FSTP Single, including its subnormal rounding. A binary64 store
+ * before this narrowing can cross a Float32 midpoint and is not equivalent. */
+function storeSingle(value: Ratio): number {
+  if (value.n === 0n) return 0;
+  const e = exponent(value),
+    shift = e < -126 ? 149 : 23 - e,
+    mantissa = nearest(
+      shift >= 0 ? value.n * pow2(shift) : value.n,
+      shift >= 0 ? value.d : value.d * pow2(-shift),
+    );
+  return Math.fround(Number(mantissa) * 2 ** -shift);
+}
+
+/** Internal graph drag setter/getter. The graph suppresses OnChange and then
+ * explicitly publishes parsed final Text; it does not use wheel recurrence. */
+export function normalizeManualNumberDragGain(
+  originGain: number,
+  originAxisY: number,
+  axisY: number,
+  { min, max }: { readonly min: number; readonly max: number },
+): ManualNumberResult | undefined {
+  if (
+    [originGain, originAxisY, axisY, min, max].some((v) => !Number.isFinite(v)) ||
+    Math.abs(min) >= 1e17 ||
+    Math.abs(max) >= 1e17
+  )
+    throw new Error('Graph gain requires finite captured values and bounds');
+  // c5b5bb..c4: the two axis values are Doubles, subtraction stays Extended
+  // until its Single argument store. Do not subtract in JS before Math.fround.
+  const from = double(originAxisY),
+    delta = storeSingle(addExtended(double(axisY), { n: -from.n, d: from.d }));
+  if (!Number.isFinite(delta)) throw new Error('Graph gain delta cannot be stored as Single');
+  if (delta === 0) return undefined;
+  const { minimum, maximum } = numberBounds(min, max, undefined, 'Graph gain');
+  // c63d1f..51: captured gain Double + Single delta, bounded SetValue,
+  // inhibited OnChange, then explicit final Text/GetValue -> Double store.
+  // The field-wheel AdditionalGain postguard is not in this call path.
+  let candidate = addExtended(double(originGain), double(delta));
+  if (compare(candidate, minimum) < 0n) candidate = minimum;
+  else if (compare(candidate, maximum) > 0n) candidate = maximum;
+  const text = fixed(candidate, 2);
+  return { text, value: storeDouble(parse(text, 'Graph gain')) };
+}
+
 /** Internal ba6a48 AddValue, ba6ecc bounds, and changed-Text OnChange model
  * publication. A passive field starts with its exact canonical Double; a
  * returned state also retains private Extended changes when Text stays equal.

@@ -439,7 +439,7 @@ it('fans overlapping markers while preserving true electrical leader endpoints a
   ).toHaveLength(2);
 });
 
-it('keeps native relative shelf dragging free of anchor/fan-out bias and does not double the gain delta', async () => {
+it('uses absolute native pixel frequency while preserving the shelf gain origin and one-times delta', async () => {
   const channels = markerChannels();
   channels[0].filters[1] = { ...channels[0].filters[0], id: 'synthetic-drag-marker' };
   await act(async () => root.render(<MarkerHarness source={channels} />));
@@ -447,10 +447,12 @@ it('keeps native relative shelf dragging free of anchor/fan-out bias and does no
     start = coordinates(target);
   await pointer('pointerdown', start.x, start.y, 0, target);
   await pointer('pointermove', start.x, start.y, 0);
-  expect(changed.mock.lastCall?.[0]).toEqual({ frequency: 1500, gain: 6 });
+  // The observed338px axis point maps to this literal Single; zeroY
+  // does not publish a gain field or reformat its captured model value.
+  expect(changed.mock.lastCall?.[0]).toEqual({ frequency: 1496.235595703125 });
   await pointer('pointermove', start.x + 20, start.y, 0);
-  const frequency = 1500 * (initial.frequencyMax / initial.frequencyMin) ** (20 / 400);
-  expect(changed.mock.lastCall?.[0]).toEqual({ frequency, gain: 6 });
+  const frequency = 2113.489013671875; // absolute358px, not an origin-frequency ratio
+  expect(changed.mock.lastCall?.[0]).toEqual({ frequency });
   await pointer('pointermove', start.x + 20, start.y - 20, 0);
   expect(changed.mock.lastCall?.[0]).toEqual({ frequency, gain: 12 });
   await pointer('pointermove', start.x + 20, start.y - 20, 0);

@@ -25,6 +25,8 @@ The app works offline for design tasks. No amplifier or agent connection is need
 
 Firmware file staging, fixed-target review, exact-review confirmation, outcomes and recovery history now share one UI/MCP controller. The real WebHID adapter has queued transition and stream fences, durable known-range before-images and explicit journal-based recovery; its source-owned physical qualification registry remains empty, so physical firmware programming is unavailable. Neither a staged-file match nor a reported runtime version grants programming permission. See [firmware workflow](docs/FIRMWARE-WORKFLOW-v44.md).
 
+Ordinary crossover marker dragging now uses absolute graph frequency with Single storage. A vertical move applies its cumulative axis delta to each role's own captured gain, using the native Extended-arithmetic and bounded two-decimal Double path; Peak and shelves cap at 24 dB, and inactive gain/F2 fields stay untouched. It does not acquire the separate field-wheel AdditionalGain ceiling. Canonical no-ops retain caches and history. A later independent edit commits pending drag work first, so a stale cancel cannot erase it. See [graph drag scope](docs/GRAPH-DRAG-v45.md).
+
 ## What is implemented
 
 - Three presets, three output channels and fifteen biquad slots per channel; low/high-pass, shelves, asymmetric shelves, peak, all-pass, unity and explicit raw coefficients.
@@ -80,6 +82,8 @@ The server prints a loopback MCP URL, a WebSocket bridge URL and a newly generat
 See [MCP setup and workflow guidance](docs/MCP.md).
 
 ## Checks and build
+
+V45 public checks passed **3,085 tests plus the sole optional-PDF skip: 3,086 total in 203 files**, TypeScript, Next production build and Worker packaging. Private checks passed **3,086 canonical product tests** plus **108 included ignored diagnostic assertions**. The registry remains **91 commands**; the reviewed export has **417 source plus 13 protected files, 430 total**. Four bounded offline native filter cases were accepted; two unaccepted upper input requests and a background pan remain separately recorded. The owned local HTTP MCP protocol passed ten unpaired checks; one isolated browser baseline was accepted with three setup interruptions retained. Graph-drag and paired browser execution were not accepted. Native runtime Settings were not captured before the session, so no complete before/after Settings preservation claim follows. See [V45 qualifications](docs/VERIFICATION.md#v45-ordinary-graph-drag-checkpoint).
 
 V44 public checks passed **3,012 tests plus the sole optional-PDF skip: 3,013 total in 197 files**, TypeScript, Next production build and Worker packaging. The private suite passed **3,013 canonical product tests** plus **108 included ignored diagnostic assertions**. The registry remains **91 commands** and the reviewed export has **408 source plus 13 protected files, 421 total**. This increment adds automated workflow/transport checks and **10/10 owned local HTTP protocol checks**. One isolated synthetic browser baseline was accepted, with two pairing interruptions retained; paired browser execution and a completed firmware UI workflow were not verified. No remote/production MCP or physical-firmware acceptance is claimed. See the [V44 qualification checkpoint](docs/VERIFICATION.md#v44-firmware-workflow-checkpoint).
 

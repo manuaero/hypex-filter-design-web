@@ -186,7 +186,8 @@ it.each(['asymmetric', 'allpass2'] as const)(
     const channels = await mount(kind),
       before = structuredClone(channels);
     await drag(24, -20, false);
-    expect(changed).toHaveBeenCalledExactlyOnceWith({ frequency: 800 * Math.pow(1000, 24 / 400) });
+    // Absolute native pixel326 on this400px log axis, stored as Single.
+    expect(changed).toHaveBeenCalledExactlyOnceWith({ frequency: 1216.18603515625 });
     expect(channels).toEqual(before);
   },
 );
@@ -284,7 +285,7 @@ it('pressing Ctrl after an ordinary drag begins does not switch the captured ges
   await pointer('pointermove', x + 24, y - 20, plot, true);
   await pointer('pointerup', x + 24, y - 20, plot, true);
   expect(changed).toHaveBeenCalledExactlyOnceWith({
-    frequency: 800 * Math.pow(1000, 24 / 400),
+    frequency: 1216.18603515625,
     gain: 18,
   });
 });

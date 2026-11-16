@@ -4,6 +4,32 @@ Agents use the same controllers and validation as the human interface. Normal us
 
 The current registry contains **91 commands**, including stateless native parameter-wheel adjustments, shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
 
+## V45 ordinary graph position edits
+
+`fusion_filter_adjust` adds strict `surface: "graph-drag"` arguments without adding a command; the registry remains **91 commands**. Supply one-based `target`, `preset`, `channel`, `index`, absolute `frequency` (0.001–50,000 Hz), and finite `originAxisY`/`axisY`. Extra field-wheel arguments, raw coefficients, a source basis or a serialized gesture token are refused.
+
+```json
+{
+  "name": "fusion_filter_adjust",
+  "arguments": {
+    "target": "both",
+    "preset": 1,
+    "channel": 1,
+    "index": 1,
+    "surface": "graph-drag",
+    "frequency": 6319.0052,
+    "originAxisY": 0,
+    "axisY": 3.05
+  }
+}
+```
+
+The 0.001–50,000 Hz interval is the currently supported browser graph contract, not a universal native configured range. Frequency is an absolute graph position stored as Single, independently of the typed one-decimal frequency path. Y subtraction uses Extended arithmetic before narrowing its cumulative delta to Single; gain then uses each role's captured Double origin, bounded formatting and final two-decimal Double reparse. Peak/Shelf1/Shelf2 use the ordinary −125…24 dB defaults. No field-wheel AdditionalGain ceiling or shelf midpoint factor2 is applied. Asymmetric, all-pass and other inactive gain fields retain their exact values; secondary frequency/Q are not graph targets. Raw/Unity and linked destinations are refused before editing either role. Numerical stability and upload guards remain in force.
+
+Each command is one stateless event with fresh per-role origins. Repeating it starts from the newly stored values; it does not continue a human pointer gesture. The human gesture captures both origins once and groups its accepted moves into one Undo. Both routes share structural preflight, explicit role keys, actual-change filtering, cache/provenance preservation on canonical no-ops and one atomic edit. An already matching peer retains its whole state. Independent edits retire an active owned drag; its later cancel cannot overwrite that newer work.
+
+The existing `surface: "field"` and graph-Q `surface: "graph"` contracts remain separate. Input EQ graph editing remains a separately qualified browser convenience. These are design edits, with no amplifier I/O. Ten owned local HTTP checks passed while unpaired, including the exact 91-command listing, strict graph-drag declaration and token/origin/host guards. They do not establish paired graph execution, remote MCP or production authentication. The isolated browser recorded one baseline and three unaccepted setup interruptions. See [graph drag details](GRAPH-DRAG-v45.md).
+
 ## V44 shared firmware workflow
 
 Firmware actions extend the existing `fusion_device_read` namespace; the registry remains at **91 commands**. Normal file inspection, runtime identity, update review and execution admission are distinct. A filename, content profile, runtime version, loader product name or caller-supplied flag cannot qualify physical programming. The physical-profile registry is empty, so update review refuses unavailable physical routes before device I/O.

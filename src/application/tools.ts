@@ -107,6 +107,11 @@ import {
 } from './measurement-capture';
 import type { FirmwareWorkspace } from './firmware-workspace';
 import { FirmwareRuntimeDiagnosticError, type FirmwareRuntimeController } from './firmware-runtime';
+import {
+  captureManualFilterDrag,
+  planManualFilterDrag,
+  applyManualFilterDrag,
+} from '../domain/graph-drag';
 import { FirmwareExecutionError, type FirmwareExecutionWorkflow } from './firmware-execution';
 import { DeviceAuthOperationError, type DeviceAuthController } from './device-auth';
 import { DeviceDefaultsError, type DeviceDefaultsController } from './device-defaults';
@@ -179,6 +184,11 @@ export interface DocumentState {
 export interface ToolAdapter {
   state: () => DocumentState;
   edit: (slots: Slot[], fn: (p: Project) => void, options?: { synchronizeLinks?: boolean }) => void;
+  editByRole?: (
+    slots: Slot[],
+    fn: (project: Project, slot: Slot) => void,
+    options?: { synchronizeLinks?: boolean },
+  ) => void;
   choose: (
     patch: Partial<
       Omit<DocumentState, 'documents' | 'rememberedHfdCalibration' | 'documentRevision'>
@@ -988,32 +998,46 @@ const schemas = {
       redesign: z.boolean().default(true),
     })
     .strict(),
-  fusion_filter_adjust: z
-    .object({
-      target,
-      preset,
-      channel,
-      index,
-      parameter: z.enum(['q', 'q2', 'gain']),
-      direction: z.enum(['up', 'down']),
-      basis: z.enum(['each', 'left', 'right']).default('each'),
-      surface: z.enum(['field', 'graph']).default('field'),
-    })
-    .strict()
-    .superRefine((value, context) => {
-      if (value.surface === 'graph' && value.parameter !== 'q')
-        context.addIssue({
-          code: 'custom',
-          message: 'Graph surface supports primary Q only',
-          path: ['parameter'],
-        });
-      if (value.target !== 'both' && value.basis !== 'each' && value.basis !== value.target)
-        context.addIssue({
-          code: 'custom',
-          message: 'Wheel source must be a selected role',
-          path: ['basis'],
-        });
-    }),
+  fusion_filter_adjust: z.union([
+    z
+      .object({
+        target,
+        preset,
+        channel,
+        index,
+        surface: z.literal('graph-drag'),
+        frequency: z.number().finite().min(0.001).max(50000),
+        originAxisY: z.number().finite(),
+        axisY: z.number().finite(),
+      })
+      .strict(),
+    z
+      .object({
+        target,
+        preset,
+        channel,
+        index,
+        parameter: z.enum(['q', 'q2', 'gain']),
+        direction: z.enum(['up', 'down']),
+        basis: z.enum(['each', 'left', 'right']).default('each'),
+        surface: z.enum(['field', 'graph']).default('field'),
+      })
+      .strict()
+      .superRefine((value, context) => {
+        if (value.surface === 'graph' && value.parameter !== 'q')
+          context.addIssue({
+            code: 'custom',
+            message: 'Graph surface supports primary Q only',
+            path: ['parameter'],
+          });
+        if (value.target !== 'both' && value.basis !== 'each' && value.basis !== value.target)
+          context.addIssue({
+            code: 'custom',
+            message: 'Wheel source must be a selected role',
+            path: ['basis'],
+          });
+      }),
+  ]),
   fusion_biquad_exchange: z
     .object({ target, preset, channel, first: index, second: index })
     .strict(),
@@ -1724,7 +1748,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   fusion_filter_set:
     'Edit a manual crossover biquad. Explicit frequency/F2 commits use canonical decimal Text, 10–50,000 Hz bounds, one decimal and Single storage. Ordinary FA Q/Q2 commits use 0.1–20, three decimals and Double storage; BQ gain uses −125…24 dB, two decimals and Double storage. Exact zero retains the previous frequency/Q field value; gain zero is accepted. These are recovered profile defaults, not all native custom preference settings. Untouched imported values stay unchanged. A shape change preserves Enabled unless explicitly supplied. Parameter redesign replaces preserved imported caches; raw bypass/latent edits retain coefficients. Raw coefficients accept a strict nonempty finite partial vector, merged independently for each role without rounding. Conversion to raw retains the current unbypassed section; new raw sections start at Unity. Every target is preflighted before one Undoable edit. Cache interpretation and upload stability guards remain independent.',
   fusion_filter_adjust:
-    'Apply one stateless crossover parameter event. surface:field (default) uses native ordinary Q/Q2 or BQ-gain wheel behavior with factory steps0.04/0.1 and field-local notification publication; gain uses channel AdditionalGain, never ordinary channel gain. surface:graph permits primary q only on lowpass2/highpass2/peak/lowshelf2/highshelf2; independent events and changed fixed-source mirrors require these kinds on every selected destination. It uses the native Magnitude graph Q step0.04 and explicit final Text-to-Double getter, so an off-grid canonical value may round even at unchanged displayed Text. Commands start from passive canonical values and do not share human transient state. Returns surface, stored value and visible Text separately. Preset/channel/index are one-based. Both basis:each advances each role independently; basis:left/right mirrors only a changed source stored value. Field mirrors may update latent inactive destination parameters; graph mirrors require supported graph kinds. All destinations must be editable/unlinked and are preflighted before one Undoable mutation. A fixed-source canonical no-op retains source-kind and all structural/read-only validation, then skips peer kind admission and every edit. Unchanged peers retain exact cache/provenance/bypass/history. Only changed values redesign. No amplifier I/O. Keyboard arrows remain separate; Input EQ uses fusion_eq_adjust and its own field profile, not this ordinary graph surface.',
+    'Apply one stateless crossover parameter event. surface:field (default) uses native ordinary Q/Q2 or BQ-gain wheel behavior with factory steps0.04/0.1 and field-local notification publication; gain uses channel AdditionalGain, never ordinary channel gain. surface:graph permits primary q only on lowpass2/highpass2/peak/lowshelf2/highshelf2; independent events and changed fixed-source mirrors require these kinds on every selected destination. It uses the native Magnitude graph Q step0.04 and explicit final Text-to-Double getter, so an off-grid canonical value may round even at unchanged displayed Text. Commands start from passive canonical values and do not share human transient state. Field and graph-Q responses return surface, stored value and visible Text separately. Preset/channel/index are one-based. Both basis:each advances each role independently; basis:left/right mirrors only a changed source stored value. Field mirrors may update latent inactive destination parameters; graph mirrors require supported graph kinds. All destinations must be editable/unlinked and are preflighted before one Undoable mutation. A fixed-source canonical no-op retains source-kind and all structural/read-only validation, then skips peer kind admission and every edit. Unchanged peers retain exact cache/provenance/bypass/history. Only changed values redesign. No amplifier I/O. surface:graph-drag is a distinct strict position event requiring frequency, originAxisY and axisY only, with no parameter/direction/basis. It captures each role’s current filter as an independent origin; absolute frequency is an already-clamped supported plot-axis point (0.001–50,000 Hz), stored as Single without typed one-decimal/10 Hz conversion, while supported Peak/Shelf gain uses each captured origin plus the narrowed axis delta through native field formatting. Inactive gain and secondary frequency are preserved. The graph-drag response returns per-role numeric patches and stored frequency/gain. It is stateless per command, not a continuation of a human pointer gesture. Ordinary field gain’s visible Text may remain capped while its canonical model value changes; canonical publication determines edits, not a final-Text equality shortcut. Keyboard arrows remain separate; Input EQ uses fusion_eq_adjust and its own field profile, not these ordinary graph surfaces.',
   fusion_biquad_exchange:
     'Exchange two same-channel biquad parameter sets while preserving physical graph slots and read-only linked channels.',
   fusion_channel_copy:
@@ -2277,6 +2301,38 @@ export function createToolExecutor(adapter: ToolAdapter) {
         }
         case 'fusion_filter_adjust': {
           const p = schemas.fusion_filter_adjust.parse(a);
+          if (p.surface === 'graph-drag') {
+            if (!adapter.editByRole)
+              throw new Error('Explicit-role graph drag editing is unavailable in this client');
+            const capture = captureManualFilterDrag(
+              state.documents,
+              roles(p.target),
+              { presetIndex: p.preset - 1, channelIndex: p.channel - 1, filterIndex: p.index - 1 },
+              state.documentRevision,
+            );
+            const plan = planManualFilterDrag(
+              state.documents,
+              capture,
+              { frequency: p.frequency, originAxisY: p.originAxisY, axisY: p.axisY },
+              state.documentRevision,
+            );
+            if (plan.changedSlots.length)
+              adapter.editByRole(plan.changedSlots, (project, slot) =>
+                applyManualFilterDrag(project, slot, plan),
+              );
+            return {
+              ok: true,
+              surface: p.surface,
+              changed: plan.changedSlots.length > 0,
+              roles: plan.roles.map(({ slot, beforeFilter, nextFilter, patch, changed }) => ({
+                slot,
+                before: { frequency: beforeFilter.frequency, gain: beforeFilter.gain },
+                value: { frequency: nextFilter.frequency, gain: nextFilter.gain },
+                patch,
+                changed,
+              })),
+            };
+          }
           const plan = planManualFilterWheel(state.documents, roles(p.target), {
             presetIndex: p.preset - 1,
             channelIndex: p.channel - 1,

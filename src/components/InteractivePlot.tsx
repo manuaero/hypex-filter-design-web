@@ -20,6 +20,17 @@ import {
   type HfdManualGraphQState,
 } from '../domain/manual-graph-q';
 import { hfdInputEqWheelNext } from '../domain/input-eq-parameters';
+import { normalizeManualGraphDrag, type ManualGraphDragPointer } from '../domain/manual-graph-drag';
+export interface PlotGraphDragOperation {
+  change(pointer: ManualGraphDragPointer): boolean | void;
+  end(cancel?: boolean): void;
+}
+const nativePixel = (value: number) => {
+  const single = Math.fround(value),
+    low = Math.floor(single),
+    fraction = single - low;
+  return fraction === 0.5 ? (low % 2 === 0 ? low : low + 1) : Math.round(single);
+};
 const gainType = (f: Filter) => f.kind === 'peak' || f.kind.includes('shelf');
 const qType = (f: Filter) => supportsHfdGraphQ(f.kind);
 export default function InteractivePlot({
@@ -47,6 +58,7 @@ export default function InteractivePlot({
   onSelect,
   onChange,
   onGraphQChange,
+  onGraphDragStart,
   qGestureProfile = 'ordinary',
   onAdd,
   onRemove,
@@ -83,6 +95,8 @@ export default function InteractivePlot({
   /** Preflight the complete intended workspace target set; false rejects the
    * event and discards transient graph Text/Value state. */
   onGraphQChange?: (q: number) => boolean | void;
+  /** Returns one exact owned operation; stale cleanup can end only this drag. */
+  onGraphDragStart?: (index: number) => PlotGraphDragOperation | false;
   /** Input EQ graph gestures are a browser convenience using its field profile. */
   qGestureProfile?: 'ordinary' | 'input-eq';
   onAdd: (frequency: number) => void;
@@ -104,6 +118,9 @@ export default function InteractivePlot({
         contextKey?: string;
         filter?: Filter;
         ctrlKey?: boolean;
+        nativeDrag?: boolean;
+        originAxisY?: number;
+        operation?: PlotGraphDragOperation;
         range: PlotRange;
         commitRange?: () => void;
         cancelRange?: () => void;
@@ -120,12 +137,17 @@ export default function InteractivePlot({
       }
     | undefined
   >(undefined);
+  const finishFilterDrag = (d: NonNullable<typeof drag.current>, cancel = false) => {
+    if (d.operation) d.operation.end(cancel);
+    else if (cancel) end(true);
+    else end();
+  };
   const zoomHistory = useRef<Partial<Record<PlotMode, RectangleZoomHistory>>>({});
   useEffect(() => {
     setMenu(undefined);
     setCursor('');
     return () => {
-      if (drag.current?.kind === 'filter') end(true);
+      if (drag.current?.kind === 'filter') finishFilterDrag(drag.current, true);
       else drag.current?.cancelRange?.();
       drag.current = undefined;
     };
@@ -305,7 +327,46 @@ export default function InteractivePlot({
           if (d.ctrlKey) {
             if (filter?.id === d.filter.id && filter.kind === d.filter.kind && y !== d.y)
               stepGraphQ(y < d.y ? 1 : -1);
+          } else if (d.nativeDrag) {
+            if (
+              filter?.id !== d.filter.id ||
+              filter.kind !== d.filter.kind ||
+              !editable ||
+              mode !== 'Magnitude'
+            ) {
+              finishFilterDrag(d, true);
+              drag.current = undefined;
+              return;
+            }
+            const px = Math.max(L, Math.min(L + W, nativePixel(x))),
+              py = Math.max(T, Math.min(T + H, nativePixel(y)));
+            const position: ManualGraphDragPointer = {
+              frequency:
+                range.frequencyMin * (range.frequencyMax / range.frequencyMin) ** ((px - L) / W),
+              originAxisY: d.originAxisY!,
+              axisY: range.dbMax - ((py - T) / H) * (range.dbMax - range.dbMin),
+            };
+            try {
+              if (d.operation) {
+                if (d.operation.change(position) === false) {
+                  finishFilterDrag(d, true);
+                  drag.current = undefined;
+                }
+              } else {
+                const patch = normalizeManualGraphDrag(d.filter, position);
+                if (
+                  Object.entries(patch).some(
+                    ([key, value]) => !Object.is(filter[key as keyof Filter], value),
+                  )
+                )
+                  onChange(patch);
+              }
+            } catch {
+              finishFilterDrag(d, true);
+              drag.current = undefined;
+            }
           } else
+            // Input EQ graph dragging remains its separate browser convenience.
             onChange({
               frequency: Math.max(
                 0.001,
@@ -348,14 +409,14 @@ export default function InteractivePlot({
         const d = drag.current;
         if (!d) return;
         if (d.mode !== mode || d.contextKey !== contextKey) {
-          if (d.kind === 'filter') end(true);
+          if (d.kind === 'filter') finishFilterDrag(d, true);
           else d.cancelRange?.();
           drag.current = undefined;
           return;
         }
         const { x, y } = point(e);
         if (d.kind === 'filter') {
-          end();
+          finishFilterDrag(d);
         }
         if (d.kind === 'zoom' && W > 0 && H > 0) {
           const axes: ZoomAxes = timed
@@ -412,7 +473,7 @@ export default function InteractivePlot({
       }}
       onPointerCancel={() => {
         graphQ.current = undefined;
-        if (drag.current?.kind === 'filter') end(true);
+        if (drag.current?.kind === 'filter') finishFilterDrag(drag.current, true);
         else drag.current?.cancelRange?.();
         drag.current = undefined;
       }}
@@ -493,19 +554,48 @@ export default function InteractivePlot({
                   if (e.button !== 0) return;
                   e.stopPropagation();
                   e.preventDefault();
+                  const raw = point(e),
+                    nativeDrag = !e.ctrlKey && qGestureProfile === 'ordinary';
+                  const px = nativeDrag ? nativePixel(raw.x) : raw.x,
+                    py = nativeDrag ? nativePixel(raw.y) : raw.y;
+                  if (
+                    editable &&
+                    nativeDrag &&
+                    (W <= 0 ||
+                      H <= 0 ||
+                      px < L ||
+                      px > L + W ||
+                      py < T ||
+                      py > T + H ||
+                      !matching(px, py).includes(i))
+                  )
+                    return;
                   onSelect(i);
                   setMenu(undefined);
                   if (editable) {
-                    begin();
+                    let operation: PlotGraphDragOperation | undefined;
+                    if (nativeDrag && onGraphDragStart) {
+                      const accepted = onGraphDragStart(i);
+                      if (accepted === false) return;
+                      operation = accepted;
+                    } else begin();
+                    if (nativeDrag) graphQ.current = undefined;
                     drag.current = {
                       kind: 'filter',
                       mode,
                       contextKey,
-                      x: e.clientX - element.current!.getBoundingClientRect().left,
-                      y: e.clientY - element.current!.getBoundingClientRect().top,
+                      x: raw.x,
+                      y: raw.y,
                       filter: { ...f },
                       ctrlKey: e.ctrlKey,
                       range,
+                      nativeDrag,
+                      operation,
+                      ...(nativeDrag
+                        ? {
+                            originAxisY: range.dbMax - ((py - T) / H) * (range.dbMax - range.dbMin),
+                          }
+                        : {}),
                     };
                     e.currentTarget.setPointerCapture(e.pointerId);
                   }
