@@ -1,7 +1,12 @@
 import { rootChannel } from './links';
 import { normalizeHfdManualFrequencyText } from './manual-frequency';
-import { normalizeHfdManualQText, normalizeHfdManualGainText } from './manual-parameter';
+import {
+  normalizeHfdManualQText,
+  normalizeHfdManualGainText,
+  formatHfdManualQValue,
+} from './manual-parameter';
 import { hfdManualParameterWheelNext, type HfdManualWheelResult } from './parameter-wheel';
+import { hfdManualGraphQNext, supportsHfdGraphQ } from './manual-graph-q';
 import { designHfd } from './hfd-math';
 import {
   CHANNELS,
@@ -23,6 +28,7 @@ export interface ManualFilterWheelRequest {
   parameter: ManualFilterParameter;
   direction: -1 | 1;
   basis?: 'each' | Slot;
+  surface?: 'field' | 'graph';
 }
 export interface ManualFilterWheelPlan {
   request: ManualFilterWheelRequest;
@@ -81,7 +87,10 @@ export function planManualFilterWheel(
     (request.direction !== -1 && request.direction !== 1)
   )
     throw new Error('Invalid parameter wheel action');
-  const basis = request.basis ?? 'each';
+  const basis = request.basis ?? 'each',
+    surface = request.surface ?? 'field';
+  if (!['field', 'graph'].includes(surface) || (surface === 'graph' && request.parameter !== 'q'))
+    throw new Error('Graph adjustment supports primary Q only');
   if (basis !== 'each' && !slots.includes(basis))
     throw new Error('Wheel source must be a selected role');
   const targets = slots.map((slot) => {
@@ -92,6 +101,13 @@ export function planManualFilterWheel(
       additionalGain = channel.additionalGain ?? 0;
     if (!Number.isFinite(additionalGain)) throw new Error('Additional gain must be finite');
     if (
+      surface === 'graph' &&
+      (basis === 'each' || basis === slot) &&
+      !supportsHfdGraphQ(filter.kind)
+    )
+      throw new Error(`Graph Q is unavailable for ${slot} ${filter.kind}; use its Q control`);
+    if (
+      surface === 'field' &&
       (basis === 'each' || basis === slot) &&
       !isManualFilterParameterActive(filter, request.parameter)
     )
@@ -99,10 +115,12 @@ export function planManualFilterWheel(
     return { slot, filter, additionalGain };
   });
   const next = (target: (typeof targets)[number]) =>
-    hfdManualParameterWheelNext(target.filter[request.parameter], request.direction, {
-      parameter: request.parameter === 'gain' ? 'gain' : 'q',
-      additionalGain: target.additionalGain,
-    });
+    surface === 'graph'
+      ? hfdManualGraphQNext(target.filter.q, request.direction)
+      : hfdManualParameterWheelNext(target.filter[request.parameter], request.direction, {
+          parameter: request.parameter === 'gain' ? 'gain' : 'q',
+          additionalGain: target.additionalGain,
+        });
   let sourceResult: Pick<HfdManualWheelResult, 'value' | 'text' | 'changed'> | undefined;
   if (basis !== 'each') {
     const source = targets.find((target) => target.slot === basis)!;
@@ -118,6 +136,18 @@ export function planManualFilterWheel(
       sourceResult = sourceEvent.result;
     } else sourceResult = next(source);
   } else if (sourceEvent) throw new Error('A UI source event requires a fixed source basis');
+  if (surface === 'graph' && basis !== 'each') {
+    const source = targets.find((target) => target.slot === basis)!;
+    // Plot publishes no callback for a canonical source no-op. Match that
+    // event while retaining every structural/read-only check above. Once the
+    // source would change, admit every peer before planning any mutation.
+    if (sourceResult!.changed && sourceResult!.value !== source.filter.q)
+      for (const target of targets)
+        if (!supportsHfdGraphQ(target.filter.kind))
+          throw new Error(
+            `Graph Q is unavailable for ${target.slot} ${target.filter.kind}; use its Q control`,
+          );
+  }
   const roles = targets.map((target) => {
     const result = sourceResult ?? next(target);
     const before = target.filter[request.parameter];
@@ -126,14 +156,14 @@ export function planManualFilterWheel(
       slot: target.slot,
       before,
       value: changed ? result.value : before,
-      text: result.text,
+      text: surface === 'graph' && !changed ? formatHfdManualQValue(before) : result.text,
       changed,
       beforeFilter: structuredClone(target.filter),
       additionalGain: target.additionalGain,
     };
   });
   return {
-    request: { ...request, basis },
+    request: { ...request, basis, surface },
     roles,
     changedSlots: roles.filter((role) => role.changed).map((role) => role.slot),
   };
@@ -233,6 +263,47 @@ export function editManualFilter(
   const next = { ...current, ...parameters, id: current.id };
   if (Object.hasOwn(current, 'sourceId')) next.sourceId = current.sourceId;
   else delete next.sourceId;
+  const shelfOrder =
+    next.kind === 'lowshelf1' || next.kind === 'highshelf1'
+      ? 1
+      : next.kind === 'lowshelf2' || next.kind === 'highshelf2'
+        ? 2
+        : undefined;
+  if (patch.shelfDirection !== undefined) {
+    // This is an explicit direction choice, even when Unknown previously had
+    // the same effective meaning. Do not resurrect Unknown on a later edit.
+    const direction = patch.shelfDirection;
+    if (
+      shelfOrder &&
+      patch.kind !== undefined &&
+      next.kind.startsWith(direction === 'low' ? 'high' : 'low')
+    )
+      throw new Error('Filter kind and shelf direction conflict');
+    next.sourceShelfDirection = direction === 'low' ? 'stLowShelf' : 'stHighShelf';
+    if (shelfOrder)
+      next.kind =
+        shelfOrder === 1
+          ? direction === 'low'
+            ? 'lowshelf1'
+            : 'highshelf1'
+          : direction === 'low'
+            ? 'lowshelf2'
+            : 'highshelf2';
+  } else if (patch.kind !== undefined && next.sourceShelfDirection !== undefined) {
+    if (shelfOrder) {
+      const requested = next.kind.startsWith('low') ? 'low' : 'high',
+        effective = next.sourceShelfDirection === 'stHighShelf' ? 'high' : 'low';
+      // Browser shelf kinds combine Function and direction. Retain the native
+      // enum if compatible; an explicitly contrary kind chooses Low or High.
+      if (requested !== effective)
+        next.sourceShelfDirection = requested === 'low' ? 'stLowShelf' : 'stHighShelf';
+      next.shelfDirection = requested;
+    } else if (next.kind === 'asymmetric') {
+      // Native Asym tests Low==0, unlike Shelf1/2's High==1 test. Reinterpret
+      // the retained enum for the new Function, not the former effective value.
+      next.shelfDirection = next.sourceShelfDirection === 'stLowShelf' ? 'low' : 'high';
+    }
+  }
   if (manualFrequency) {
     for (const field of ['frequency', 'frequency2'] as const) {
       if (patch[field] === undefined) continue;

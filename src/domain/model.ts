@@ -23,6 +23,7 @@ export type FilterKind =
   | 'allpass1'
   | 'allpass2'
   | 'raw';
+export type NativeShelfDirection = 'stLowShelf' | 'stHighShelf' | 'stUnknown';
 export interface Filter {
   id: string;
   kind: FilterKind;
@@ -37,6 +38,8 @@ export interface Filter {
   sourceType?: string;
   sourceId?: string;
   shelfDirection?: 'low' | 'high';
+  /** Current native enum, distinct from its type-dependent effective direction. */
+  sourceShelfDirection?: NativeShelfDirection;
 }
 export interface Fir {
   name: string;

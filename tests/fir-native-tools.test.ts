@@ -5,6 +5,8 @@ import { newProject, type Fir, type Project, type Slot } from '../src/domain/mod
 import { createWorkspaceStore } from '../src/state/workspace';
 import { assertWorkspaceWrite, type WorkspaceEnvelope } from '../src/state/persistence';
 import * as firHardware from '../src/hardware/fir';
+import * as sessionHardware from '../src/hardware/session';
+import * as projectHardware from '../src/hardware/project-upload';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -55,7 +57,9 @@ async function fixture(invalidPeer = false) {
       store.getState().editAt(roles, change, options),
   );
   const connections = vi.fn(() => ({})),
-    operate = vi.fn(async (_label: string, action: () => Promise<unknown>) => action());
+    operate = vi.fn(async (_label: string, action: () => Promise<unknown>) => action()),
+    message = vi.fn(),
+    refresh = vi.fn(async () => {});
   const executor = createToolExecutor({
     state: store.getState,
     edit,
@@ -63,10 +67,178 @@ async function fixture(invalidPeer = false) {
     operate,
     undo: () => store.getState().undo(),
     redo: () => store.getState().redo(),
-    message: vi.fn(),
+    message,
+    refresh,
   } as unknown as ToolAdapter);
-  return { store, persistence, executor, edit, connections, operate };
+  return { store, persistence, executor, edit, connections, operate, message, refresh };
 }
+
+it('normal upload reports the same selected-placement advisory per role and keeps both graph documents exact', async () => {
+  const f = await fixture();
+  f.store.getState().documents.left.presets[0].inputFir.hfdState!.used = true;
+  const right = f.store.getState().documents.right.presets[0];
+  right.firPlacement = 'input';
+  right.inputFir.hfdState!.used = true;
+  const before = structuredClone(f.store.getState().documents),
+    leftSession = {} as never,
+    rightSession = {} as never,
+    upload = vi.spyOn(firHardware, 'uploadFirPair').mockResolvedValue(undefined);
+  f.connections.mockReturnValue({
+    left: { session: leftSession },
+    right: { session: rightSession },
+  });
+  expect(await f.executor('fusion_fir_upload', { target: 'both', preset: 1 })).toEqual({
+    ok: true,
+    fir: [
+      {
+        slot: 'left',
+        preset: 1,
+        placement: 'output',
+        warnings: [
+          'Inactive input graph FIR is not transferred; only the selected placement is programmed.',
+        ],
+      },
+      {
+        slot: 'right',
+        preset: 1,
+        placement: 'input',
+        warnings: [
+          'Inactive output 1 graph FIR is not transferred; only the selected placement is programmed.',
+          'Inactive output 3 graph FIR is not transferred; only the selected placement is programmed.',
+        ],
+      },
+    ],
+  });
+  expect(upload).toHaveBeenCalledOnce();
+  const jobs = upload.mock.calls[0][0];
+  expect(jobs.map((job) => job.session)).toEqual([leftSession, rightSession]);
+  expect(jobs.map((job) => job.design)).toEqual([before.left.presets[0], before.right.presets[0]]);
+  expect(f.message.mock.calls[0][0]).toContain('left · Preset 1: Inactive input graph FIR');
+  expect(f.message.mock.calls[0][0]).toContain('right · Preset 1: Inactive output 3 graph FIR');
+  expect(f.refresh).toHaveBeenCalledExactlyOnceWith(['left', 'right']);
+  expect(f.edit).not.toHaveBeenCalled();
+  expect(f.store.getState().documents).toEqual(before);
+  expect(f.store.getState().past).toEqual([]);
+  await f.persistence.flush();
+});
+
+it.each(['fusion_upload', 'fusion_upload_all'] as const)(
+  '%s returns exact selected-role/preset FIR scope before an unchanged-design upload',
+  async (tool) => {
+    const f = await fixture(),
+      upload = vi.spyOn(sessionHardware, 'uploadPair').mockResolvedValue(undefined),
+      uploadAll = vi.spyOn(projectHardware, 'uploadProjectPair').mockResolvedValue(undefined);
+    f.store.getState().documents.left.presets[0].inputFir.hfdState!.used = true;
+    const later = f.store.getState().documents.right.presets[1];
+    later.firPlacement = 'input';
+    later.inputFir = native(4500);
+    later.channels[2].fir = native(1500);
+    f.connections.mockReturnValue({ left: { session: {} }, right: { session: {} } });
+    const before = structuredClone(f.store.getState().documents),
+      result = (await f.executor(tool, {
+        target: 'both',
+        ...(tool === 'fusion_upload' ? { preset: 1 } : {}),
+      })) as {
+        ok: boolean;
+        fir: { slot: Slot; preset: number; placement: string; warnings: string[] }[];
+      };
+    expect(result.ok).toBe(true);
+    const numbers = tool === 'fusion_upload' ? [1] : [1, 2, 3];
+    expect(result.fir.map(({ slot, preset }) => ({ slot, preset }))).toEqual(
+      (['left', 'right'] as const).flatMap((slot) => numbers.map((preset) => ({ slot, preset }))),
+    );
+    expect(
+      result.fir
+        .filter((scope) => scope.warnings.length)
+        .map(({ slot, preset, placement, warnings }) => ({ slot, preset, placement, warnings })),
+    ).toEqual([
+      {
+        slot: 'left',
+        preset: 1,
+        placement: 'output',
+        warnings: [
+          'Inactive input graph FIR is not transferred; only the selected placement is programmed.',
+        ],
+      },
+      ...(tool === 'fusion_upload_all'
+        ? [
+            {
+              slot: 'right',
+              preset: 2,
+              placement: 'input',
+              warnings: [
+                'Inactive output 3 graph FIR is not transferred; only the selected placement is programmed.',
+              ],
+            },
+          ]
+        : []),
+    ]);
+    expect(f.message.mock.invocationCallOrder[0]).toBeLessThan(
+      f.operate.mock.invocationCallOrder[0],
+    );
+    expect(f.message.mock.calls[0][0]).toContain('left · Preset 1:');
+    if (tool === 'fusion_upload_all') {
+      expect(f.message.mock.calls[0][0]).toContain('right · Preset 2:');
+      expect(uploadAll).toHaveBeenCalledOnce();
+      expect(upload).not.toHaveBeenCalled();
+      expect(uploadAll.mock.calls[0][0].map((job) => job.presets)).toEqual([
+        before.left.presets,
+        before.right.presets,
+      ]);
+    } else {
+      expect(f.message.mock.calls[0][0]).not.toContain('Preset 2:');
+      expect(upload).toHaveBeenCalledOnce();
+      expect(uploadAll).not.toHaveBeenCalled();
+      expect(upload.mock.calls[0][0].map((job) => job.design)).toEqual([
+        before.left.presets[0],
+        before.right.presets[0],
+      ]);
+    }
+    expect(f.refresh).toHaveBeenCalledExactlyOnceWith(['left', 'right']);
+    expect(f.edit).not.toHaveBeenCalled();
+    expect(f.store.getState().documents).toEqual(before);
+    expect(f.store.getState().past).toEqual([]);
+    await f.persistence.flush();
+  },
+);
+
+it('all-preset upload refuses an invalid later selected FIR before entering any device operation', async () => {
+  const f = await fixture(),
+    upload = vi.spyOn(projectHardware, 'uploadProjectPair').mockResolvedValue(undefined);
+  f.store.getState().documents.left.presets[0].inputFir.hfdState!.used = true;
+  const invalid = f.store.getState().documents.right.presets[2];
+  invalid.firPlacement = 'output';
+  invalid.channels[0].fir = native(1499);
+  const before = structuredClone(f.store.getState().documents);
+  expect(await f.executor('fusion_upload_all', { target: 'both' })).toMatchObject({
+    ok: false,
+    error: expect.stringContaining('1500 original taps'),
+  });
+  expect(f.operate).not.toHaveBeenCalled();
+  expect(f.connections).not.toHaveBeenCalled();
+  expect(upload).not.toHaveBeenCalled();
+  expect(f.store.getState().documents).toEqual(before);
+  expect(f.store.getState().past).toEqual([]);
+  await f.persistence.flush();
+});
+
+it('rejects a short selected peer cache before operating on either amplifier even when both graph placements are Used', async () => {
+  const f = await fixture(),
+    upload = vi.spyOn(firHardware, 'uploadFirPair').mockResolvedValue(undefined);
+  f.store.getState().documents.left.presets[0].inputFir.hfdState!.used = true;
+  f.store.getState().documents.right.presets[0].channels[0].fir = native(10);
+  const before = structuredClone(f.store.getState().documents);
+  expect(await f.executor('fusion_fir_upload', { target: 'both', preset: 1 })).toMatchObject({
+    ok: false,
+    error: expect.stringContaining('1500 original taps'),
+  });
+  expect(f.operate).not.toHaveBeenCalled();
+  expect(f.connections).not.toHaveBeenCalled();
+  expect(upload).not.toHaveBeenCalled();
+  expect(f.store.getState().documents).toEqual(before);
+  expect(f.store.getState().past).toEqual([]);
+  await f.persistence.flush();
+});
 
 it('native Clear through the shared tool clears linked follower independently on both roles and exact whole-document Undo/Redo is one entry', async () => {
   const f = await fixture(),

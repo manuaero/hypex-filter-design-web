@@ -66,6 +66,7 @@ const fir = (capacity: number) =>
         });
       }
     });
+const nativeShelfDirection = z.enum(['stLowShelf', 'stHighShelf', 'stUnknown']);
 const filter = z.object({
   id: z.string(),
   kind: z.enum([
@@ -95,6 +96,7 @@ const filter = z.object({
   sourceType: z.string().optional(),
   sourceId: z.string().optional(),
   shelfDirection: z.enum(['low', 'high']).optional(),
+  sourceShelfDirection: nativeShelfDirection.optional(),
 });
 const measurementSpectrum = z
   .object({
@@ -605,13 +607,20 @@ export function importHfd(xml: string, name: string): Project {
       channel.filters = bqs.map((b, i): Filter => {
         const type = val(b, 'filtertype'),
           shelf = val(b, 'shelfhl'),
+          sourceShelf = nativeShelfDirection.safeParse(shelf),
+          // Native Shelf1/2 select High only for stHighShelf. Asym instead
+          // selects Low only for stLowShelf; stUnknown has different meanings.
+          shelfIsLow =
+            type === 'ftShelf1' || type === 'ftShelf2'
+              ? shelf !== 'stHighShelf'
+              : shelf === 'stLowShelf',
           kind =
             type === 'ftShelf1'
-              ? shelf === 'stLowShelf'
+              ? shelfIsLow
                 ? 'lowshelf1'
                 : 'highshelf1'
               : type === 'ftShelf2'
-                ? shelf === 'stLowShelf'
+                ? shelfIsLow
                   ? 'lowshelf2'
                   : 'highshelf2'
                 : (kinds[type] ?? 'raw');
@@ -624,7 +633,8 @@ export function importHfd(xml: string, name: string): Project {
           q: num(b, 'q1', 0.707),
           q2: num(b, 'q2', 0.707),
           gain: num(b, 'gain'),
-          shelfDirection: shelf === 'stLowShelf' ? 'low' : 'high',
+          shelfDirection: shelfIsLow ? 'low' : 'high',
+          ...(sourceShelf.success ? { sourceShelfDirection: sourceShelf.data } : {}),
           sourceType: type,
           sourceId: b.getAttribute('id')!,
           provenance: 'hfd',
@@ -842,13 +852,15 @@ export function exportHfd(project: Project): string {
         set(
           node,
           'shelfhl',
-          f.kind.startsWith('low')
-            ? 'stLowShelf'
-            : f.kind.startsWith('high')
-              ? 'stHighShelf'
-              : f.shelfDirection === 'high'
+          f.sourceShelfDirection !== undefined
+            ? nativeShelfDirection.parse(f.sourceShelfDirection)
+            : f.kind.startsWith('low')
+              ? 'stLowShelf'
+              : f.kind.startsWith('high')
                 ? 'stHighShelf'
-                : 'stLowShelf',
+                : f.shelfDirection === 'high'
+                  ? 'stHighShelf'
+                  : 'stLowShelf',
         );
       });
       set(gain, 'gain', c.gain);

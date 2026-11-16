@@ -9,7 +9,7 @@ import { selectedSectionCoefficients } from '../src/domain/plot-layers';
 import type { PlotRange } from '../src/domain/plot-viewport';
 import { rectangleZoom, type RectangleZoom } from '../src/components/plot-zoom-geometry';
 import type { PlotViewSnapshot } from '../src/application/plot-view';
-import { newFilter, newProject, type Slot } from '../src/domain/model';
+import { newFilter, newProject, type Slot, type Filter } from '../src/domain/model';
 import { parseProject } from '../src/domain/files';
 import * as projectFiles from '../src/domain/files';
 import type { DirectorySaveBinding } from '../src/application/project-directory-writer';
@@ -44,6 +44,9 @@ const seen = vi.hoisted(() => ({
         onRectangleZoom: (zoom: RectangleZoom, range: Readonly<PlotRange>) => void;
         onResetRange: () => void;
         onRemove: () => void;
+        onChange: (patch: Partial<Filter>) => boolean | void;
+        onGraphQChange?: (q: number) => boolean | void;
+        qGestureProfile?: 'ordinary' | 'input-eq';
         contextKey?: string;
       }
     | undefined,
@@ -125,6 +128,182 @@ const view = () =>
 async function mount() {
   await act(async () => root.render(<Studio />));
 }
+
+it.each(['allpass2', 'asymmetric'] as const)(
+  'paired graph Q rejects an unsupported %s peer before any coefficient/history change',
+  async (kind) => {
+    for (const role of ['left', 'right'] as const)
+      Object.assign(state().documents[role].presets[0].channels[0].filters[0], {
+        kind: role === 'left' ? 'peak' : kind,
+        q: role === 'left' ? 0.7 : 1.3,
+        enabled: role === 'right',
+        coefficients: { b0: 0.9, b1: 0, b2: 0, f1: 0.1, f2: 0 },
+        provenance: 'hfd',
+      });
+    useWorkspace.setState({ linkedEdits: true });
+    await mount();
+    const before = structuredClone(state().documents),
+      revision = state().documentRevision;
+    let accepted: boolean | void;
+    await act(async () => {
+      accepted = seen.plot!.onGraphQChange
+        ? seen.plot!.onGraphQChange(0.74)
+        : seen.plot!.onChange({ q: 0.74 });
+    });
+    expect(accepted!).toBe(false);
+    expect(state().documents).toEqual(before);
+    expect(state().past).toHaveLength(0);
+    expect(state().documentRevision).toBe(revision);
+    expect(host.textContent).toMatch(/graph Q.*Q control/i);
+    const q = host.querySelector<HTMLInputElement>(
+      '#selected-filter-inspector [aria-label="Q factor"]',
+    )!;
+    await typeNumeric(q, '0.8');
+    await act(async () => q.blur());
+    expect(state().documents.left.presets[0].channels[0].filters[0].q).toBe(0.8);
+    expect(state().documents.right.presets[0].channels[0].filters[0]).toMatchObject({
+      kind,
+      q: 0.8,
+    });
+    expect(state().past).toHaveLength(1);
+    await act(async () => state().undo());
+    expect(state().documents).toEqual(before);
+  },
+);
+
+it('paired graph Q changes only the source when a supported peer already matches, retaining peer cache and one exact Undo', async () => {
+  for (const role of ['left', 'right'] as const)
+    Object.assign(state().documents[role].presets[0].channels[0].filters[0], {
+      kind: role === 'left' ? 'peak' : 'lowpass2',
+      q: role === 'left' ? 0.7 : 0.74,
+      enabled: role === 'right',
+      coefficients: { b0: 0.9, b1: 0, b2: 0, f1: 0.1, f2: 0 },
+      provenance: 'hfd',
+      sourceId: `${role}-source`,
+    });
+  useWorkspace.setState({ linkedEdits: true });
+  await mount();
+  const before = structuredClone(state().documents);
+  expect(seen.plot!.qGestureProfile).toBe('ordinary');
+  await act(async () => expect(seen.plot!.onGraphQChange!(0.74)).toBe(true));
+  expect(state().documents.right).toEqual(before.right);
+  expect(state().documents.left.presets[0].channels[0].filters[0]).toMatchObject({
+    q: 0.74,
+    enabled: false,
+    sourceId: 'left-source',
+  });
+  expect(state().documents.left.presets[0].channels[0].filters[0].coefficients).toBeUndefined();
+  expect(state().past).toHaveLength(1);
+  await act(async () => state().undo());
+  expect(state().documents).toEqual(before);
+  const revision = state().documentRevision;
+  await act(async () => expect(seen.plot!.onGraphQChange!(0.7)).toBe(true));
+  expect(state().documents).toEqual(before);
+  expect(state().past).toHaveLength(0);
+  expect(state().documentRevision).toBe(revision);
+});
+
+it('Input EQ graph advertises its separate field profile and retains off-grid bound state consistently with EQ adjust', async () => {
+  Object.assign(state().documents.left.presets[0].inputEq[0], {
+    kind: 'peak',
+    q: 20.000001,
+    coefficients: { b0: 0.9, b1: 0, b2: 0, f1: 0.1, f2: 0 },
+    provenance: 'hfd',
+  });
+  useWorkspace.setState({ linkedEdits: true });
+  await mount();
+  await act(async () => seen.adapter!.view({ tab: 'Input EQ', eqBand: 1 }));
+  expect(seen.plot!.qGestureProfile).toBe('input-eq');
+  const before = structuredClone(state().documents),
+    revision = state().documentRevision;
+  await act(async () => expect(seen.plot!.onGraphQChange!(20.000001)).toBe(true));
+  expect(state().documents).toEqual(before);
+  expect(state().past).toHaveLength(0);
+  expect(state().documentRevision).toBe(revision);
+  await act(async () =>
+    expect(
+      await createToolExecutor(seen.adapter!)('fusion_eq_adjust', {
+        target: 'both',
+        preset: 1,
+        index: 1,
+        parameter: 'q',
+        direction: 'up',
+        basis: 'left',
+      }),
+    ).toMatchObject({ ok: true, changed: false }),
+  );
+  expect(state().documents).toEqual(before);
+});
+
+it('Studio rejects graph Q outside Magnitude without changing a supported selected filter', async () => {
+  Object.assign(state().documents.left.presets[0].channels[0].filters[0], { kind: 'peak', q: 0.7 });
+  await mount();
+  await act(async () => seen.adapter!.view({ mode: 'Phase' }));
+  const before = structuredClone(state().documents),
+    revision = state().documentRevision;
+  await act(async () => expect(seen.plot!.onGraphQChange!(0.74)).toBe(false));
+  expect(state().documents).toEqual(before);
+  expect(state().past).toHaveLength(0);
+  expect(state().documentRevision).toBe(revision);
+});
+
+it('shows role/preset-specific FIR transfer advisories before either preset or all-project upload without changing graph banks', async () => {
+  const documents = structuredClone(state().documents);
+  const bank = (capacity: number) => ({
+    name: `Synthetic-${capacity}.txt`,
+    enabled: true,
+    taps: Array.from({ length: capacity }, (_, i) => (i === 0 ? 0.5 : 0)),
+    hfdState: { loaded: true, used: true, tapCount: capacity },
+  });
+  for (const role of ['left', 'right'] as const)
+    for (const preset of documents[role].presets) {
+      preset.firPlacement = role === 'left' ? 'input' : 'output';
+      preset.inputFir = bank(4500);
+      for (const channel of preset.channels) channel.fir = bank(1500);
+    }
+  useWorkspace.setState({ documents });
+  await mount();
+  const before = structuredClone(state().documents),
+    revision = state().documentRevision,
+    advisory = host.querySelector<HTMLDetailsElement>('details[aria-label="Upload FIR scope"]');
+  expect(advisory).not.toBeNull();
+  expect(advisory!.open).toBe(false);
+  const summary = advisory!.querySelector('summary')!;
+  expect(summary.textContent).toContain('FIR upload scope \u00b7 12 advisories');
+  expect(summary.textContent).toContain('Other-placement FIRs stay in the graph; not uploaded.');
+  expect(summary.textContent).toContain('Left P1,2,3');
+  expect(summary.textContent).toContain('Right P1,2,3');
+  const list = advisory!.querySelector<HTMLElement>('[aria-label="FIR upload advisories"]')!;
+  expect(list.style.maxHeight).toBe('160px');
+  expect(list.style.overflowY).toBe('auto');
+  expect(list.querySelectorAll('p')).toHaveLength(12);
+  for (const preset of [1, 2, 3]) {
+    for (const channel of [1, 2, 3])
+      expect(list.textContent).toContain(
+        `Left \u00b7 Preset ${preset}: Inactive output ${channel} graph FIR`,
+      );
+    expect(list.textContent).toContain(`Right \u00b7 Preset ${preset}: Inactive input graph FIR`);
+  }
+  await act(async () => summary.click());
+  expect(advisory!.open).toBe(true);
+  await act(async () => summary.click());
+  expect(advisory!.open).toBe(false);
+  expect(state().documents).toEqual(before);
+  expect(state().documentRevision).toBe(revision);
+  expect(host.querySelector<HTMLButtonElement>('.header-upload > button')!.disabled).toBe(true);
+  const options = host.querySelector<HTMLDetailsElement>('details.upload-options-menu')!;
+  await act(async () => {
+    options.open = true;
+  });
+  expect(options.textContent).toContain('Upload all to Left');
+  expect(options.textContent).toContain('Upload all to both');
+  const warningText = advisory!.textContent;
+  await act(async () => state().choose({ slot: 'right', preset: 2 }));
+  expect(host.querySelector('[aria-label="Upload FIR scope"]')!.textContent).toBe(warningText);
+  expect(state().documents).toEqual(before);
+  expect(state().past).toHaveLength(0);
+});
+
 beforeEach(async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: vi.fn() });

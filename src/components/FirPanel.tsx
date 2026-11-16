@@ -16,7 +16,7 @@ import {
   type NativeFirAction,
   type ReadFirDesign,
 } from '../domain/fir-editing';
-import { firIsEffective, firState } from '../domain/fir-state';
+import { firIsEffective, firState, planSelectedFirPlacement } from '../domain/fir-state';
 import { parseFir, download } from '../domain/files';
 import { firPlacement, readFir, uploadFir, restoreFir, type FirBackup } from '../hardware/fir';
 import { listFirBackups } from '../hardware/storage';
@@ -50,6 +50,13 @@ export default function FirPanel({
 }) {
   const placement = firPlacement(preset),
     [backups, setBackups] = useState<FirBackup[]>([]);
+  let uploadWarnings: string[] = [],
+    uploadScopeError = '';
+  try {
+    uploadWarnings = planSelectedFirPlacement(preset).warnings;
+  } catch (error) {
+    uploadScopeError = error instanceof Error ? error.message : 'Invalid FIR resources';
+  }
   useEffect(() => {
     listFirBackups()
       .then(setBackups)
@@ -70,6 +77,14 @@ export default function FirPanel({
         <h1>FIR processing</h1>
         <p>4,500 input taps or 3 × 1,500 output taps · 93,750 Hz · Preset {presetIndex + 1}</p>
       </header>
+      {(uploadWarnings.length > 0 || uploadScopeError) && (
+        <aside className={styles.note} aria-label="FIR upload scope">
+          {uploadWarnings.map((warning) => (
+            <p key={warning}>{warning}</p>
+          ))}
+          {uploadScopeError && <p>{uploadScopeError}</p>}
+        </aside>
+      )}
       <div className={styles.toolbar}>
         <label className={styles.placement}>
           <span>Placement</span>
@@ -108,7 +123,7 @@ export default function FirPanel({
             <ArrowDownToLine size={13} /> Read FIR
           </button>
           <button
-            disabled={!live}
+            disabled={!live || !!uploadScopeError}
             onClick={() =>
               run('Uploading FIR', async () => {
                 await uploadFir(live!.session, presetIndex + 1, preset);

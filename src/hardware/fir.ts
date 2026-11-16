@@ -29,6 +29,8 @@ export interface FirPlan {
   filenames: { address: number; bytes: Uint8Array }[];
   flags: number;
   placement: 0 | 1;
+  /** Selected-placement graph differences; never permission to skip preflight. */
+  warnings?: string[];
 }
 export function firLayout(preset: number) {
   if (![1, 2, 3].includes(preset)) throw new Error('Invalid FIR preset');
@@ -164,6 +166,7 @@ export async function prepareFirInternal(
     filenames,
     flags,
     placement: placement as 0 | 1,
+    warnings: activation.warnings,
   };
 }
 export async function writeFirNameInternal(

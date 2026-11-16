@@ -74,6 +74,65 @@ async function render(initial: Preset, selectedOutputIndex = 0) {
   return { current: () => current, run, receive: () => receive };
 }
 
+it('shows the inactive graph advisory before explicit Upload and passes the unchanged two-Used design to hardware', async () => {
+  const preset = fixture();
+  preset.inputFir.hfdState!.used = true;
+  const before = structuredClone(preset),
+    upload = vi.spyOn(firHardware, 'uploadFir').mockResolvedValue(undefined),
+    session = {} as never,
+    edit = vi.fn(),
+    notice = vi.fn(),
+    run = vi.fn(async (_label: string, work: () => Promise<void>) => work());
+  await act(async () =>
+    root.render(
+      <FirPanel
+        preset={preset}
+        presetIndex={0}
+        live={{ session, identity: {} as never }}
+        edit={edit}
+        run={run}
+        readFile={vi.fn()}
+        notice={notice}
+      />,
+    ),
+  );
+  const advisory = host.querySelector<HTMLElement>('[aria-label="FIR upload scope"]')!,
+    button = buttons('Upload FIR')[0];
+  expect(advisory.textContent).toBe(
+    'Inactive input graph FIR is not transferred; only the selected placement is programmed.',
+  );
+  expect(advisory.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  expect(button.disabled).toBe(false);
+  expect(upload).not.toHaveBeenCalled();
+  expect(run).not.toHaveBeenCalled();
+  await act(async () => button.click());
+  expect(upload).toHaveBeenCalledExactlyOnceWith(session, 1, preset);
+  expect(edit).not.toHaveBeenCalled();
+  expect(preset).toEqual(before);
+  expect(notice).toHaveBeenCalledWith(
+    'FIR flash, names and activation verified. Outputs remain muted.',
+  );
+});
+
+it('removes the advisory after explicit placement selection marks the opposite graph banks unused, without uploading', async () => {
+  const preset = fixture();
+  preset.inputFir.hfdState!.used = true;
+  const initial = structuredClone(preset),
+    f = await render(preset);
+  expect(host.querySelector('[aria-label="FIR upload scope"]')).not.toBeNull();
+  const select = host.querySelector<HTMLSelectElement>('[aria-label="FIR placement"]')!;
+  await act(async () => {
+    select.value = 'input';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  expect(host.querySelector('[aria-label="FIR upload scope"]')).toBeNull();
+  expect(f.current().inputFir.taps).toEqual(initial.inputFir.taps);
+  expect(f.current().channels.map((channel) => channel.fir.taps)).toEqual(
+    initial.channels.map((channel) => channel.fir.taps),
+  );
+  expect(f.run).not.toHaveBeenCalled();
+});
+
 it('native placement changes Used while retaining both placements’ independent enable settings and loaded data', async () => {
   const f = await render(fixture());
   const select = host.querySelector<HTMLSelectElement>('select[aria-label="FIR placement"]')!;

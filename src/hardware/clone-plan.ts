@@ -2,12 +2,7 @@ import { newFilter, type Fir, type Preset, type Project } from '../domain/model'
 import { nativeCloneTemplateSchema, type NativeCloneTemplate } from '../domain/clone-template';
 import { projectSchema } from '../domain/files';
 import { compileSector, q24 } from '../domain/dsp';
-import {
-  firIsEffective,
-  firLoaded,
-  presetFirPlacement,
-  validateFirState,
-} from '../domain/fir-state';
+import { planSelectedFirPlacement } from '../domain/fir-state';
 import { firLayout } from './fir';
 import { control, decodeStatus, encodeEq, hex, packet, settings } from './codec';
 import { digest } from './checksum';
@@ -124,30 +119,10 @@ export interface NativeCloneFirPlan {
 /** Native selected-placement transfer, independent of graph Used flags. */
 export function planNativeCloneFir(preset: Preset, previousFlags: number): NativeCloneFirPlan {
   requireInteger(previousFlags, 0, 255, 'previous FIR flags');
-  if (preset.channels.length !== 3) throw new Error('Clone requires three output FIR resources');
-  const placement = presetFirPlacement(preset) === 'input' ? 0 : 1,
-    resources = [
-      { filter: preset.inputFir, capacity: 4500, channel: 0 },
-      ...preset.channels.map((channel, index) => ({
-        filter: channel.fir,
-        capacity: 1500,
-        channel: index + 1,
-      })),
-    ],
-    warnings: string[] = [];
-  for (const resource of resources) validateFirState(resource.filter, resource.capacity);
-  const selected = (channel: number) => (placement === 0 ? channel === 0 : channel > 0);
-  for (const resource of resources.filter((resource) => !selected(resource.channel)))
-    if (firIsEffective(resource.filter, false))
-      warnings.push(
-        `Inactive ${resource.channel === 0 ? 'input' : `output ${resource.channel}`} graph FIR is not transferred; only the selected placement is programmed.`,
-      );
-  const banks = resources
-    .filter((resource) => selected(resource.channel))
-    .map((resource) => ({
-      ...resource,
-      loaded: firLoaded(resource.filter),
-      transfer: firLoaded(resource.filter) && resource.filter.taps.length > 10,
+  const { placement, banks: selectedBanks, warnings } = planSelectedFirPlacement(preset),
+    banks = selectedBanks.map((bank) => ({
+      ...bank,
+      transfer: bank.loaded && bank.filter.taps.length > 10,
     }));
   for (const bank of banks) {
     if (bank.transfer && bank.filter.taps.length !== bank.capacity)

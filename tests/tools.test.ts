@@ -10,6 +10,7 @@ import type { Backup } from '../src/hardware/session';
 import * as backupFiles from '../src/hardware/backup-file';
 import type { EqBank } from '../src/domain/equalizer';
 import { decodeEq } from '../src/hardware/codec';
+import { applyManualFilterWheel, planManualFilterWheel } from '../src/domain/editing';
 it('previews a proposed filter without editing and rejects unstable custom coefficients', async () => {
   const { execute, state } = setup(),
     before = structuredClone(state().documents);
@@ -573,6 +574,336 @@ it('exposes one strict wheel event with atomic independent Both changes, no-op p
   expect(await execute('fusion_filter_adjust', event)).toMatchObject({ ok: true, changed: true });
   expect(edits).toHaveBeenCalledExactlyOnceWith(['right'], expect.any(Function));
   expect(state().documents.left).toEqual(left);
+});
+
+it('graph Q publishes its explicit final Text at a bound while default field mode preserves off-grid canonical precision', async () => {
+  const { execute, state, adapter } = setup(),
+    edits = vi.spyOn(adapter, 'edit');
+  const left = state().documents.left.presets[0].channels[0].filters[0];
+  const right = state().documents.right.presets[0].channels[0].filters[0];
+  Object.assign(left, {
+    kind: 'peak',
+    q: 20.000001,
+    enabled: false,
+    coefficients: { b0: 0.9, b1: 0, b2: 0, f1: 0.1, f2: 0 },
+    provenance: 'hfd',
+  });
+  Object.assign(right, { kind: 'lowpass2', q: 0.7, enabled: true });
+  const before = structuredClone(state().documents),
+    event = {
+      target: 'both',
+      preset: 1,
+      channel: 1,
+      index: 1,
+      parameter: 'q',
+      direction: 'up',
+      basis: 'left',
+    };
+  expect(await execute('fusion_filter_adjust', event)).toMatchObject({ ok: true, changed: false });
+  expect(edits).not.toHaveBeenCalled();
+  expect(state().documents).toEqual(before);
+  expect(await execute('fusion_filter_adjust', { ...event, surface: 'graph' })).toMatchObject({
+    ok: true,
+    changed: true,
+    surface: 'graph',
+    roles: [
+      { value: 20, text: '20.000' },
+      { value: 20, text: '20.000' },
+    ],
+  });
+  expect(edits).toHaveBeenCalledExactlyOnceWith(['left', 'right'], expect.any(Function));
+  expect(state().documents.left.presets[0].channels[0].filters[0].coefficients).toBeUndefined();
+  expect(state().documents.left.presets[0].channels[0].filters[0].enabled).toBe(false);
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(before);
+});
+
+it('graph Q uses one native step per stateless event with independent supported roles and exact paired Undo', async () => {
+  const { execute, state, adapter } = setup(),
+    edits = vi.spyOn(adapter, 'edit');
+  const left = state().documents.left.presets[0].channels[0],
+    right = state().documents.right.presets[0].channels[0];
+  Object.assign(left.filters[0], { kind: 'peak', q: 1.15, enabled: false });
+  Object.assign(right.filters[0], { kind: 'highpass2', q: 1.3, enabled: true });
+  left.additionalGain = 10;
+  right.additionalGain = -12;
+  const before = structuredClone(state().documents),
+    event = {
+      target: 'both',
+      preset: 1,
+      channel: 1,
+      index: 1,
+      surface: 'graph',
+      parameter: 'q',
+      direction: 'up',
+    };
+  expect(await execute('fusion_filter_adjust', event)).toMatchObject({
+    ok: true,
+    changed: true,
+    surface: 'graph',
+    roles: [
+      { value: 1.19, text: '1.190' },
+      { value: 1.34, text: '1.340' },
+    ],
+  });
+  expect(edits).toHaveBeenCalledOnce();
+  expect(state().documents.left.presets[0].channels[0].filters[0].enabled).toBe(false);
+  expect(state().documents.right.presets[0].channels[0].filters[0].enabled).toBe(true);
+  expect(await execute('fusion_filter_adjust', event)).toMatchObject({
+    ok: true,
+    roles: [{ value: 1.23 }, { value: 1.38 }],
+  });
+  await execute('fusion_history', { action: 'undo' });
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(before);
+});
+
+it.each(['allpass2', 'asymmetric'] as const)(
+  'graph Q refuses every unsupported %s destination even for a fixed source while field Q remains available',
+  async (kind) => {
+    const { execute, state, adapter } = setup(),
+      edits = vi.spyOn(adapter, 'edit');
+    Object.assign(state().documents.left.presets[0].channels[0].filters[0], {
+      kind: 'peak',
+      q: 0.7,
+    });
+    Object.assign(state().documents.right.presets[0].channels[0].filters[0], { kind, q: 1.3 });
+    const before = structuredClone(state().documents),
+      event = {
+        target: 'both',
+        preset: 1,
+        channel: 1,
+        index: 1,
+        parameter: 'q',
+        direction: 'up',
+        basis: 'left',
+      };
+    expect(await execute('fusion_filter_adjust', { ...event, surface: 'graph' })).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/graph Q.*Q control/i),
+    });
+    expect(edits).not.toHaveBeenCalled();
+    expect(state().documents).toEqual(before);
+    expect(await execute('fusion_filter_adjust', event)).toMatchObject({
+      ok: true,
+      surface: 'field',
+      roles: [{ value: 0.74 }, { value: 0.74 }],
+    });
+    expect(state().documents.right.presets[0].channels[0].filters[0].kind).toBe(kind);
+    await execute('fusion_history', { action: 'undo' });
+    expect(state().documents).toEqual(before);
+  },
+);
+
+it('graph source no-ops skip all roles and changed mirrors preserve an already matching peer cache', async () => {
+  const { execute, state, adapter } = setup(),
+    edits = vi.spyOn(adapter, 'edit');
+  for (const role of ['left', 'right'] as const)
+    Object.assign(state().documents[role].presets[0].channels[0].filters[0], {
+      kind: role === 'left' ? 'peak' : 'lowshelf2',
+      q: role === 'left' ? 20 : 0.1,
+      enabled: role === 'right',
+      sourceId: `${role}-source`,
+      coefficients: { b0: 0.9, b1: 0, b2: 0, f1: 0.1, f2: 0 },
+      provenance: 'hfd',
+    });
+  const event = {
+    target: 'both',
+    preset: 1,
+    channel: 1,
+    index: 1,
+    parameter: 'q',
+    direction: 'up',
+    basis: 'left',
+    surface: 'graph',
+  };
+  const bounded = structuredClone(state().documents);
+  expect(await execute('fusion_filter_adjust', event)).toMatchObject({
+    ok: true,
+    changed: false,
+    roles: [
+      { value: 20, text: '20.000' },
+      { value: 0.1, text: '0.100' },
+    ],
+  });
+  expect(edits).not.toHaveBeenCalled();
+  expect(state().documents).toEqual(bounded);
+  state().documents.left.presets[0].channels[0].filters[0].q = 0.7;
+  state().documents.right.presets[0].channels[0].filters[0].q = 0.74;
+  const before = structuredClone(state().documents);
+  expect(await execute('fusion_filter_adjust', event)).toMatchObject({
+    ok: true,
+    changed: true,
+    roles: [{ changed: true }, { changed: false }],
+  });
+  expect(edits).toHaveBeenCalledExactlyOnceWith(['left'], expect.any(Function));
+  expect(state().documents.right).toEqual(before.right);
+  expect(state().documents.left.presets[0].channels[0].filters[0]).toMatchObject({
+    q: 0.74,
+    enabled: false,
+    sourceId: 'left-source',
+  });
+  expect(state().documents.left.presets[0].channels[0].filters[0].coefficients).toBeUndefined();
+  await execute('fusion_history', { action: 'undo' });
+  expect(state().documents).toEqual(before);
+});
+
+it.each(['allpass2', 'asymmetric'] as const)(
+  'graph fixed-source canonical-bound no-op with an unsupported %s peer matches the UI without admitting a changed mirror',
+  async (kind) => {
+    const { execute, state, adapter } = setup(),
+      edits = vi.spyOn(adapter, 'edit');
+    Object.assign(state().documents.left.presets[0].channels[0].filters[0], {
+      kind: 'peak',
+      q: 20,
+      enabled: false,
+      coefficients: { b0: 0.9, b1: 0, b2: 0, f1: 0.1, f2: 0 },
+      provenance: 'hfd',
+    });
+    Object.assign(state().documents.right.presets[0].channels[0].filters[0], {
+      kind,
+      q: 1.3,
+      coefficients: { b0: 0.8, b1: 0, b2: 0, f1: 0.2, f2: 0 },
+      provenance: 'hfd',
+    });
+    const event = {
+        target: 'both',
+        preset: 1,
+        channel: 1,
+        index: 1,
+        parameter: 'q',
+        direction: 'up',
+        basis: 'left',
+        surface: 'graph',
+      },
+      before = structuredClone(state().documents);
+    expect(await execute('fusion_filter_adjust', event)).toMatchObject({
+      ok: true,
+      changed: false,
+      roles: [
+        { value: 20, text: '20.000', changed: false },
+        { value: 1.3, text: '1.300', changed: false },
+      ],
+    });
+    expect(edits).not.toHaveBeenCalled();
+    expect(state().documents).toEqual(before);
+    // The exact getter now changes the source model: every destination must be
+    // admitted before either side is edited, even though visible Text is equal.
+    state().documents.left.presets[0].channels[0].filters[0].q = 20.000001;
+    const offGrid = structuredClone(state().documents);
+    expect(await execute('fusion_filter_adjust', event)).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/graph Q.*Q control/i),
+    });
+    expect(state().documents).toEqual(offGrid);
+    expect(await execute('fusion_filter_adjust', { ...event, basis: 'each' })).toMatchObject({
+      ok: false,
+    });
+    expect(edits).not.toHaveBeenCalled();
+    await execute('fusion_history', { action: 'undo' });
+    expect(state().documents).toEqual(offGrid);
+  },
+);
+
+it('graph source no-op still validates source kind and complete editable destination structure', async () => {
+  const { execute, state, adapter } = setup(),
+    edits = vi.spyOn(adapter, 'edit');
+  for (const role of ['left', 'right'] as const)
+    Object.assign(state().documents[role].presets[0].channels[0].filters[0], {
+      kind: 'peak',
+      q: 20,
+    });
+  const valid = structuredClone(state().documents),
+    event = {
+      target: 'both',
+      preset: 1,
+      channel: 1,
+      index: 1,
+      parameter: 'q',
+      direction: 'up',
+      basis: 'left',
+      surface: 'graph',
+    };
+  for (const change of [
+    () => (state().documents.left.presets[0].channels[0].filters[0].kind = 'allpass2'),
+    () => (state().documents.right.presets[0].channels[0].linkedTo = 1),
+    () => state().documents.right.presets[0].channels[0].filters.pop(),
+  ]) {
+    state().documents = structuredClone(valid);
+    change();
+    const before = structuredClone(state().documents);
+    expect(await execute('fusion_filter_adjust', event)).toMatchObject({ ok: false });
+    expect(edits).not.toHaveBeenCalled();
+    expect(state().documents).toEqual(before);
+  }
+});
+
+it('graph plans fence the retained native shelf enum as part of the complete target filter', () => {
+  const { state } = setup(),
+    documents = state().documents,
+    filter = documents.left.presets[0].channels[0].filters[0];
+  Object.assign(filter, { kind: 'lowshelf2', q: 0.7, sourceShelfDirection: 'stUnknown' });
+  const plan = planManualFilterWheel(documents, ['left'], {
+    presetIndex: 0,
+    channelIndex: 0,
+    filterIndex: 0,
+    parameter: 'q',
+    direction: 1,
+    basis: 'left',
+    surface: 'graph',
+  });
+  const replaced = structuredClone(documents.left);
+  replaced.presets[0].channels[0].filters[0].sourceShelfDirection = 'stLowShelf';
+  const before = structuredClone(replaced);
+  expect(() => applyManualFilterWheel(replaced, plan)).toThrow(/target changed/);
+  expect(replaced).toEqual(before);
+  const original = structuredClone(documents.left);
+  applyManualFilterWheel(original, plan);
+  expect(original.presets[0].channels[0].filters[0]).toMatchObject({
+    q: 0.74,
+    sourceShelfDirection: 'stUnknown',
+  });
+  expect(filter).toMatchObject({ q: 0.7, sourceShelfDirection: 'stUnknown' });
+});
+
+it('graph surface schema and linked-target admission refuse without weakening field/raw controls', async () => {
+  const { execute, state, adapter } = setup(),
+    edits = vi.spyOn(adapter, 'edit');
+  for (const role of ['left', 'right'] as const)
+    Object.assign(state().documents[role].presets[0].channels[0].filters[0], {
+      kind: 'peak',
+      q: 0.7,
+    });
+  const event = {
+    target: 'both',
+    preset: 1,
+    channel: 1,
+    index: 1,
+    parameter: 'q',
+    direction: 'up',
+    surface: 'graph',
+  };
+  const before = structuredClone(state().documents);
+  for (const patch of [
+    { parameter: 'gain' },
+    { parameter: 'q2' },
+    { surface: 'unknown' },
+    { state: {} },
+    { step: 0.5 },
+    { displayedText: '0.7' },
+  ])
+    expect(await execute('fusion_filter_adjust', { ...event, ...patch })).toMatchObject({
+      ok: false,
+    });
+  expect(state().documents).toEqual(before);
+  state().documents.right.presets[0].channels[0].linkedTo = 1;
+  const linked = structuredClone(state().documents);
+  expect(await execute('fusion_filter_adjust', { ...event, basis: 'left' })).toMatchObject({
+    ok: false,
+  });
+  expect(state().documents).toEqual(linked);
+  expect(edits).not.toHaveBeenCalled();
+  expect(TOOL_DEFINITIONS).toHaveLength(91);
 });
 
 it('wheel preflight refuses inactive/linked roles atomically, while fixed-source mirror allows latent destinations', async () => {

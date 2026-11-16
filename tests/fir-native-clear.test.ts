@@ -165,7 +165,13 @@ it('uses the actual product of two explicitly used native FIR nodes rather than 
   p.inputFir.hfdState!.used = true;
   expect(presetResponse(p, 0, 1000)[0]).toBeCloseTo(0.25, 12);
   expect(presetImpulse(p, 0, 32)[0]).toBeCloseTo(0.25, 12);
-  expect(() => planFirActivation(p, 0)).toThrow(/inactive placement/);
+  const before = structuredClone(p),
+    plan = planFirActivation(p, 0);
+  expect(plan.banks.map((bank) => bank.channel)).toEqual([1, 2, 3]);
+  expect(plan.warnings).toEqual([
+    'Inactive input graph FIR is not transferred; only the selected placement is programmed.',
+  ]);
+  expect(p).toEqual(before);
 });
 
 it('exports Clear with raw Enabled, retained count, input unused/no coefficients and used output zero padding', () => {

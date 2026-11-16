@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { type Channel, type Preset, type Filter } from '../domain/model';
 import ResponsePlot, { type PlotMode } from './ResponsePlot';
 import { layoutFilterHandles } from './filter-handle-layout';
@@ -14,11 +14,14 @@ import { defaultPlotRange, type PlotRange } from '../domain/plot-viewport';
 export { DEFAULT_RANGE, type PlotRange } from '../domain/plot-viewport';
 import { filterMarkerAnchor, type MagnitudeLayers } from '../domain/plot-layers';
 import type { PhaseViewState } from '../application/graph-view';
+import {
+  hfdManualGraphQNext,
+  supportsHfdGraphQ,
+  type HfdManualGraphQState,
+} from '../domain/manual-graph-q';
+import { hfdInputEqWheelNext } from '../domain/input-eq-parameters';
 const gainType = (f: Filter) => f.kind === 'peak' || f.kind.includes('shelf');
-const qType = (f: Filter) =>
-  !['unity', 'raw', 'lowpass1', 'highpass1', 'allpass1', 'lowshelf1', 'highshelf1'].includes(
-    f.kind,
-  );
+const qType = (f: Filter) => supportsHfdGraphQ(f.kind);
 export default function InteractivePlot({
   channels,
   preset,
@@ -43,6 +46,8 @@ export default function InteractivePlot({
   contextKey,
   onSelect,
   onChange,
+  onGraphQChange,
+  qGestureProfile = 'ordinary',
   onAdd,
   onRemove,
   onToggle,
@@ -75,6 +80,11 @@ export default function InteractivePlot({
   contextKey?: string;
   onSelect: (index: number) => void;
   onChange: (patch: Partial<Filter>) => void;
+  /** Preflight the complete intended workspace target set; false rejects the
+   * event and discards transient graph Text/Value state. */
+  onGraphQChange?: (q: number) => boolean | void;
+  /** Input EQ graph gestures are a browser convenience using its field profile. */
+  qGestureProfile?: 'ordinary' | 'input-eq';
   onAdd: (frequency: number) => void;
   onRemove: () => void;
   onToggle: () => void;
@@ -93,9 +103,20 @@ export default function InteractivePlot({
         mode: PlotMode;
         contextKey?: string;
         filter?: Filter;
+        ctrlKey?: boolean;
         range: PlotRange;
         commitRange?: () => void;
         cancelRange?: () => void;
+      }
+    | undefined
+  >(undefined);
+  const graphQ = useRef<
+    | {
+        source: Filter;
+        value: number;
+        text: string;
+        state: HfdManualGraphQState;
+        pending: boolean;
       }
     | undefined
   >(undefined);
@@ -108,7 +129,7 @@ export default function InteractivePlot({
       else drag.current?.cancelRange?.();
       drag.current = undefined;
     };
-  }, [contextKey, mode]);
+  }, [contextKey, mode, qGestureProfile]);
   useEffect(() => {
     const node = element.current;
     if (!node) return;
@@ -122,6 +143,59 @@ export default function InteractivePlot({
     editable = channel?.linkedTo === undefined,
     filter = channel?.filters[activeFilter],
     timed = mode === 'Impulse' || mode === 'Step';
+  useLayoutEffect(() => {
+    graphQ.current = undefined;
+  }, [
+    contextKey,
+    mode,
+    qGestureProfile,
+    activeChannel,
+    activeFilter,
+    selectedFilter,
+    filter?.id,
+    filter?.kind,
+    editable,
+  ]);
+  useLayoutEffect(() => {
+    const memory = graphQ.current;
+    if (!memory || memory.source === filter) return;
+    if (memory.pending && Object.is(memory.value, filter?.q)) {
+      memory.source = filter!;
+      memory.pending = false;
+    } else graphQ.current = undefined;
+  }, [filter, filter?.q]);
+  const stepGraphQ = (direction: -1 | 1) => {
+    if (!editable || mode !== 'Magnitude' || !filter || !qType(filter)) return;
+    try {
+      let memory = graphQ.current;
+      if (memory && memory.source !== filter) {
+        if (memory.pending && Object.is(memory.value, filter.q)) {
+          memory.source = filter;
+          memory.pending = false;
+        } else memory = undefined;
+      }
+      const value = memory?.value ?? filter.q,
+        options = { displayedText: memory?.text, state: memory?.state },
+        result =
+          qGestureProfile === 'input-eq'
+            ? hfdInputEqWheelNext('q', value, direction, options)
+            : hfdManualGraphQNext(value, direction, options);
+      graphQ.current = {
+        source: filter,
+        value: result.value,
+        text: result.text,
+        state: result.state,
+        pending: result.changed || (memory?.pending ?? false),
+      };
+      if (result.changed) {
+        if (onGraphQChange) {
+          if (onGraphQChange(result.value) === false) graphQ.current = undefined;
+        } else onChange({ q: result.value });
+      }
+    } catch {
+      graphQ.current = undefined;
+    }
+  };
   const L = 48,
     R = 20,
     T = 24,
@@ -176,7 +250,6 @@ export default function InteractivePlot({
     const node = element.current;
     if (!node) return;
     const wheel = (e: WheelEvent) => {
-      const handle = (e.target as Element).closest<HTMLElement>('[data-filter]');
       if (timed) {
         e.preventDefault();
         const { x, y } = point(e),
@@ -206,21 +279,13 @@ export default function InteractivePlot({
         }
         return;
       }
-      if (!handle || !editable || timed) return;
+      if (mode !== 'Magnitude' || !editable || !filter || e.deltaY === 0) return;
       e.preventDefault();
-      const index = Number(handle.dataset.filter);
-      if (index !== activeFilter) {
-        onSelect(index);
-        return;
-      }
-      if (filter && qType(filter))
-        onChange({
-          q: Math.max(0.001, Math.min(100, filter.q * (e.deltaY > 0 ? 1 / 1.06 : 1.06))),
-        });
+      stepGraphQ(e.deltaY < 0 ? 1 : -1);
     };
     node.addEventListener('wheel', wheel, { passive: false });
     return () => node.removeEventListener('wheel', wheel);
-  }, [filter, activeFilter, onSelect, onChange, editable, timed, range, onRange, W, H]);
+  });
   return (
     <div
       className="interactive-plot"
@@ -237,9 +302,10 @@ export default function InteractivePlot({
         if (!d) return;
         if (d.mode !== mode || d.contextKey !== contextKey) return;
         if (d.kind === 'filter' && d.filter) {
-          if (e.ctrlKey && qType(d.filter))
-            onChange({ q: Math.max(0.001, Math.min(100, d.filter.q * Math.exp((d.y - y) / 100))) });
-          else
+          if (d.ctrlKey) {
+            if (filter?.id === d.filter.id && filter.kind === d.filter.kind && y !== d.y)
+              stepGraphQ(y < d.y ? 1 : -1);
+          } else
             onChange({
               frequency: Math.max(
                 0.001,
@@ -345,6 +411,7 @@ export default function InteractivePlot({
         if (d.kind !== 'filter') d.commitRange?.();
       }}
       onPointerCancel={() => {
+        graphQ.current = undefined;
         if (drag.current?.kind === 'filter') end(true);
         else drag.current?.cancelRange?.();
         drag.current = undefined;
@@ -415,7 +482,7 @@ export default function InteractivePlot({
                 aria-label={`Graph filter ${i + 1}: ${f.kind}`}
                 aria-pressed={i === activeFilter}
                 aria-controls="selected-filter-inspector"
-                title={`BQ ${i + 1} · ${f.frequency.toFixed(1)} Hz · Q ${f.q.toFixed(3)}${editable ? ' · drag frequency/gain, Ctrl-drag or wheel Q' : ' · linked to master'}`}
+                title={`BQ ${i + 1} · ${f.frequency.toFixed(1)} Hz · Q ${f.q.toFixed(3)}${editable ? ` · drag frequency${gainType(f) ? '/gain' : ''}${qType(f) ? ', Ctrl-drag or wheel Q' : ''}` : ' · linked to master'}`}
                 className={`filter-handle ${i === activeFilter ? 'selected' : ''} ${f.enabled ? '' : 'bypassed'} ${f.kind.startsWith('lowpass') ? 'lowpass' : f.kind.startsWith('highpass') ? 'highpass' : 'other'}`}
                 style={{ left: x, top: y }}
                 onClick={(e) => {
@@ -437,6 +504,7 @@ export default function InteractivePlot({
                       x: e.clientX - element.current!.getBoundingClientRect().left,
                       y: e.clientY - element.current!.getBoundingClientRect().top,
                       filter: { ...f },
+                      ctrlKey: e.ctrlKey,
                       range,
                     };
                     e.currentTarget.setPointerCapture(e.pointerId);

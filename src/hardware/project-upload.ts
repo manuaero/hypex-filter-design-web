@@ -19,6 +19,8 @@ export interface ProjectPresetUploadResult {
   state: 'pending' | 'verified' | 'failed';
   phase?: 'preflight' | 'program';
   error?: string;
+  firPlacement?: 'input' | 'output';
+  firWarnings?: string[];
 }
 
 export interface ProjectUploadResult {
@@ -124,6 +126,11 @@ export async function uploadProjectPair(jobs: ProjectUploadJob[]): Promise<void>
             for (const [p, design] of job.presets.entries()) {
               try {
                 compileSector(design, new Uint8Array(4096));
+                const activation = planFirActivation(design, 0);
+                result.presets[p].firPlacement = activation.placement === 0 ? 'input' : 'output';
+                result.presets[p].firWarnings = activation.warnings;
+                for (const warning of activation.warnings)
+                  report(i, 0, `Preset ${p + 1}/3 · ${warning}`);
               } catch (error) {
                 Object.assign(result.presets[p], {
                   state: 'failed',

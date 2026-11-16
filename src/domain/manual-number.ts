@@ -205,7 +205,7 @@ export interface ManualNumberWheelState {
 }
 export interface ManualNumberWheelOptions {
   parameter: 'frequency' | 'q' | 'gain';
-  profile?: 'ordinary' | 'input-eq';
+  profile?: 'ordinary' | 'input-eq' | 'graph-q';
   displayedText?: string;
   state?: ManualNumberWheelState;
   step: number | 'decade';
@@ -225,7 +225,7 @@ interface WheelMemory {
   text: string;
   value: number;
   parameter: 'frequency' | 'q' | 'gain';
-  profile: 'ordinary' | 'input-eq';
+  profile: 'ordinary' | 'input-eq' | 'graph-q';
 }
 const wheelMemory = new WeakMap<ManualNumberWheelState, WheelMemory>();
 const addExtended = (a: Ratio, b: Ratio) => extended({ n: a.n * b.d + b.n * a.d, d: a.d * b.d });
@@ -256,9 +256,10 @@ export function adjustManualNumberWheel(
   const { parameter, step, min, max, places, zeroAllowed, additionalGain } = options,
     profile = options.profile ?? 'ordinary';
   if (
-    !['ordinary', 'input-eq'].includes(profile) ||
+    !['ordinary', 'input-eq', 'graph-q'].includes(profile) ||
     !['frequency', 'q', 'gain'].includes(parameter) ||
     (parameter === 'frequency' && profile !== 'input-eq') ||
+    (profile === 'graph-q' && parameter !== 'q') ||
     (direction !== -1 && direction !== 1) ||
     ![1, 2, 3].includes(places) ||
     (step === 'decade' ? parameter !== 'frequency' : !Number.isFinite(step)) ||
@@ -321,8 +322,14 @@ export function adjustManualNumberWheel(
         !zeroAllowed &&
         fixed(addExtended(internal, delta), places) === fixed({ n: 0n, d: 1n }, places),
       amount = skipZero ? extended({ n: delta.n * 2n, d: delta.d }) : delta;
-    setBounded(addExtended(parse(text, 'Wheel value'), amount));
+    setBounded(addExtended(parse(text, 'Wheel value'), amount), profile !== 'graph-q');
   }
+
+  // c63cb1..de inhibits the graph Q field's OnChange once, then explicitly
+  // reparses its final Text and stores Q as Double. This publication occurs
+  // even when FloatEdit skipped an identical Text assignment; its private
+  // Extended Value must not run the ordinary changed-Text normalization.
+  if (profile === 'graph-q') model = storeDouble(parse(text, 'Wheel value'));
 
   if (parameter === 'gain' && profile === 'ordinary') {
     // c64323: Text is narrowed to Double, then channel AdditionalGain is added

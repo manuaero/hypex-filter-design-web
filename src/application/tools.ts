@@ -28,6 +28,7 @@ import {
 import { importProjectFolder, projectFiles } from '../domain/project-io';
 import { linkChannel, rootChannel, assertProjectLinks } from '../domain/links';
 import { readFir, uploadFirPair, restoreFir } from '../hardware/fir';
+import { planFirActivation } from '../domain/fir-state';
 import {
   spectrum,
   parseImpulse,
@@ -953,9 +954,16 @@ const schemas = {
       parameter: z.enum(['q', 'q2', 'gain']),
       direction: z.enum(['up', 'down']),
       basis: z.enum(['each', 'left', 'right']).default('each'),
+      surface: z.enum(['field', 'graph']).default('field'),
     })
     .strict()
     .superRefine((value, context) => {
+      if (value.surface === 'graph' && value.parameter !== 'q')
+        context.addIssue({
+          code: 'custom',
+          message: 'Graph surface supports primary Q only',
+          path: ['parameter'],
+        });
       if (value.target !== 'both' && value.basis !== 'each' && value.basis !== value.target)
         context.addIssue({
           code: 'custom',
@@ -1643,7 +1651,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   fusion_fir_read:
     'Back up and read the physical input or output FIR with its name and activation state.',
   fusion_fir_upload:
-    'Back up shared FIR sectors and names, mute every selected amplifier, program and verify FIR, then activate while retaining mute.',
+    'Back up shared FIR sectors and names, mute every selected amplifier, program and verify the selected FIR placement, then activate while retaining mute. Effective graph FIRs in the opposite placement are retained in the design but are not transferred; per-role warnings are returned. Full selected tap caches and existing device preflight remain required.',
   fusion_fir_backups: 'List complete local FIR recovery manifests without returning flash data.',
   fusion_fir_restore:
     'Restore all FIR sectors, filenames and activation flags from an identity-bound recovery manifest.',
@@ -1658,7 +1666,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   fusion_measurement_calibrate:
     'Load correction for the selected measurement. Native mode loads the project-wide microphone file and enables only the selected channel apply flag; browser mode keeps a separate per-measurement curve.',
   fusion_upload_all:
-    'Back up all three crossover presets on one or both amplifiers before programming any, retain mute, verify per-preset IIR/FIR and restore each starting active preset. Input EQ is separate.',
+    'Back up all three crossover presets on one or both amplifiers before programming any, retain mute, verify per-preset IIR/FIR and restore each starting active preset. Each preset transfers only its selected FIR placement; effective opposite-placement graph FIRs stay in the document, are not transferred, and produce per-role/preset warnings in fir metadata. Input EQ is separate.',
   fusion_measurement_processing:
     'Reset/bypass measurement processing, correction or phase zero, or change sample rate. truncateToView:true applies the currently visible measured Crossover Impulse/Step time bounds to explicit native destinations; original samples/phase are retained, no hidden range arguments or other patches may be combined. Cached clients may supply audio with exact fusion_audio arguments; legacy selectors are then ignored. Audio uses trusted context and one-based numbering.',
   fusion_measurement_export: 'Return impulse samples or frequency/dB/phase text for saving.',
@@ -1673,7 +1681,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   fusion_filter_set:
     'Edit a manual crossover biquad. Explicit frequency/F2 commits use canonical decimal Text, 10–50,000 Hz bounds, one decimal and Single storage. Ordinary FA Q/Q2 commits use 0.1–20, three decimals and Double storage; BQ gain uses −125…24 dB, two decimals and Double storage. Exact zero retains the previous frequency/Q field value; gain zero is accepted. These are recovered profile defaults, not all native custom preference settings. Untouched imported values stay unchanged. A shape change preserves Enabled unless explicitly supplied. Parameter redesign replaces preserved imported caches; raw bypass/latent edits retain coefficients. Raw coefficients accept a strict nonempty finite partial vector, merged independently for each role without rounding. Conversion to raw retains the current unbypassed section; new raw sections start at Unity. Every target is preflighted before one Undoable edit. Cache interpretation and upload stability guards remain independent.',
   fusion_filter_adjust:
-    'Apply one stateless native ordinary Q/Q2 or BQ-gain wheel event from a freshly/passively displayed canonical value, using factory steps 0.04 or 0.1. Continuous human wheel gestures retain separate field-local Text/state; commands do not share that transient state. Returns stored value and visible native Text independently because the AdditionalGain guard may change only Text. Preset/channel/index are one-based. Both basis:each advances each active field independently; basis:left/right computes that selected source event and mirrors its changed stored value, including inactive destination latent fields. A single target accepts each or its matching role only. Every target must be editable/unlinked before any mutation. Uses channel AdditionalGain, never ordinary channel gain. No-op and mirror decisions use the stored value and changed flag: guarded Text can remain unchanged while the stored value changes. All-bound no-ops retain exact coefficients, metadata and history. Only changed values redesign. No amplifier I/O; keyboard arrows, graph gestures and Input EQ remain separate.',
+    'Apply one stateless crossover parameter event. surface:field (default) uses native ordinary Q/Q2 or BQ-gain wheel behavior with factory steps0.04/0.1 and field-local notification publication; gain uses channel AdditionalGain, never ordinary channel gain. surface:graph permits primary q only on lowpass2/highpass2/peak/lowshelf2/highshelf2; independent events and changed fixed-source mirrors require these kinds on every selected destination. It uses the native Magnitude graph Q step0.04 and explicit final Text-to-Double getter, so an off-grid canonical value may round even at unchanged displayed Text. Commands start from passive canonical values and do not share human transient state. Returns surface, stored value and visible Text separately. Preset/channel/index are one-based. Both basis:each advances each role independently; basis:left/right mirrors only a changed source stored value. Field mirrors may update latent inactive destination parameters; graph mirrors require supported graph kinds. All destinations must be editable/unlinked and are preflighted before one Undoable mutation. A fixed-source canonical no-op retains source-kind and all structural/read-only validation, then skips peer kind admission and every edit. Unchanged peers retain exact cache/provenance/bypass/history. Only changed values redesign. No amplifier I/O. Keyboard arrows remain separate; Input EQ uses fusion_eq_adjust and its own field profile, not this ordinary graph surface.',
   fusion_biquad_exchange:
     'Exchange two same-channel biquad parameter sets while preserving physical graph slots and read-only linked channels.',
   fusion_channel_copy:
@@ -1736,7 +1744,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     'Validate a standard 4 KiB IIR/input-EQ backup file and import it into the local recovery library. Returns its backupId; no amplifier connection or flash write is performed. FIR manifests use their separate recovery flow.',
   fusion_restore: 'Restore an identity-bound backup and verify every page, retaining mute.',
   fusion_upload:
-    'Back up, mute, program and verify the selected preset on one or both amplifiers. Outputs remain muted.',
+    'Back up, mute, program and verify the selected preset on one or both amplifiers. Only its selected FIR placement is transferred; effective opposite-placement graph FIRs stay in the document and produce per-role/preset warnings in fir metadata. Outputs remain muted.',
   fusion_device_read:
     'Read fresh device options, hardware/accessory overview, limiter configuration and power statistics.',
   fusion_power:
@@ -1851,6 +1859,24 @@ export function createToolExecutor(adapter: ToolAdapter) {
       const l = adapter.connections()[s];
       if (!l) throw new Error(`${s} amplifier is not connected`);
       return l;
+    };
+    const firUploadScope = (slots: Slot[], presets: number[]) => {
+      const scope = slots.flatMap((slot) =>
+        presets.map((preset) => {
+          const plan = planFirActivation(state.documents[slot].presets[preset - 1], 0);
+          return {
+            slot,
+            preset,
+            placement: plan.placement === 0 ? ('input' as const) : ('output' as const),
+            warnings: plan.warnings,
+          };
+        }),
+      );
+      const warnings = scope.flatMap((role) =>
+        role.warnings.map((warning) => `${role.slot} · Preset ${role.preset}: ${warning}`),
+      );
+      if (warnings.length) adapter.message(warnings.join(' '));
+      return scope;
     };
     const fileAccess = () => {
       if (!context)
@@ -2215,6 +2241,7 @@ export function createToolExecutor(adapter: ToolAdapter) {
             parameter: p.parameter,
             direction: p.direction === 'up' ? 1 : -1,
             basis: p.basis,
+            surface: p.surface,
           });
           if (plan.changedSlots.length)
             adapter.edit(plan.changedSlots, (project) => applyManualFilterWheel(project, plan));
@@ -2222,6 +2249,7 @@ export function createToolExecutor(adapter: ToolAdapter) {
             ok: true,
             changed: plan.changedSlots.length > 0,
             basis: p.basis,
+            surface: p.surface,
             roles: plan.roles.map(({ slot, before, value, text, changed }) => ({
               slot,
               before,
@@ -3296,7 +3324,8 @@ export function createToolExecutor(adapter: ToolAdapter) {
         }
         case 'fusion_upload': {
           const p = schemas.fusion_upload.parse(a),
-            slots = roles(p.target);
+            slots = roles(p.target),
+            fir = firUploadScope(slots, [p.preset]);
           await adapter.operate('Agent: uploading', () =>
             uploadPair(
               slots.map((s) => ({
@@ -3309,11 +3338,12 @@ export function createToolExecutor(adapter: ToolAdapter) {
             ),
           );
           await adapter.refresh(slots);
-          break;
+          return { ok: true, fir };
         }
         case 'fusion_upload_all': {
           const p = schemas.fusion_upload_all.parse(a),
-            slots = roles(p.target);
+            slots = roles(p.target),
+            fir = firUploadScope(slots, [1, 2, 3]);
           await adapter.operate('Agent: uploading all crossover presets', () =>
             uploadProjectPair(
               slots.map((slot) => ({
@@ -3326,7 +3356,13 @@ export function createToolExecutor(adapter: ToolAdapter) {
             ),
           );
           await adapter.refresh(slots);
-          return { ok: true, presets: [1, 2, 3], muted: true, startingActivePresetsRestored: true };
+          return {
+            ok: true,
+            presets: [1, 2, 3],
+            muted: true,
+            startingActivePresetsRestored: true,
+            fir,
+          };
         }
         case 'fusion_eq_read': {
           const p = schemas.fusion_eq_read.parse(a);
@@ -3386,7 +3422,8 @@ export function createToolExecutor(adapter: ToolAdapter) {
         }
         case 'fusion_fir_upload': {
           const p = schemas.fusion_fir_upload.parse(a),
-            slots = roles(p.target);
+            slots = roles(p.target),
+            fir = firUploadScope(slots, [p.preset]);
           await adapter.operate('Agent: uploading FIR', () =>
             uploadFirPair(
               slots.map((s) => ({
@@ -3398,7 +3435,7 @@ export function createToolExecutor(adapter: ToolAdapter) {
             ),
           );
           await adapter.refresh(slots);
-          break;
+          return { ok: true, fir };
         }
         case 'fusion_fir_backups': {
           const p = schemas.fusion_fir_backups.parse(a);

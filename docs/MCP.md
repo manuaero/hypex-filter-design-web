@@ -4,6 +4,36 @@ Agents use the same controllers and validation as the human interface. Normal us
 
 The current registry contains **91 commands**, including stateless native parameter-wheel adjustments, shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
 
+## V43 graph-Q and selected FIR transfer
+
+`fusion_filter_adjust` defaults to `surface: "field"`. Field Q/Q2/gain keeps its existing publication, continuous-human-versus-stateless-command distinction and AdditionalGain display/store behavior. An unchanged final displayed Text alone does not prove an unchanged canonical value: the gain postguard can change Text after a model callback.
+
+Use `surface: "graph"` only with `parameter: "q"` for a fresh stateless native Magnitude graph-Q event. Its factory step is 0.04 with ordinary Q bounds 0.1–20 and three-decimal Text; explicit graph GetValue publishes the resulting Double even when visible Text is unchanged. For example, an upward graph event at imported Q 20.0004 publishes 20, while the ordinary field's same-Text bound event retains 20.0004. No device is accessed.
+
+```json
+{
+  "name": "fusion_filter_adjust",
+  "arguments": {
+    "target": "both",
+    "preset": 1,
+    "channel": 1,
+    "index": 1,
+    "parameter": "q",
+    "direction": "up",
+    "surface": "graph",
+    "basis": "each"
+  }
+}
+```
+
+Graph Q supports LP2, HP2, Shelf2 and Peak. Each-role basis requires supported graph types for each event. For a fixed-source Both basis, a source event that would change the canonical value validates every destination before either project changes. An exact canonical-bound source no-op stays quiet, does not mirror, and does not reject an unsupported peer merely for its graph-Q type; structural and read-only target checks still apply. An off-grid bound that rounds to a different canonical value is a real change and must pass those peer checks. Asymmetric/AP2 numeric field Q remains available through the default field surface. Unsupported changing pairs refuse atomically, unchanged supported peers retain their exact caches, and Undo restores the design.
+
+In the human graph, the already-selected filter remains editable while Whole channel response is displayed; hovering a different marker does not change the wheel target. Input EQ graph gestures use its existing field helper and remain a browser extension, with no new EQ graph surface or native-popup claim. Commands are fresh stateless events; they do not reuse a human field's private continuous widget state.
+
+Native Unknown Shelf1/Shelf2 direction is interpreted as Low, separately from Asymmetric's Unknown High branch. The raw enum remains through ordinary parameter/bypass edits; explicit direction edits record Low/High, including a deliberate choice equal to the old effective direction. Contradictory combined choices are refused. Untouched imported caches remain exact.
+
+Ordinary preset uploads transfer only the selected FIR placement. A compact count/meaning/role/preset disclosure explains why inactive graph FIRs remain in the design but are not transferred, with every detailed advisory available before an explicit Upload. Normal UI editing needs no generic Run action. These software/controller checks do not qualify device writes, remote MCP transport or a production firmware programmer.
+
 ## Pair a local client
 
 1. Run `pnpm dev` and open `http://127.0.0.1:3210`.

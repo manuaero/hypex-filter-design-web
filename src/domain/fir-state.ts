@@ -81,12 +81,42 @@ export function effectiveFirTaps(channel: Channel, preset?: Preset): number[] | 
   return Array.from(result);
 }
 
-export interface FirActivationPlan {
+export interface SelectedFirPlacementPlan {
   placement: 0 | 1;
+  banks: { filter: Fir; capacity: number; channel: number; loaded: boolean }[];
+  warnings: string[];
+}
+
+/** Native c7cb28 -> a9fba8 selects physical transfer resources by application
+ * placement, not graph Used. Loading can independently set Used (a94f94), so
+ * the graph may contain a cascade that this one-placement transfer cannot
+ * reproduce. Preserve that document and expose the difference as an advisory.
+ * Capacity/encoding policy belongs to the transfer-specific caller. */
+export function planSelectedFirPlacement(preset: Preset): SelectedFirPlacementPlan {
+  if (preset.channels.length !== 3) throw new Error('FA503 requires three output FIRs');
+  const placement = presetFirPlacement(preset) === 'input' ? 0 : 1,
+    resources = [
+      { filter: preset.inputFir, capacity: 4500, channel: 0 },
+      ...preset.channels.map((c, i) => ({ filter: c.fir, capacity: 1500, channel: i + 1 })),
+    ];
+  for (const resource of resources) validateFirState(resource.filter, resource.capacity);
+  const selected = (channel: number) => (placement === 0 ? channel === 0 : channel > 0),
+    warnings = resources
+      .filter((resource) => !selected(resource.channel) && firIsEffective(resource.filter, false))
+      .map(
+        (resource) =>
+          `Inactive ${resource.channel === 0 ? 'input' : `output ${resource.channel}`} graph FIR is not transferred; only the selected placement is programmed.`,
+      ),
+    banks = resources
+      .filter((resource) => selected(resource.channel))
+      .map((resource) => ({ ...resource, loaded: firLoaded(resource.filter) }));
+  return { placement: placement as 0 | 1, banks, warnings };
+}
+
+export interface FirActivationPlan extends SelectedFirPlacementPlan {
   flags: number;
   /** Native a9fba8's FIR-transfer-success gate, assuming successful programming. */
   anyLoaded: boolean;
-  banks: { filter: Fir; capacity: number; channel: number; loaded: boolean }[];
 }
 
 /** Exact selected-placement ownership on a successful ordinary FA503 transfer.
@@ -96,26 +126,7 @@ export interface FirActivationPlan {
 export function planFirActivation(preset: Preset, previousFlags: number): FirActivationPlan {
   if (!Number.isInteger(previousFlags) || previousFlags < 0 || previousFlags > 255)
     throw new Error('Invalid previous FIR flags');
-  if (preset.channels.length !== 3) throw new Error('FA503 requires three output FIRs');
-  const placement = presetFirPlacement(preset) === 'input' ? 0 : 1,
-    resources = [
-      { filter: preset.inputFir, capacity: 4500, channel: 0 },
-      ...preset.channels.map((c, i) => ({ filter: c.fir, capacity: 1500, channel: i + 1 })),
-    ];
-  for (const resource of resources) validateFirState(resource.filter, resource.capacity);
-  for (const resource of resources) {
-    const selected = placement === 0 ? resource.channel === 0 : resource.channel > 0;
-    if (
-      !selected &&
-      (resource.filter.hfdState ? firIsEffective(resource.filter, false) : resource.filter.enabled)
-    )
-      throw new Error(
-        'Enabled FIR belongs to the inactive placement; select its native placement first',
-      );
-  }
-  const banks = resources
-    .filter((resource) => (placement === 0 ? resource.channel === 0 : resource.channel > 0))
-    .map((resource) => ({ ...resource, loaded: firLoaded(resource.filter) }));
+  const { placement, banks, warnings } = planSelectedFirPlacement(preset);
   for (const bank of banks) {
     if (!bank.filter.hfdState && bank.filter.enabled && !bank.filter.taps.length)
       throw new Error('An enabled FIR must have all taps loaded');
@@ -131,5 +142,5 @@ export function planFirActivation(preset: Preset, previousFlags: number): FirAct
     if (bank.loaded) flags |= 1 << (bit + 4);
     if (anyLoaded && bank.filter.enabled) flags |= 1 << bit;
   }
-  return { placement: placement as 0 | 1, flags, anyLoaded, banks };
+  return { placement, flags, anyLoaded, banks, warnings };
 }

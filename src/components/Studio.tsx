@@ -8,6 +8,8 @@ import LiveMeters from './LiveMeters';
 import NoisePanel from './NoisePanel';
 import { createNoiseController } from '../application/noise-control';
 import { type EqBank, editInputEqBand } from '../domain/equalizer';
+import { planSelectedFirPlacement } from '../domain/fir-state';
+import { supportsHfdGraphQ } from '../domain/manual-graph-q';
 import { EqBankUploadError } from '../hardware/eq-bank';
 import SignalChain from './SignalChain';
 import {
@@ -338,6 +340,25 @@ export default function Studio() {
     channel = preset.channels[w.channel],
     graphView = graphViews[w.slot],
     { sum, measured } = graphView;
+  const uploadFirWarnings = useMemo(
+    () =>
+      SLOTS.flatMap((slot) =>
+        w.documents[slot].presets.flatMap((design, index) => {
+          try {
+            return planSelectedFirPlacement(design).warnings.map((message) => ({
+              slot,
+              preset: index + 1,
+              message,
+            }));
+          } catch {
+            // Rendering remains usable; existing upload preflight refuses
+            // malformed resources before any amplifier mutation.
+            return [];
+          }
+        }),
+      ),
+    [w.documents],
+  );
   const [hydrated, setHydrated] = useState(false),
     [tab, setTab] = useState<(typeof TABS)[number]>('Crossover'),
     [authView, setAuthView] = useState<'closed' | 'password' | 'permissions'>('closed'),
@@ -1624,6 +1645,15 @@ export default function Studio() {
       const slots: Slot[] = both ? ['left', 'right'] : [w.slot];
       if (slots.some((s) => !live[s]))
         throw new Error('Connect a distinct amplifier to each selected role');
+      const warnings = uploadFirWarnings.filter(
+        (warning) => slots.includes(warning.slot) && warning.preset === w.preset + 1,
+      );
+      if (warnings.length)
+        setNotice(
+          warnings
+            .map((warning) => `${warning.slot} · Preset ${warning.preset}: ${warning.message}`)
+            .join(' '),
+        );
       setProgress({});
       await uploadPair(
         slots.map((slot) => ({
@@ -1651,6 +1681,13 @@ export default function Studio() {
       const slots: Slot[] = both ? ['left', 'right'] : [w.slot];
       if (slots.some((slot) => !live[slot]))
         throw new Error('Connect a distinct amplifier to each selected role');
+      const warnings = uploadFirWarnings.filter((warning) => slots.includes(warning.slot));
+      if (warnings.length)
+        setNotice(
+          warnings
+            .map((warning) => `${warning.slot} · Preset ${warning.preset}: ${warning.message}`)
+            .join(' '),
+        );
       setProgress({});
       await uploadProjectPair(
         slots.map((slot) => ({
@@ -1685,7 +1722,12 @@ export default function Studio() {
         pr.channels.forEach((c) => (c.globalDelayUs = patch.globalDelayUs!));
     });
   };
-  const editFilter = (patch: ManualFilterPatch, redesign = false, forceEqRedesign = false) => {
+  const editFilter = (
+    patch: ManualFilterPatch,
+    redesign = false,
+    forceEqRedesign = false,
+    { sourceQEvent = false }: { sourceQEvent?: boolean } = {},
+  ) => {
     try {
       const current = useWorkspace.getState();
       if (
@@ -1718,21 +1760,49 @@ export default function Studio() {
                   manualParameters: false,
                 });
         if (tab === 'Input EQ') encodeEq(list.map((f, i) => (i === index ? next : f)));
-        return { list, index, next, channel: c };
+        return { list, index, original, next, channel: c };
       };
       // Validate every independent target before the single workspace edit.
       // Reapply the pure patch to each detached target, never a source vector.
-      for (const slot of slots) prepare(current.documents[slot]);
-      current.editAt(slots, (p) => {
-        const prepared = prepare(p);
-        prepared.list[prepared.index] = prepared.next;
-        if (redesign && prepared.next.kind !== 'raw' && tab !== 'Input EQ' && w.filter === 0)
-          prepared.channel.coefficientCache = 'base';
-      });
+      const proposals = slots.map((slot) => ({ slot, ...prepare(current.documents[slot]) }));
+      const source = proposals.find((proposal) => proposal.slot === current.slot)!;
+      const changedSlots = sourceQEvent
+        ? Object.is(source.original.q, source.next.q)
+          ? []
+          : proposals
+              .filter((proposal) => !Object.is(proposal.original.q, proposal.next.q))
+              .map((proposal) => proposal.slot)
+        : slots;
+      if (changedSlots.length)
+        current.editAt(changedSlots, (p) => {
+          const prepared = prepare(p);
+          prepared.list[prepared.index] = prepared.next;
+          if (redesign && prepared.next.kind !== 'raw' && tab !== 'Input EQ' && w.filter === 0)
+            prepared.channel.coefficientCache = 'base';
+        });
       setError('');
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return false;
+    }
+  };
+  const graphQFilter = (q: number) => {
+    try {
+      if (!Number.isFinite(q) || modeRef.current !== 'Magnitude' || tabRef.current !== tab)
+        throw new Error('Graph Q editing is available in Magnitude only; use the Q control');
+      const current = useWorkspace.getState(),
+        slots: Slot[] = current.linkedEdits ? ['left', 'right'] : [current.slot];
+      if (tab !== 'Input EQ')
+        for (const slot of slots) {
+          const target =
+            current.documents[slot].presets[w.preset].channels[w.channel].filters[w.filter];
+          if (!supportsHfdGraphQ(target.kind))
+            throw new Error(`Graph Q is unavailable for ${slot} ${target.kind}; use its Q control`);
+        }
+      return editFilter({ q }, true, false, { sourceQEvent: true });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
       return false;
     }
   };
@@ -2570,6 +2640,48 @@ export default function Studio() {
               })
             }
           />
+          {uploadFirWarnings.length > 0 && (
+            <details className="side-section" aria-label="Upload FIR scope">
+              <summary style={{ fontSize: 9, lineHeight: 1.5, cursor: 'pointer' }}>
+                FIR upload scope · {uploadFirWarnings.length}{' '}
+                {uploadFirWarnings.length === 1 ? 'advisory' : 'advisories'}
+                <small
+                  style={{ display: 'block', fontSize: 8, marginLeft: 12, color: 'var(--muted)' }}
+                >
+                  Other-placement FIRs stay in the graph; not uploaded.
+                </small>
+                <small
+                  style={{ display: 'block', fontSize: 8, marginLeft: 12, color: 'var(--muted)' }}
+                >
+                  {SLOTS.flatMap((slot) => {
+                    const presets = [
+                      ...new Set(
+                        uploadFirWarnings
+                          .filter((warning) => warning.slot === slot)
+                          .map((warning) => warning.preset),
+                      ),
+                    ];
+                    return presets.length
+                      ? [`${slot === 'left' ? 'Left' : 'Right'} P${presets.join(',')}`]
+                      : [];
+                  }).join(' · ')}
+                </small>
+              </summary>
+              <div
+                role="region"
+                aria-label="FIR upload advisories"
+                tabIndex={0}
+                style={{ maxHeight: 160, overflowY: 'auto' }}
+              >
+                {uploadFirWarnings.map((warning) => (
+                  <p className="hint" key={`${warning.slot}:${warning.preset}:${warning.message}`}>
+                    {warning.slot === 'left' ? 'Left' : 'Right'} · Preset {warning.preset}:{' '}
+                    {warning.message}
+                  </p>
+                ))}
+              </div>
+            </details>
+          )}
           <div className="channel-list">
             {preset.channels.map((c, i) => (
               <button
@@ -3087,6 +3199,8 @@ export default function Studio() {
                         activeFilter={tab === 'Input EQ' ? eqIndex : w.filter}
                         onSelect={selectFilter}
                         onChange={(patch) => editFilter(patch, true)}
+                        onGraphQChange={graphQFilter}
+                        qGestureProfile={tab === 'Input EQ' ? 'input-eq' : 'ordinary'}
                         onAdd={(frequency) => openPalette('add', undefined, frequency)}
                         onRemove={() =>
                           tab === 'Input EQ'
