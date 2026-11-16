@@ -4,6 +4,14 @@ Agents use the same controllers and validation as the human interface. Normal us
 
 The current registry contains **91 commands**, including stateless native parameter-wheel adjustments, shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
 
+## V47 focused numeric edits and independent commands
+
+Managed numeric fields own an opaque focus lease. The shared workspace validates an independent edit before committing pending local field work; the accepted edit then gets its own Undo step. This default store boundary also protects graph writeback that does not use the usual adapter edit path. Only a synchronous callback scoped to the current field lease continues that field's own group. Escape from an older focus cannot roll an accepted independent edit back. A refused proposal or canonical no-op does not invoke the independent boundary or discard the current local draft. No new command or caller-supplied lease/override flag is introduced; the registry remains **91 commands**.
+
+Stale focused drafts and opaque wheel state are discarded even when the canonical numeric value happens to be unchanged. A genuine subsequent local edit starts a fresh lease from the current value. Selection, Undo/Redo and project replacement retire stale field ownership. These boundaries are shared by normal inspector editing and existing executor commands; normal editing requires no generic Run action.
+
+This is source and automated component/executor coverage, not new V47 browser, production-client, remote-authentication or HTTP/WebSocket network acceptance. V46's synthetic Node fixture result remains dated V46 history. Native ordinary channel-Gain text/wheel checks remain prepared and unexecuted. See [numeric transaction scope](NUMERIC-TRANSACTIONS-v47.md).
+
 ## V46 conditional hardware gain and atomic channel edits
 
 The existing `fusion_channel_set` command accepts a sole `patch.hardwareGain` boolean. It adds no command; the registry remains **91 commands**. This is a crossover-project design callback, with no USB operation or arbitrary AdditionalGain scalar.

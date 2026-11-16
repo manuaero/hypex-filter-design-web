@@ -18,6 +18,11 @@ import {
   type HfdInputEqWheelState,
   type HfdInputEqWheelResult,
 } from '../domain/input-eq-parameters';
+export interface NumericFocusOperation {
+  isCurrent(): boolean;
+  run<T>(action: () => T): T;
+  end(cancel?: boolean): void;
+}
 export default function Numeric({
   label,
   value,
@@ -69,7 +74,7 @@ export default function Numeric({
   /** Full native Input EQ Text/Double/wheel profile; no channel-gain coupling. */
   inputEqParameter?: HfdInputEqParameter;
   onInputEqWheel?: (result: HfdInputEqWheelResult, direction: -1 | 1) => boolean | void;
-  begin?: () => void;
+  begin?: () => void | NumericFocusOperation;
   end?: (cancel?: boolean) => void;
   precision?: number;
   frequencyWheel?: 'input-eq' | 'advanced';
@@ -101,10 +106,16 @@ export default function Numeric({
     parameterWheelState = useRef<HfdManualWheelState | undefined>(undefined),
     inputEqWheelState = useRef<HfdInputEqWheelState | undefined>(undefined),
     parameterWheelText = useRef<{ value: number; text: string } | undefined>(undefined),
-    draftContext = useRef(contextKey);
+    draftContext = useRef(contextKey),
+    focusOperation = useRef<NumericFocusOperation | undefined>(undefined),
+    focusRetired = useRef(false);
   useLayoutEffect(() => {
     if (draftContext.current === contextKey) return;
     draftContext.current = contextKey;
+    if (focusOperation.current) {
+      focusOperation.current.end();
+      focusRetired.current = true;
+    }
     parameterWheelState.current = undefined;
     inputEqWheelState.current = undefined;
     parameterWheelText.current = undefined;
@@ -151,6 +162,64 @@ export default function Numeric({
           : format(value),
       );
   }, [value, focused, frequencyWheel, inputEqParameter, precision, formatValue]);
+  const resetFocusDraft = () => {
+    dirty.current = false;
+    baseline.current = value;
+    submitted.current = undefined;
+    liveEmission.current = undefined;
+    parameterWheelState.current = undefined;
+    inputEqWheelState.current = undefined;
+    parameterWheelText.current = undefined;
+    setDraft(format(value));
+  };
+  const retireFocus = () => {
+    if (focusOperation.current && !focusOperation.current.isCurrent()) {
+      if (!focusRetired.current) resetFocusDraft();
+      focusRetired.current = true;
+    }
+    return focusRetired.current;
+  };
+  const runOwnEdit = <T,>(action: () => T): T | false => {
+    if (retireFocus()) return false;
+    const operation = focusOperation.current;
+    try {
+      return operation ? operation.run(action) : action();
+    } catch (error) {
+      if (operation && !operation.isCurrent()) {
+        retireFocus();
+        return false;
+      }
+      throw error;
+    }
+  };
+  const renewForLocalEdit = () => {
+    const retired = retireFocus();
+    if (!retired) return { allowed: true, rebased: false };
+    if (!focused) return { allowed: false, rebased: true };
+    try {
+      const operation = begin?.();
+      if (!operation || !operation.isCurrent()) return { allowed: false, rebased: true };
+      focusOperation.current = operation;
+      focusRetired.current = false;
+      resetFocusDraft();
+      return { allowed: true, rebased: true };
+    } catch {
+      resetFocusDraft();
+      return { allowed: false, rebased: true };
+    }
+  };
+  const finishFocus = (cancel = false) => {
+    if (focusOperation.current) focusOperation.current.end(cancel);
+    else if (!focusRetired.current) end?.(cancel);
+    focusOperation.current = undefined;
+    focusRetired.current = false;
+  };
+  // Foreign edits can leave this numeric value unchanged (or equal an own
+  // emission). Session authority, rather than value equality, retires drafts.
+  useLayoutEffect(() => {
+    if (focused) retireFocus();
+  });
+  useEffect(() => () => focusOperation.current?.end(), []);
   const parse = (s: string) => (s.trim() === '' ? NaN : Number(s.replace(',', '.')));
   const commit = (
     n: number,
@@ -158,6 +227,7 @@ export default function Numeric({
     boundedAlready = false,
   ) => {
     parameterWheelText.current = undefined;
+    if (retireFocus()) return;
     if (draftContext.current !== contextKey) {
       dirty.current = false;
       setDraft(format(value));
@@ -169,16 +239,19 @@ export default function Numeric({
     if (bounded !== value && bounded !== submitted.current) {
       submitted.current = bounded;
       liveEmission.current = bounded;
-      onChange(bounded);
+      if (runOwnEdit(() => onChange(bounded)) === false) return;
     }
     dirty.current = false;
     setDraft(format(bounded));
   };
   const adjust = (direction: -1 | 1, wheel = false) => {
+    const authority = renewForLocalEdit();
+    if (!authority.allowed) return;
+    const sourceDraft = authority.rebased ? format(value) : draft;
     parameterWheelState.current = undefined;
     inputEqWheelState.current = undefined;
     parameterWheelText.current = undefined;
-    const n = parse(draft),
+    const n = parse(sourceDraft),
       current = Number.isFinite(n) ? n : value,
       ordinaryBounds = adjustmentBounds ?? { min, max },
       bounds = wheel
@@ -189,10 +262,14 @@ export default function Numeric({
         : ordinaryBounds;
     commit(
       wheel && frequencyWheel === 'advanced'
-        ? hfdAdvancedFrequencyWheelNext(draft === format(value) ? value : current, direction, {
-            ...bounds,
-            frequencyStep: frequencyWheelStep,
-          })
+        ? hfdAdvancedFrequencyWheelNext(
+            sourceDraft === format(value) ? value : current,
+            direction,
+            {
+              ...bounds,
+              frequencyStep: frequencyWheelStep,
+            },
+          )
         : current +
             (wheel && frequencyWheel === 'input-eq'
               ? hfdEqFrequencyWheelDelta(current, direction)
@@ -203,17 +280,24 @@ export default function Numeric({
   };
   const adjustParameter = (direction: -1 | 1) => {
     if (!parameterWheel) return;
+    const authority = renewForLocalEdit();
+    if (!authority.allowed) return;
+    const sourceDraft = authority.rebased ? format(value) : draft;
     try {
       const result = hfdManualParameterWheelNext(value, direction, {
         parameter: parameterWheel,
-        displayedText: draft,
+        displayedText: sourceDraft,
         state: parameterWheelState.current,
         min,
         max,
         additionalGain: parameterWheelAdditionalGain,
       });
       if (result.changed && result.value !== value) liveEmission.current = result.value;
-      if (onParameterWheel?.(result, direction) === false) {
+      const accepted = runOwnEdit(() => {
+        if (onParameterWheel) return onParameterWheel(result, direction);
+        if (result.changed && result.value !== value) onChange(result.value);
+      });
+      if (accepted === false) {
         liveEmission.current = undefined;
         parameterWheelState.current = undefined;
         inputEqWheelState.current = undefined;
@@ -221,9 +305,6 @@ export default function Numeric({
         dirty.current = false;
         setDraft(format(value));
         return;
-      }
-      if (result.changed && result.value !== value) {
-        if (!onParameterWheel) onChange(result.value);
       }
       parameterWheelState.current = result.state;
       parameterWheelText.current = { value: result.value, text: result.text };
@@ -240,13 +321,20 @@ export default function Numeric({
   };
   const adjustInputEq = (direction: -1 | 1) => {
     if (!inputEqParameter) return;
+    const authority = renewForLocalEdit();
+    if (!authority.allowed) return;
+    const sourceDraft = authority.rebased ? format(value) : draft;
     try {
       const result = hfdInputEqWheelNext(inputEqParameter, value, direction, {
-        displayedText: draft,
+        displayedText: sourceDraft,
         state: inputEqWheelState.current,
       });
       if (result.changed && result.value !== value) liveEmission.current = result.value;
-      if (onInputEqWheel?.(result, direction) === false) {
+      const accepted = runOwnEdit(() => {
+        if (onInputEqWheel) return onInputEqWheel(result, direction);
+        if (result.changed && result.value !== value) onChange(result.value);
+      });
+      if (accepted === false) {
         liveEmission.current = undefined;
         inputEqWheelState.current = undefined;
         parameterWheelText.current = undefined;
@@ -254,7 +342,6 @@ export default function Numeric({
         setDraft(format(value));
         return;
       }
-      if (result.changed && result.value !== value && !onInputEqWheel) onChange(result.value);
       inputEqWheelState.current = result.state;
       parameterWheelText.current = { value: result.value, text: result.text };
       dirty.current = false;
@@ -314,7 +401,20 @@ export default function Numeric({
             submitted.current = undefined;
             dirty.current = false;
             setFocused(true);
-            begin?.();
+            focusRetired.current = false;
+            try {
+              focusOperation.current = begin?.() || undefined;
+            } catch {
+              focusOperation.current = {
+                isCurrent: () => false,
+                run: () => {
+                  throw new Error('Numeric focus context is stale');
+                },
+                end: () => {},
+              };
+              focusRetired.current = true;
+              resetFocusDraft();
+            }
           }}
           onBlur={() => {
             // Native gain's post-wheel guard can change Text without updating
@@ -323,16 +423,23 @@ export default function Numeric({
             parameterWheelState.current = undefined;
             inputEqWheelState.current = undefined;
             parameterWheelText.current = undefined;
+            const retired = retireFocus();
             setFocused(false);
+            if (retired) {
+              cancelled.current = false;
+              resetFocusDraft();
+              finishFocus();
+              return;
+            }
             if (cancelled.current) {
               cancelled.current = false;
               setDraft(format(baseline.current));
-              end?.(true);
+              finishFocus(true);
               return;
             }
             if (!dirty.current) {
               setDraft(format(value));
-              end?.();
+              finishFocus();
               return;
             }
             try {
@@ -351,9 +458,10 @@ export default function Numeric({
               setDraft(format(value));
               dirty.current = false;
             }
-            end?.();
+            finishFocus();
           }}
           onChange={(e) => {
+            if (!renewForLocalEdit().allowed) return;
             parameterWheelState.current = undefined;
             inputEqWheelState.current = undefined;
             parameterWheelText.current = undefined;
@@ -362,7 +470,7 @@ export default function Numeric({
             const n = parse(e.target.value);
             if (!commitOnly && !deferTextCommit && !inputEqParameter && Number.isFinite(n)) {
               liveEmission.current = n;
-              onChange(n);
+              runOwnEdit(() => onChange(n));
             }
           }}
           onKeyDown={(e) => {
@@ -374,16 +482,19 @@ export default function Numeric({
             }
             if (e.key === 'Enter') e.currentTarget.blur();
             if (e.key === 'Escape') {
+              const retired = retireFocus();
               parameterWheelState.current = undefined;
               inputEqWheelState.current = undefined;
               parameterWheelText.current = undefined;
               cancelled.current = true;
               if (
+                !focusOperation.current &&
+                !retired &&
                 !commitOnly &&
                 ((!deferTextCommit && !inputEqParameter) || value !== baseline.current)
               )
-                onChange(baseline.current);
-              setDraft(format(baseline.current));
+                runOwnEdit(() => onChange(baseline.current));
+              setDraft(format(retired ? value : baseline.current));
               e.currentTarget.blur();
             }
           }}

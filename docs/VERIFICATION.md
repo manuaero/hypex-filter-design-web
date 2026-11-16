@@ -2,6 +2,24 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V47 numeric transaction checkpoint
+
+A focused managed numeric field now owns its cancellation lease. The default shared-store boundary protects independent edits, including graph writeback outside the usual adapter edit path. A complete proposal must validate before pending local work is committed and the independent edit receives a separate Undo step. Only the current field's scoped synchronous callback continues its own group. Accepted edits survive stale Escape, while refusals and canonical no-ops preserve the local editing group. Stale drafts and wheel state refresh even when the canonical numeric value is unchanged.
+
+| V47 check | Recorded result |
+| --- | --- |
+| Complete private run | **3,314 passed / 3,314 total in 213 files**. |
+| Canonical product coverage | **3,206 passed in 210 files**; 108 ignored diagnostic assertions in 3 files are separate historical diagnostics. |
+| Core focused checks | **135 passed in 7 files**. |
+| UI focused checks | **169 passed in 8 files**; automated components, not browser acceptance. |
+| Retained failure reproductions | Original Studio report: two accepted-command/Escape failures. Separate graph-writeback report: one failure and ten focused skips. Both original reports are retained; those focused skips are not counted as coverage. |
+| Fresh public checks | **3,205 passed plus the sole optional exact PDF skip: 3,206 total in 210 files**. TypeScript, Next production build and Worker packaging passed. |
+| Public source | **428 source files plus 13 protected public files: 441 total**; the entire earlier text below is retained byte for byte. |
+
+The complete runs used two workers with unchanged timeouts and no test filters/omissions; checked source and generated Next environment bytes remained unchanged. The fresh public build produced **24 assets / 2,016,416 bytes** and a **3,268,739-byte Worker**, SHA-256 `68b26e9d510bb5e7408ffa2d90cf5dbccc2f82374772463d8dc56ac0883ccc18`. The actual compiled client/Worker manual registry remains optional and unbundled; process-free Worker home 200/manual 404 and the five bounded source/build privacy scans passed. These scans are not exhaustive secret detection.
+
+No HFD application was launched for this increment; the next native channel-Gain text/wheel oracle remains prepared, not accepted. No V47 browser/Studio GUI, production-client, network MCP, physical amplifier or download-delivery acceptance is claimed. The V46 Node fixture's 11/11 result below is dated V46 evidence, not a V47 network result. Full HFD and conditional hardware/platform qualification remain open. See [numeric transaction scope](NUMERIC-TRANSACTIONS-v47.md).
+
 ## V46 hardware gain and channel edit checkpoint
 
 Fusion Studio remains an MIT-licensed web implementation of Hypex Filter Design functionality with an MCP server. The conditional design-compensation callback now shares one role-aware plan/apply service between UI and MCP. It retains exact biquad caches and unresolved interpretation, applies selected-channel compensation and the native document hint, and scopes actual shared-processing propagation to the edited preset/root group. Metadata-only edits and unchanged peers retain follower state. All selected roles preflight before one Undo; canonical no-ops create no history.

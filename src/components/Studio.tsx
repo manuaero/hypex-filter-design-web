@@ -1,5 +1,5 @@
 'use client';
-import Numeric from './Numeric';
+import Numeric, { type NumericFocusOperation } from './Numeric';
 import FilterPalette, { FilterGlyph, FILTER_LABELS, hasQ } from './FilterPalette';
 import FilterCards from './FilterCards';
 import EqPresetActions from './EqPresetActions';
@@ -1868,6 +1868,34 @@ export default function Studio() {
       );
     });
   }
+  const beginNumericGesture = (): NumericFocusOperation => {
+    const current = useWorkspace.getState();
+    if (
+      current.documents !== w.documents ||
+      current.slot !== w.slot ||
+      current.preset !== w.preset ||
+      current.channel !== w.channel ||
+      current.filter !== w.filter ||
+      current.linkedEdits !== w.linkedEdits
+    )
+      throw new Error('The numeric editing context changed before focus');
+    const token = current.beginFieldGesture();
+    return {
+      isCurrent: () => {
+        const latest = useWorkspace.getState();
+        return (
+          latest.isFieldGestureCurrent(token) &&
+          latest.slot === current.slot &&
+          latest.preset === current.preset &&
+          latest.channel === current.channel &&
+          latest.filter === current.filter &&
+          latest.linkedEdits === current.linkedEdits
+        );
+      },
+      run: (action) => useWorkspace.getState().runFieldGesture(token, action),
+      end: (cancel) => useWorkspace.getState().endFieldGesture(token, cancel),
+    };
+  };
   const hardwareGainViewKey = (location: Omit<HardwareGainEditorLocation, 'channelId'>) =>
     `${location.slot}:${documentEpochs[location.slot]}:${location.presetIndex}:${location.channelIndex}`;
   const getHardwareGainContext: NonNullable<ToolAdapter['hardwareGainContext']> = (location) => {
@@ -2341,8 +2369,10 @@ export default function Studio() {
   };
   const adapter: ToolAdapter = {
     state: () => useWorkspace.getState(),
-    edit: (slots, fn, options) => useWorkspace.getState().editAt(slots, fn, options),
-    editByRole: (slots, fn, options) => useWorkspace.getState().editAt(slots, fn, options),
+    edit: (slots, fn, options) =>
+      useWorkspace.getState().editAt(slots, fn, { ...options, independent: true }),
+    editByRole: (slots, fn, options) =>
+      useWorkspace.getState().editAt(slots, fn, { ...options, independent: true }),
     hardwareGainContext: getHardwareGainContext,
     retainHardwareGainContexts,
     choose: chooseWorkspace,
@@ -2794,7 +2824,7 @@ export default function Studio() {
           <button
             aria-label="Undo"
             title="Undo · Ctrl/⌘ Z"
-            onClick={w.undo}
+            onClick={() => w.undo()}
             disabled={!w.past.length}
           >
             <Undo2 size={16} />
@@ -2802,7 +2832,7 @@ export default function Studio() {
           <button
             aria-label="Redo"
             title="Redo · Ctrl/⌘ Shift Z"
-            onClick={w.redo}
+            onClick={() => w.redo()}
             disabled={!w.future.length}
           >
             <Redo2 size={16} />
@@ -3044,7 +3074,7 @@ export default function Studio() {
               <Numeric
                 contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:gain:${hardwareGainAvailable ? 'compensation' : 'ordinary'}`}
                 formatValue={hardwareGainAvailable ? formatHardwareGain : undefined}
-                begin={w.beginGesture}
+                begin={beginNumericGesture}
                 end={w.endGesture}
                 disabled={channel.linkedTo !== undefined}
                 label="Gain"
@@ -3073,7 +3103,7 @@ export default function Studio() {
               </>
             )}
             <Numeric
-              begin={w.beginGesture}
+              begin={beginNumericGesture}
               end={w.endGesture}
               disabled={channel.linkedTo !== undefined}
               label="Delay"
@@ -3086,7 +3116,7 @@ export default function Studio() {
               step={10.6666666667}
             />
             <Numeric
-              begin={w.beginGesture}
+              begin={beginNumericGesture}
               end={w.endGesture}
               label="Global delay · analysis"
               contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:global-delay`}
@@ -3912,7 +3942,7 @@ export default function Studio() {
                 <div className="filter-numbers">
                   {filter.kind !== 'unity' && filter.kind !== 'raw' && (
                     <Numeric
-                      begin={w.beginGesture}
+                      begin={beginNumericGesture}
                       end={w.endGesture}
                       label={filter.kind === 'asymmetric' ? 'Zero frequency' : 'Frequency'}
                       contextKey={`${w.slot}:${w.preset}:${w.channel}:${tab}:${filter.id}:${filter.kind}:${documentEpochs[w.slot]}:frequency`}
@@ -3948,7 +3978,7 @@ export default function Studio() {
                   )}
                   {hasQ(filter.kind) && (
                     <Numeric
-                      begin={w.beginGesture}
+                      begin={beginNumericGesture}
                       end={w.endGesture}
                       label={filter.kind === 'asymmetric' ? 'Zero Q' : 'Q factor'}
                       contextKey={`${w.slot}:${w.preset}:${w.channel}:${tab}:${filter.id}:${filter.kind}:${documentEpochs[w.slot]}:q`}
@@ -3990,7 +4020,7 @@ export default function Studio() {
                   )}
                   {(filter.kind === 'peak' || filter.kind.includes('shelf')) && (
                     <Numeric
-                      begin={w.beginGesture}
+                      begin={beginNumericGesture}
                       end={w.endGesture}
                       label="Filter gain"
                       contextKey={`${w.slot}:${w.preset}:${w.channel}:${tab}:${filter.id}:${filter.kind}:${documentEpochs[w.slot]}:gain`}
@@ -4052,7 +4082,7 @@ export default function Studio() {
                       </select>
                     </label>
                     <Numeric
-                      begin={w.beginGesture}
+                      begin={beginNumericGesture}
                       end={w.endGesture}
                       label="Pole frequency"
                       contextKey={`${w.slot}:${w.preset}:${w.channel}:${tab}:${filter.id}:${documentEpochs[w.slot]}:pole-frequency`}
@@ -4070,7 +4100,7 @@ export default function Studio() {
                       max={50000}
                     />
                     <Numeric
-                      begin={w.beginGesture}
+                      begin={beginNumericGesture}
                       end={w.endGesture}
                       label="Pole Q"
                       contextKey={`${w.slot}:${w.preset}:${w.channel}:${tab}:${filter.id}:${documentEpochs[w.slot]}:pole-q`}
@@ -4126,7 +4156,7 @@ export default function Studio() {
                             deferTextCommit
                             contextKey={`${w.slot}:${w.preset}:${w.channel}:${filter.id}:${documentEpochs[w.slot]}:${channel.coefficientCache ?? 'base'}:${w.linkedEdits}:${key}`}
                             step={0.00000001}
-                            begin={w.beginGesture}
+                            begin={beginNumericGesture}
                             end={w.endGesture}
                             onChange={(value) => editFilter({ coefficients: { [key]: value } })}
                           />

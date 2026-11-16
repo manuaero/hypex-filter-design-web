@@ -25,6 +25,12 @@ type Documents = Record<Slot, Project>;
 declare const gestureBrand: unique symbol;
 /** Store-issued identity, never a serialized permission or a shared global. */
 export type WorkspaceGestureToken = Readonly<{ [gestureBrand]: true }>;
+declare const fieldGestureBrand: unique symbol;
+/** Focus-issued edit authority; never inferred from document reference equality. */
+export type WorkspaceFieldGestureToken = Readonly<{ [fieldGestureBrand]: true }>;
+export interface WorkspaceIndependentOptions {
+  independent?: boolean;
+}
 interface Workspace extends PersistedWorkspace {
   past: Documents[];
   future: Documents[];
@@ -34,21 +40,30 @@ interface Workspace extends PersistedWorkspace {
   beginOwnedGesture: () => WorkspaceGestureToken;
   endOwnedGesture: (token: WorkspaceGestureToken, cancel?: boolean) => void;
   isOwnedGestureCurrent: (token: WorkspaceGestureToken) => boolean;
+  beginFieldGesture: () => WorkspaceFieldGestureToken;
+  isFieldGestureCurrent: (token: WorkspaceFieldGestureToken) => boolean;
+  endFieldGesture: (token: WorkspaceFieldGestureToken, cancel?: boolean) => void;
+  runFieldGesture: <T>(token: WorkspaceFieldGestureToken, action: () => T) => T;
   choose: (
     patch: Partial<
       Pick<Workspace, 'slot' | 'preset' | 'channel' | 'filter' | 'linkedEdits' | 'linkedControls'>
     >,
+    options?: WorkspaceIndependentOptions,
   ) => void;
   edit: (change: (project: Project) => void, linkable?: boolean) => void;
   editAt: (
     slots: Slot[],
     change: (project: Project, slot: Slot) => void,
-    options?: { synchronizeLinks?: boolean; gestureToken?: WorkspaceGestureToken },
+    options?: {
+      synchronizeLinks?: boolean;
+      gestureToken?: WorkspaceGestureToken;
+      independent?: boolean;
+    },
   ) => void;
   replace: (project: Project) => void;
-  replaceAt: (slot: Slot, project: Project) => void;
-  undo: () => void;
-  redo: () => void;
+  replaceAt: (slot: Slot, project: Project, options?: WorkspaceIndependentOptions) => void;
+  undo: (options?: WorkspaceIndependentOptions) => void;
+  redo: (options?: WorkspaceIndependentOptions) => void;
   copyPreset: (to: number) => void;
   rememberHfdCalibration: (value: HfdProjectCalibration | null | undefined) => void;
   commitFileImport: (
@@ -106,11 +121,14 @@ export function createWorkspaceStore(
 ) {
   let applyingHydration = false;
   let ownedGesture: { token: WorkspaceGestureToken; start: Documents } | undefined;
+  let fieldGesture: { token: WorkspaceFieldGestureToken; start: Documents } | undefined;
+  let fieldScope: WorkspaceFieldGestureToken | undefined;
   const persistence = createWorkspacePersistence(backend, (snapshot) => {
     if (!snapshot) return;
     applyingHydration = true;
     try {
       ownedGesture = undefined;
+      fieldGesture = undefined;
       store.setState({ ...snapshot, past: [], future: [], gesture: undefined });
     } finally {
       applyingHydration = false;
@@ -118,9 +136,17 @@ export function createWorkspaceStore(
   });
   const guard = () => persistence.assertHydrated();
   // Pure until the caller's complete mutation has been validated. An invalid
-  // foreign proposal must not retire a valid in-progress graph gesture.
-  const commitOwned = (state: Workspace): Workspace => {
-    if (!ownedGesture || state.gesture !== ownedGesture.start) return state;
+  // foreign proposal must not retire a valid in-progress field or graph gesture.
+  const commitOpen = (state: Workspace, field = false, anonymous = false): Workspace => {
+    if (
+      !state.gesture ||
+      !(
+        anonymous ||
+        (ownedGesture && state.gesture === ownedGesture.start) ||
+        (field && fieldGesture && state.gesture === fieldGesture.start)
+      )
+    )
+      return state;
     return {
       ...state,
       gesture: undefined,
@@ -129,6 +155,9 @@ export function createWorkspaceStore(
         : { past: [...state.past.slice(-49), state.gesture], future: [] }),
     };
   };
+  const commitOwned = (state: Workspace) => commitOpen(state);
+  const commitBoundary = (state: Workspace, independent = false) =>
+    commitOpen(state, true, independent);
   const store = create<Workspace>()((set, get) => ({
     documents: { left: exampleProject(), right: exampleProject() },
     slot: 'left',
@@ -140,22 +169,24 @@ export function createWorkspaceStore(
     documentRevision: 0,
     past: [],
     future: [],
-    choose: (patch) => {
+    choose: (patch, options) => {
       guard();
-      const state = commitOwned(get());
+      const state = commitBoundary(get(), options?.independent);
       ownedGesture = undefined;
+      fieldGesture = undefined;
       set({ ...state, ...patch });
     },
     beginGesture: () => {
       guard();
-      const state = commitOwned(get());
+      const state = commitBoundary(get());
       ownedGesture = undefined;
+      fieldGesture = undefined;
       if (!state.gesture) set({ past: state.past, future: state.future, gesture: state.documents });
     },
     endGesture: (cancel = false) => {
       guard();
-      // A legacy callback never owns a token-issued graph transaction.
-      if (ownedGesture) return;
+      // Legacy callbacks never own a token-issued graph or focused field.
+      if (ownedGesture || fieldGesture) return;
       const s = get();
       if (!s.gesture) return;
       if (s.documents === s.gesture) {
@@ -168,15 +199,8 @@ export function createWorkspaceStore(
     },
     beginOwnedGesture: () => {
       guard();
-      let state = commitOwned(get());
-      if (state.gesture)
-        state = {
-          ...state,
-          ...(state.documents === state.gesture
-            ? {}
-            : { past: [...state.past.slice(-49), state.gesture], future: [] }),
-          gesture: undefined,
-        };
+      const state = commitBoundary(get(), true);
+      fieldGesture = undefined;
       const token = Object.freeze({}) as WorkspaceGestureToken;
       ownedGesture = { token, start: state.documents };
       set({ past: state.past, future: state.future, gesture: state.documents });
@@ -201,8 +225,63 @@ export function createWorkspaceStore(
       ownedGesture = undefined;
       set(patch);
     },
+    beginFieldGesture: () => {
+      guard();
+      const state = commitBoundary(get(), true);
+      ownedGesture = undefined;
+      const token = Object.freeze({}) as WorkspaceFieldGestureToken;
+      fieldGesture = { token, start: state.documents };
+      set({ past: state.past, future: state.future, gesture: state.documents });
+      return token;
+    },
+    isFieldGestureCurrent: (token) =>
+      fieldGesture?.token === token && get().gesture === fieldGesture.start,
+    endFieldGesture: (token, cancel = false) => {
+      guard();
+      if (fieldGesture?.token !== token || get().gesture !== fieldGesture.start) return;
+      const state = get();
+      const patch =
+        state.documents === state.gesture
+          ? { gesture: undefined }
+          : cancel
+            ? {
+                documents: state.gesture,
+                documentRevision: nextRevision(state),
+                gesture: undefined,
+              }
+            : { past: [...state.past.slice(-49), state.gesture!], future: [], gesture: undefined };
+      fieldGesture = undefined;
+      set(patch);
+    },
+    runFieldGesture: (token, action) => {
+      guard();
+      if (!get().isFieldGestureCurrent(token) || (fieldScope !== undefined && fieldScope !== token))
+        throw new Error('The focused field edit is stale');
+      const previous = fieldScope;
+      fieldScope = token;
+      try {
+        const result = action();
+        if (
+          result !== null &&
+          (typeof result === 'object' || typeof result === 'function') &&
+          typeof (result as { then?: unknown }).then === 'function'
+        ) {
+          // The synchronous prefix already ran. Observe rejection, but never
+          // await or carry local authority into a later continuation.
+          void Promise.resolve(result).catch(() => undefined);
+          throw new Error('Field edit actions must be synchronous');
+        }
+        return result;
+      } finally {
+        fieldScope = previous;
+      }
+    },
     editAt: (slots, change, options) => {
       guard();
+      if (fieldScope !== undefined && !get().isFieldGestureCurrent(fieldScope))
+        throw new Error('The focused field edit is stale');
+      if (options?.independent && options.gestureToken !== undefined)
+        throw new Error('An independent edit cannot use an owned gesture token');
       if (options?.gestureToken !== undefined && !get().isOwnedGestureCurrent(options.gestureToken))
         throw new Error('The owned graph gesture is stale');
       if (slots.some((slot) => slot !== 'left' && slot !== 'right'))
@@ -215,9 +294,18 @@ export function createWorkspaceStore(
           synchronizeLinks(documents[slot], s.documents[slot]);
         reconcileProjectHfdCalibration(documents[slot], s.documents[slot]);
       }
+      const localField = fieldScope !== undefined && fieldGesture?.token === fieldScope;
       const revision = nextRevision(s),
-        base = options?.gestureToken === undefined ? commitOwned(s) : s;
+        base =
+          options?.gestureToken === undefined
+            ? options?.independent
+              ? commitBoundary(s, true)
+              : localField
+                ? commitOwned(s)
+                : commitBoundary(s)
+            : s;
       if (options?.gestureToken === undefined) ownedGesture = undefined;
+      if (options?.independent || !localField) fieldGesture = undefined;
       set({
         documents,
         documentRevision: revision,
@@ -234,14 +322,15 @@ export function createWorkspaceStore(
     replace: (project) => {
       get().replaceAt(get().slot, project);
     },
-    replaceAt: (slot, project) => {
+    replaceAt: (slot, project, options) => {
       guard();
       if (slot !== 'left' && slot !== 'right') throw new Error('Invalid project destination');
       const s = get(),
         documents = { ...s.documents, [slot]: structuredClone(project) },
         revision = nextRevision(s),
-        base = commitOwned(s);
+        base = commitBoundary(s, options?.independent);
       ownedGesture = undefined;
+      fieldGesture = undefined;
       set({
         documents,
         documentRevision: revision,
@@ -250,19 +339,21 @@ export function createWorkspaceStore(
         future: [],
       });
     },
-    undo: () => {
+    undo: (options) => {
       guard();
       const before = get(),
-        s = commitOwned(before);
+        s = commitBoundary(before, options?.independent);
       if (!s.past.length) {
         if (s !== before) {
           ownedGesture = undefined;
+          fieldGesture = undefined;
           set(s);
         }
         return;
       }
       const revision = nextRevision(s);
       ownedGesture = undefined;
+      fieldGesture = undefined;
       set({
         documents: s.past[s.past.length - 1],
         documentRevision: revision,
@@ -271,19 +362,21 @@ export function createWorkspaceStore(
         future: [s.documents, ...s.future],
       });
     },
-    redo: () => {
+    redo: (options) => {
       guard();
       const before = get(),
-        s = commitOwned(before);
+        s = commitBoundary(before, options?.independent);
       if (!s.future.length) {
         if (s !== before) {
           ownedGesture = undefined;
+          fieldGesture = undefined;
           set(s);
         }
         return;
       }
       const revision = nextRevision(s);
       ownedGesture = undefined;
+      fieldGesture = undefined;
       set({
         documents: s.future[0],
         documentRevision: revision,
@@ -299,7 +392,7 @@ export function createWorkspaceStore(
       state.editAt(
         state.linkedEdits ? ['left', 'right'] : [state.slot],
         (project) => copyNativePreset(project, state.preset, to),
-        { synchronizeLinks: false },
+        { synchronizeLinks: false, independent: fieldGesture !== undefined },
       );
     },
     rememberHfdCalibration: (value) => {
@@ -348,7 +441,7 @@ export function createWorkspaceStore(
       }
       const s = get();
       if (s.gesture && s.gesture !== ownedGesture?.start)
-        throw new Error('Finish the current graph edit before importing a file');
+        throw new Error('Finish the current edit before importing a file');
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision !== (s.documentRevision ?? 0))
         throw new Error(
           'The design changed after this transfer began. Start a new import for the current revision.',

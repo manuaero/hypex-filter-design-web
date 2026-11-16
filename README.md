@@ -29,6 +29,8 @@ Ordinary crossover marker dragging now uses absolute graph frequency with Single
 
 Conditional **Hardware gain compensation** now shares one channel-edit planner between the inspector and the existing MCP command. It edits project compensation and the native document hint; it sends no amplifier command. Off sets the selected compensation to 0, while On sets it to 10 and can cap coupled channel Gain at 14 dB under the recovered factory profile. All selected roles validate before one paired Undo, canonical no-ops retain history, and metadata-only edits preserve linked follower caches. Actual processing changes propagate only through the edited root's group in its preset. See [hardware gain and channel-edit scope](docs/HARDWARE-GAIN-v46.md).
 
+Focused numeric editing now uses owned field leases. The shared workspace protects accepted independent edits, including graph and MCP writeback: it commits pending local work only after validation, before the independent edit's own Undo step. A stale Escape cannot restore an older baseline over that edit. Refused proposals and canonical no-ops leave the current local edit intact; stale drafts and wheel state renew from the current value when editing resumes. The registry remains 91 commands. See [numeric transaction scope](docs/NUMERIC-TRANSACTIONS-v47.md).
+
 ## What is implemented
 
 - Three presets, three output channels and fifteen biquad slots per channel; low/high-pass, shelves, asymmetric shelves, peak, all-pass, unity and explicit raw coefficients.
