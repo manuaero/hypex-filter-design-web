@@ -7,6 +7,8 @@ import { MAX_UI_TEXT_CHARACTERS, readFileText } from '../application/file-budget
 import type { UsbDescriptorVerifier, UsbDescriptorSnapshot } from '../hardware/usb-descriptor';
 import type { FirmwareRuntimeController } from '../application/firmware-runtime';
 import type { ToolExecutionContext } from '../application/execution-context';
+import type { FirmwareExecutionWorkflow } from '../application/firmware-execution';
+import { download } from '../domain/files';
 
 const emptyDescriptors: UsbDescriptorSnapshot = Object.freeze({
   left: Object.freeze({ phase: 'empty' as const }),
@@ -20,6 +22,8 @@ type PickerTarget = {
   slot: Slot;
   token: FirmwareInspectionToken;
   generation: number;
+  execution?: FirmwareExecutionWorkflow;
+  context?: ToolExecutionContext;
 };
 type LocalRead = { workspace: FirmwareWorkspace; reading: boolean; error?: string };
 
@@ -28,6 +32,7 @@ export interface FirmwarePanelProps {
   slot: Slot;
   descriptorVerifier?: UsbDescriptorVerifier;
   runtime?: FirmwareRuntimeController;
+  execution?: FirmwareExecutionWorkflow;
   externalBusy?: boolean;
   getContext?: () => ToolExecutionContext;
   contextReady?: boolean;
@@ -242,12 +247,324 @@ function RuntimeIdentity({
   );
 }
 
+/** Shared consumed outcome and review state, regardless of human/MCP entry. */
+function FirmwareExecution({
+  execution,
+  slot,
+  getContext,
+  contextReady,
+  externalBusy,
+}: {
+  execution: FirmwareExecutionWorkflow;
+  slot: Slot;
+  getContext?: () => ToolExecutionContext;
+  contextReady: boolean;
+  externalBusy: boolean;
+}) {
+  const snapshot = useSyncExternalStore(
+    execution.subscribe,
+    execution.getSnapshot,
+    execution.getSnapshot,
+  );
+  const [target, setTarget] = useState<Slot | 'both'>(slot),
+    [confirmedReviewId, setConfirmedReviewId] = useState<string>(),
+    [failure, setFailure] = useState(''),
+    [pending, setPending] = useState(false),
+    [authorized, setAuthorized] = useState(false),
+    [recoveryTargets, setRecoveryTargets] = useState<Record<string, Slot | 'both'>>({});
+  const contextRef = useRef(getContext);
+  contextRef.current = getContext;
+  const generation = useRef(0),
+    flight = useRef(false);
+  let owner: string | undefined;
+  try {
+    if (contextReady) owner = getContext?.().owner;
+  } catch {
+    /* Admission below supplies the error. */
+  }
+  useLayoutEffect(() => {
+    generation.current++;
+    setFailure('');
+    setConfirmedReviewId(undefined);
+    setPending(false);
+    setTarget(slot);
+    setRecoveryTargets({});
+    setAuthorized(false);
+    if (!contextReady || !contextRef.current) return;
+    try {
+      execution.status(contextRef.current());
+      setAuthorized(true);
+    } catch (error) {
+      setFailure(error instanceof Error ? error.message : String(error));
+    }
+    return () => {
+      generation.current++;
+    };
+  }, [execution, slot, owner, contextReady]);
+  const review = authorized ? snapshot.update.activeReview : undefined;
+  const fixedTarget = review?.target ?? target;
+  const selected: Slot[] = fixedTarget === 'both' ? ['left', 'right'] : [fixedTarget];
+  const busy = pending || snapshot.update.busy || externalBusy;
+  const available = selected.every((role) => snapshot.availability[role].available);
+  // A recovery review owns its journal source and qualified loader capture; it
+  // does not depend on a current ordinary session or freshly staged file.
+  const programAvailable = !!review?.sourceRecordId || available;
+  const act = async (work: (context: ToolExecutionContext) => unknown | Promise<unknown>) => {
+    if (flight.current || busy || !authorized || !contextRef.current) return;
+    flight.current = true;
+    setPending(true);
+    setFailure('');
+    const captured = generation.current;
+    try {
+      await work(contextRef.current());
+    } catch (error) {
+      if (captured === generation.current)
+        setFailure(error instanceof Error ? error.message : String(error));
+    } finally {
+      flight.current = false;
+      if (captured === generation.current) setPending(false);
+    }
+  };
+  const outcome = authorized ? snapshot.update.latestOutcome : undefined;
+  return (
+    <section aria-label="Firmware update workflow">
+      <div className="button-row">
+        <label>
+          Program target{' '}
+          <select
+            aria-label="Firmware program target"
+            value={fixedTarget}
+            disabled={busy || !!review || !authorized}
+            onChange={(event) => {
+              setTarget(event.target.value as Slot | 'both');
+              setConfirmedReviewId(undefined);
+            }}
+          >
+            <option value="left">Left</option>
+            <option value="right">Right</option>
+            <option value="both">Both independently</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          disabled={!authorized || busy || !available || !!review}
+          onClick={() =>
+            void act((context) =>
+              execution.review(
+                target,
+                Object.fromEntries(
+                  (target === 'both' ? (['left', 'right'] as const) : [target]).map((role) => [
+                    role,
+                    snapshot.files[role].stage?.id,
+                  ]),
+                ),
+                context,
+              ),
+            )
+          }
+        >
+          Review firmware update
+        </button>
+        <button
+          type="button"
+          disabled={
+            !authorized || busy || !review || !programAvailable || confirmedReviewId !== review.id
+          }
+          onClick={() =>
+            void act(async (context) => {
+              await execution.apply(review!.id, context, { confirm: true });
+              setConfirmedReviewId(undefined);
+            })
+          }
+        >
+          Program firmware{!programAvailable ? ' · unavailable' : ''}
+        </button>
+        <button
+          type="button"
+          disabled={!authorized || busy || !review}
+          onClick={() =>
+            void act((context) => {
+              execution.discard(review!.id, context);
+              setConfirmedReviewId(undefined);
+            })
+          }
+        >
+          Discard firmware review
+        </button>
+      </div>
+      {!authorized ? (
+        <p className="hint">
+          Workspace access is required for firmware execution and recovery records.
+        </p>
+      ) : (
+        <>
+          {!programAvailable && (
+            <p className="hint">
+              Physical programming is unavailable.{' '}
+              {selected
+                .flatMap((role) =>
+                  snapshot.availability[role].reasons.map(
+                    (reason) => `${role === 'left' ? 'Left' : 'Right'}: ${reason}`,
+                  ),
+                )
+                .join(' ')}
+            </p>
+          )}
+          <p className="hint">
+            Programming requires a qualified same-unit loader and recovery profile. Granted-device
+            discovery never opens a permission chooser. A missing loader grant must be resolved
+            explicitly; it does not authorize another amplifier.
+          </p>
+          {review && (
+            <section aria-label="Firmware update review">
+              <p>
+                <strong>
+                  Fixed review · {review.target} · {review.qualifier}
+                </strong>
+              </p>
+              {review.sourceRecordId && (
+                <p className="hint">
+                  Recovery uses the original journal source and fixed role assignment. Current
+                  staged files are excluded.
+                </p>
+              )}
+              {review.roles.map((role) => (
+                <p className="hint" key={role.slot}>
+                  {role.slot === 'left' ? 'Left' : 'Right'} · {role.binding.serial} ·{' '}
+                  {role.source.name} · SHA-256 {role.source.sha256} · {role.knownImageCount}{' '}
+                  known-range backups. {role.gaps.join('; ')}
+                </p>
+              ))}
+              <label>
+                <input
+                  type="checkbox"
+                  checked={confirmedReviewId === review.id}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setConfirmedReviewId(event.target.checked ? review.id : undefined)
+                  }
+                />{' '}
+                I confirm programming the exact reviewed firmware and targets.
+              </label>
+            </section>
+          )}
+          {outcome && (
+            <section role="status" aria-label="Firmware update outcome">
+              <strong>Firmware outcome · {outcome.record.phase}</strong>
+              <p className="hint">
+                {outcome.record.id} · journal persistence {outcome.persistence}. Consumed operations
+                are never retried automatically.
+              </p>
+            </section>
+          )}
+          <details>
+            <summary>Firmware recovery records · {snapshot.update.records.length}</summary>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void act((context) => execution.hydrate(context))}
+            >
+              Refresh firmware history
+            </button>
+            {snapshot.update.records.map((record) => (
+              <div key={record.id}>
+                <p className="hint">
+                  {record.id} · {record.target} · {record.phase} · {record.qualifier}
+                </p>
+                {(record.roles ?? []).map((role) => (
+                  <p key={role.slot} className="hint">
+                    {role.slot === 'left' ? 'Left' : 'Right'} · {role.binding.serial} ·{' '}
+                    {role.steps
+                      .map(
+                        (step) =>
+                          `${step.id}: ${step.state}${step.attempted ? ' (attempted)' : ''}`,
+                      )
+                      .join('; ')}
+                    {role.error ? ` · ${role.error}` : ''}
+                  </p>
+                ))}
+                <div className="button-row">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void act((context) => {
+                        const data = execution.exportRecord(record.id, context);
+                        download(
+                          `firmware-journal-${record.id}.json`,
+                          JSON.stringify(data),
+                          'application/json',
+                        );
+                      })
+                    }
+                  >
+                    Export firmware journal {record.id}
+                  </button>
+                  <label>
+                    Recovery target{' '}
+                    <select
+                      aria-label={`Firmware recovery target ${record.id}`}
+                      disabled={busy || !!review}
+                      value={recoveryTargets[record.id] ?? record.target}
+                      onChange={(event) =>
+                        setRecoveryTargets((previous) => ({
+                          ...previous,
+                          [record.id]: event.target.value as Slot | 'both',
+                        }))
+                      }
+                    >
+                      {record.target === 'both' ? (
+                        <>
+                          <option value="both">Both original roles</option>
+                          <option value="left">Left only</option>
+                          <option value="right">Right only</option>
+                        </>
+                      ) : (
+                        <option value={record.target}>
+                          {record.target === 'left' ? 'Left' : 'Right'} only
+                        </option>
+                      )}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    disabled={
+                      busy || !!review || record.phase === 'complete' || record.phase === 'prepared'
+                    }
+                    onClick={() =>
+                      void act((context) =>
+                        execution.reviewRecovery(
+                          record.id,
+                          recoveryTargets[record.id] ?? record.target,
+                          context,
+                        ),
+                      )
+                    }
+                  >
+                    Review recovery {record.id}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </details>
+        </>
+      )}
+      {(failure || (authorized && snapshot.update.error)) && (
+        <p role="alert" className="hint error">
+          {failure || snapshot.update.error}
+        </p>
+      )}
+    </section>
+  );
+}
+
 /** Offline file inspection and explicitly requested read-only diagnostics. */
 export default function FirmwarePanel({
   workspace,
   slot,
   descriptorVerifier,
   runtime,
+  execution,
   externalBusy = false,
   getContext,
   contextReady = true,
@@ -307,9 +624,15 @@ export default function FirmwarePanel({
   const choose = () => {
     try {
       // Capture both role and ordinary identity BEFORE the browser chooser opens.
+      const context = execution ? getContext?.() : undefined;
+      if (execution) {
+        if (!contextReady || !context)
+          throw new Error('Workspace access is required for firmware staging');
+        if (execution.status(context).update.busy) throw new Error('Firmware is busy');
+      }
       const token = workspace.captureTarget(slot),
         generation = ++generations.current[slot];
-      pickerTarget.current = { workspace, slot, token, generation };
+      pickerTarget.current = { workspace, slot, token, generation, execution, context };
       setLocalReads((previous) => ({ ...previous, [slot]: { workspace, reading: false } }));
       picker.current?.click();
     } catch (error) {
@@ -344,8 +667,12 @@ export default function FirmwarePanel({
         fatal: true,
       });
       if (!current()) return;
+      if (target.execution && target.context?.owner !== getContext?.().owner)
+        throw new Error('Firmware staging workspace changed while reading the file');
       inspectionStarted = true;
-      await target.workspace.inspect(target.slot, text, file.name, target.token);
+      if (target.execution && target.context)
+        await target.execution.inspect(target.slot, text, file.name, target.context, target.token);
+      else await target.workspace.inspect(target.slot, text, file.name, target.token);
     } catch (error) {
       if (!current()) return;
       // The shared workspace already publishes parser/hash errors. File read
@@ -371,7 +698,23 @@ export default function FirmwarePanel({
     generations.current[slot]++;
     if (pickerTarget.current?.workspace === workspace && pickerTarget.current.slot === slot)
       pickerTarget.current = undefined;
-    workspace.clear(slot);
+    try {
+      if (execution) {
+        if (!contextReady || !getContext)
+          throw new Error('Workspace access is required for firmware staging');
+        execution.clear(slot, getContext());
+      } else workspace.clear(slot);
+    } catch (error) {
+      setLocalReads((previous) => ({
+        ...previous,
+        [slot]: {
+          workspace,
+          reading: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }));
+      return;
+    }
     setLocalReads((previous) => ({ ...previous, [slot]: { workspace, reading: false } }));
     setPreviewOpen(false);
     if (picker.current) picker.current.value = '';
@@ -404,14 +747,19 @@ export default function FirmwarePanel({
         <button type="button" onClick={clear}>
           Clear staged firmware
         </button>
-        <button
-          type="button"
-          disabled
-          title="Firmware programming has no verified bootloader adapter."
-        >
-          Program firmware · unavailable
-        </button>
+        {!execution && (
+          <button
+            type="button"
+            disabled
+            title="Firmware programming has no qualified physical profile."
+          >
+            Program firmware · unavailable
+          </button>
+        )}
       </div>
+      {execution && (
+        <FirmwareExecution {...{ execution, slot, getContext, contextReady, externalBusy }} />
+      )}
       <input
         ref={picker}
         type="file"
@@ -544,19 +892,21 @@ export default function FirmwarePanel({
               retained; inspect again for the current assignment.
             </p>
           )}
-          <div className="firmware-programming-reasons">
-            <p className="hint">
-              Target compatibility, programming and recovery are not yet verified.
-            </p>
-            <details>
-              <summary>Why programming is unavailable</summary>
-              <ul>
-                {stage.programming.reasons.map((reason) => (
-                  <li key={reason.code}>{reason.message}</li>
-                ))}
-              </ul>
-            </details>
-          </div>
+          {!execution && (
+            <div className="firmware-programming-reasons">
+              <p className="hint">
+                Target compatibility, programming and recovery are not yet verified.
+              </p>
+              <details>
+                <summary>Why programming is unavailable</summary>
+                <ul>
+                  {stage.programming.reasons.map((reason) => (
+                    <li key={reason.code}>{reason.message}</li>
+                  ))}
+                </ul>
+              </details>
+            </div>
+          )}
           <button
             type="button"
             aria-expanded={previewOpen}

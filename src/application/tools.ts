@@ -107,6 +107,7 @@ import {
 } from './measurement-capture';
 import type { FirmwareWorkspace } from './firmware-workspace';
 import { FirmwareRuntimeDiagnosticError, type FirmwareRuntimeController } from './firmware-runtime';
+import { FirmwareExecutionError, type FirmwareExecutionWorkflow } from './firmware-execution';
 import { DeviceAuthOperationError, type DeviceAuthController } from './device-auth';
 import { DeviceDefaultsError, type DeviceDefaultsController } from './device-defaults';
 import { AmplifierModesError, type AmplifierModesController } from './amplifier-modes';
@@ -212,6 +213,7 @@ export interface ToolAdapter {
   capture?: CaptureController;
   firmware?: FirmwareWorkspace;
   firmwareRuntime?: FirmwareRuntimeController;
+  firmwareExecution?: FirmwareExecutionWorkflow;
   auth?: DeviceAuthController;
   deviceDefaults?: DeviceDefaultsController;
   deviceClone?: DeviceCloneController;
@@ -804,20 +806,61 @@ const firmwareToolSchema = z
       'runtime-status',
       'runtime-read',
       'runtime-clear',
+      'update-status',
+      'update-review',
+      'update-apply',
+      'update-discard',
+      'update-review-recovery',
+      'update-history',
+      'update-export',
     ]),
     content: z.string().max(MAX_UI_TEXT_CHARACTERS).optional(),
     name: z.string().min(1).max(4096).optional(),
     pass: z.union([z.literal(0), z.literal(1)]).optional(),
     offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
-    limit: z.number().int().min(1).max(50).optional(),
+    limit: z.number().int().min(1).max(16384).optional(),
+    stageIds: z
+      .object({
+        left: z.string().min(1).max(256).optional(),
+        right: z.string().min(1).max(256).optional(),
+      })
+      .strict()
+      .optional(),
+    reviewId: z.string().min(1).max(256).optional(),
+    recordId: z.string().min(1).max(256).optional(),
+    confirm: z.literal(true).optional(),
   })
   .strict()
   .superRefine((value, context) => {
-    const required: Record<string, string[]> = { inspect: ['content', 'name'], packets: ['pass'] };
+    const required: Record<string, string[]> = {
+      inspect: ['content', 'name'],
+      packets: ['pass'],
+      'update-review': ['stageIds'],
+      'update-apply': ['reviewId', 'confirm'],
+      'update-discard': ['reviewId'],
+      'update-review-recovery': ['recordId'],
+      'update-export': ['recordId'],
+    };
     const allowed: Record<string, string[]> = {
       inspect: ['content', 'name'],
       packets: ['pass', 'offset', 'limit'],
+      'update-review': ['stageIds'],
+      'update-apply': ['reviewId', 'confirm'],
+      'update-discard': ['reviewId'],
+      'update-review-recovery': ['recordId'],
+      'update-history': ['offset', 'limit'],
+      'update-export': ['recordId', 'offset', 'limit'],
     };
+    if (
+      value.limit !== undefined &&
+      ((value.action === 'packets' && value.limit > 50) ||
+        (value.action === 'update-history' && value.limit > 16))
+    )
+      context.addIssue({
+        code: 'custom',
+        path: ['limit'],
+        message: 'Limit exceeds this action’s page size',
+      });
     for (const key of required[value.action] ?? [])
       if (value[key as keyof typeof value] === undefined)
         context.addIssue({
@@ -1773,7 +1816,7 @@ TOOL_DESCRIPTIONS.fusion_configuration_restore =
 TOOL_DESCRIPTIONS.fusion_device_read =
   'Read fresh device options, hardware/accessory overview, native OEM protection report, limiter configuration and power statistics. Mask inventory and permitted operations are separate. Optional firmware actions inspect/status/clear files or preview up to 50 packets without a connection or device calls. usb-status/usb-choose/usb-revalidate/usb-clear share the browser runtime-descriptor verifier; choose requires one connected role and a manual browser gesture. These metadata operations never open, claim or transfer to a USB device. Proof requires the exact observed USB serial and captured EEPROM identity, with no family inference from a filename/product label. A valid runtime proof does not establish bootloader correlation, recovery or programming; programming remains unavailable.';
 TOOL_DESCRIPTIONS.fusion_device_read +=
-  ' firmware runtime-status/runtime-clear expose cached identity reports without I/O. runtime-read uses the exact captured live session or previously granted remembered HID interface, never a chooser or VID/PID search. It reads only matched configuration, amplifier metadata, DSP filename and EEPROM serial, with fixed role/session/owner fences. Both reports publish together or neither. Exact reported5.82/core5.5 can be identified without admitting controls; installed-image SHA and descriptor family are not established by these reports. File stages may separately recognize exact known content SHA profiles; those never prove the running image. Programming/reconnect/recovery qualification remains incomplete.';
+  ' firmware runtime-status/runtime-clear expose cached identity reports without I/O. runtime-read uses the exact captured live session or previously granted remembered HID interface, never a chooser or VID/PID search. It reads only matched configuration, amplifier metadata, DSP filename and EEPROM serial, with fixed role/session/owner fences. Both reports publish together or neither. Exact reported5.82/core5.5 can be identified without admitting controls; installed-image SHA and descriptor family are not established by these reports. File stages may separately recognize exact known content SHA profiles; those never prove the running image. Programming/reconnect/recovery qualification remains incomplete. Nested update-status/history/export expose owner-bound cached workflow and bounded journal pages. update-review requires exact stageIds for every intended role; update-apply requires its reviewId and confirm:true. update-discard cancels a pending review; update-review-recovery explicitly reviews a consumed partial record. Physical availability is source-qualified, never selected by tool arguments, filename or runtime version; unavailable profiles reject before device I/O. These actions share the human firmware workflow and preserve consumed outcomes.';
 TOOL_DESCRIPTIONS.fusion_device_read +=
   ' Optional auth namespace uses the shared human authentication controller: status, unlock, password-change, email-read, email-set, oem-propose, oem-save and clear. Credentials use explicit ascii/windows-1252/utf-8/hex encoding; password-change requires exact next/confirm plus explicit recovery email. Choose one role for credentials; only status/clear accept both. Status never contains credentials or email. Email bytes are returned only by explicit email-read. OEM proposal is read-only and bound to its role/session; Save consumes its ID once and rechecks fresh permissions and prior mask. No password or OEM write is retried automatically.';
 TOOL_DESCRIPTIONS.fusion_device_read +=
@@ -3804,6 +3847,68 @@ export function createToolExecutor(adapter: ToolAdapter) {
           }
           if (p.firmware) {
             const runtimeCommand = p.firmware;
+            if (runtimeCommand.action.startsWith('update-')) {
+              if (!context)
+                throw new Error(
+                  'Firmware execution requires a trusted workspace execution context',
+                );
+              const workflow = adapter.firmwareExecution;
+              if (!workflow)
+                throw new Error('Firmware execution workflow is unavailable in this client');
+              const actor = {
+                ...parseExecutionPrincipal({ owner: context.owner, scope: context.scope }),
+                ...(signal ? { signal } : {}),
+              };
+              const current = workflow.status(actor);
+              if (runtimeCommand.reviewId) {
+                const fixed =
+                  current.update.activeReview?.id === runtimeCommand.reviewId
+                    ? current.update.activeReview
+                    : current.update.records.find(
+                        (record) => record.id === runtimeCommand.reviewId,
+                      );
+                if (fixed && fixed.target !== p.target)
+                  throw new Error(
+                    'Firmware target differs from the fixed review or consumed record',
+                  );
+              }
+              let result: unknown;
+              switch (runtimeCommand.action) {
+                case 'update-review':
+                  result = await workflow.review(p.target, runtimeCommand.stageIds!, actor);
+                  break;
+                case 'update-apply':
+                  result = await workflow.apply(runtimeCommand.reviewId!, actor, { confirm: true });
+                  break;
+                case 'update-discard':
+                  workflow.discard(runtimeCommand.reviewId!, actor);
+                  break;
+                case 'update-review-recovery':
+                  result = await workflow.reviewRecovery(runtimeCommand.recordId!, p.target, actor);
+                  break;
+                case 'update-history':
+                  await workflow.hydrate(actor);
+                  return {
+                    ok: true,
+                    history: workflow.history(actor, runtimeCommand.offset, runtimeCommand.limit),
+                  };
+                case 'update-export':
+                  return {
+                    ok: true,
+                    export: workflow.exportPage(
+                      runtimeCommand.recordId!,
+                      actor,
+                      runtimeCommand.offset,
+                      runtimeCommand.limit,
+                    ),
+                  };
+              }
+              return {
+                ok: true,
+                firmwareUpdate: workflow.status(actor),
+                ...(result === undefined ? {} : { result }),
+              };
+            }
             if (runtimeCommand.action.startsWith('runtime-')) {
               if (!context)
                 throw new Error(
@@ -3834,6 +3939,11 @@ export function createToolExecutor(adapter: ToolAdapter) {
             }
             const service = adapter.firmware;
             if (!service) throw new Error('Firmware file staging is unavailable in this client');
+            if (adapter.firmwareExecution) {
+              if (!context)
+                throw new Error('Firmware staging requires a trusted workspace execution context');
+              adapter.firmwareExecution.status(context);
+            }
             const command = p.firmware,
               slots = roles(p.target);
             const states = () =>
@@ -3886,7 +3996,15 @@ export function createToolExecutor(adapter: ToolAdapter) {
             }
             if (command.action === 'status') return { ok: true, firmware: states() };
             if (command.action === 'clear') {
-              slots.forEach((slot) => service.clear(slot));
+              slots.forEach((slot) => {
+                if (adapter.firmwareExecution) {
+                  if (!context)
+                    throw new Error(
+                      'Firmware staging requires a trusted workspace execution context',
+                    );
+                  adapter.firmwareExecution.clear(slot, context);
+                } else service.clear(slot);
+              });
               return { ok: true, firmware: states() };
             }
             if (command.action === 'packets')
@@ -3901,7 +4019,21 @@ export function createToolExecutor(adapter: ToolAdapter) {
               };
             return adapter.operate('Agent: inspecting firmware file', async () => {
               const results = await Promise.allSettled(
-                slots.map((slot) => service.inspect(slot, command.content!, command.name!)),
+                slots.map((slot) => {
+                  if (adapter.firmwareExecution) {
+                    if (!context)
+                      throw new Error(
+                        'Firmware staging requires a trusted workspace execution context',
+                      );
+                    return adapter.firmwareExecution.inspect(
+                      slot,
+                      command.content!,
+                      command.name!,
+                      context,
+                    );
+                  }
+                  return service.inspect(slot, command.content!, command.name!);
+                }),
               );
               return {
                 ok: results.every((result) => result.status === 'fulfilled'),
@@ -4129,7 +4261,8 @@ export function createToolExecutor(adapter: ToolAdapter) {
         !(e instanceof NativeLimiterError && e.result) &&
         !(e instanceof DeviceCloneError && e.result) &&
         !(e instanceof AmplifierModesError && e.result) &&
-        !(e instanceof NativeMixerError && e.result)
+        !(e instanceof NativeMixerError && e.result) &&
+        !(e instanceof FirmwareExecutionError && e.result)
       )
         throw e;
       return {
@@ -4146,6 +4279,9 @@ export function createToolExecutor(adapter: ToolAdapter) {
         ...(e instanceof AmplifierModesError && e.result ? { result: e.result } : {}),
         ...(e instanceof NativeMixerError && e.result ? { result: e.result } : {}),
         ...(e instanceof FirmwareRuntimeDiagnosticError ? { runtime: e.runtime } : {}),
+        ...(e instanceof FirmwareExecutionError
+          ? { persistence: e.persistence, ...(e.result ? { result: e.result } : {}) }
+          : {}),
         ...(e instanceof DeviceCloneError
           ? {
               persistence: e.persistence,

@@ -9,6 +9,7 @@ import {
 import { createToolExecutor, type ToolAdapter, type DocumentState } from '../src/application/tools';
 import { newProject, type Slot } from '../src/domain/model';
 import { buildFirmwarePacketPlan, parseFirmwareBundle } from '../src/domain/firmware';
+import { KNOWN_FIRMWARE_PROFILES } from '../src/domain/firmware-profile';
 
 const header = ':10000080A80D0000CA080000465553494F4E3332B0';
 const segment = ':01000081027C';
@@ -406,4 +407,75 @@ describe('cached firmware inspection tools', () => {
     expect(s.hardware).not.toHaveBeenCalled();
     expect(s.noEdit).not.toHaveBeenCalled();
   });
+});
+
+it('retains exact execution Text privately by stage ID, survives expected binding loss and invalidates on a new failed inspection or Clear', async () => {
+  let binding: FirmwareDeviceBinding | undefined = identity('SYNTHETIC-EXECUTION');
+  const service = createFirmwareWorkspace({ binding: () => binding });
+  const stage = await service.inspect('left', text, 'same-name.hex');
+  const source = service.executionSource('left', stage.id)!;
+  expect(source).toEqual({
+    stageId: stage.id,
+    name: 'same-name.hex',
+    text,
+    sha256: hash(text),
+    family: 'FUSION32',
+  });
+  expect(Object.isFrozen(source)).toBe(true);
+  expect(JSON.stringify(service.getSnapshot())).not.toContain(header);
+  expect(service.executionSource('right', stage.id)).toBeUndefined();
+  expect(service.executionSource('left', stage.id + 'changed')).toBeUndefined();
+  binding = undefined;
+  service.refreshTarget('left');
+  expect(service.executionSource('left', stage.id)).toBe(source);
+  await expect(service.inspect('left', 'not hex', 'same-name.hex')).rejects.toThrow();
+  expect(service.getSnapshot().left.stage?.id).toBe(stage.id);
+  expect(service.executionSource('left', stage.id)).toBeUndefined();
+  const replacement = await service.inspect('left', text, 'replacement.hex');
+  service.clear('left');
+  expect(service.executionSource('left', replacement.id)).toBeUndefined();
+});
+
+it('retains inspection/packet preview for a valid bundle over the execution budget without retaining executable Text', async () => {
+  const service = createFirmwareWorkspace({ binding: () => undefined });
+  const large = [header, segment, address, ...Array(100000).fill(data), eof].join('\r\n') + '\r\n';
+  const stage = await service.inspect('left', large, 'inspection-only.hex');
+  expect(stage.textBytes).toBeGreaterThan(4 * 1024 * 1024);
+  expect(service.executionSource('left', stage.id)).toBeUndefined();
+  expect(service.packetPreview('left', 0, 0, 1).packets).toHaveLength(1);
+});
+
+it('binds executable source to its captured assignment even for the same serial, and cancelled chooser tokens preserve the old source', async () => {
+  let lease = 'first-assignment';
+  const service = createFirmwareWorkspace({
+    binding: () => identity('SYNTHETIC-SAME-UNIT'),
+    assignmentId: () => lease,
+  });
+  const stage = await service.inspect('left', text, 'source.hex');
+  const source = service.executionSource('left', stage.id);
+  service.captureTarget('left');
+  expect(service.executionSource('left', stage.id)).toBe(source);
+  const captured = service.captureTarget('right');
+  lease = 'explicit-reassignment';
+  expect(service.executionSource('left', stage.id)).toBeUndefined();
+  const stale = await service.inspect('right', text, 'captured-before-reassignment.hex', captured);
+  expect(service.executionSource('right', stale.id)).toBeUndefined();
+});
+
+it('derives executable expected versions only from exact known content profile, never filename metadata', async () => {
+  // Explicit workflow hash port double; this test is not a real-file hash proof.
+  const profile = KNOWN_FIRMWARE_PROFILES[0];
+  const known = createFirmwareWorkspace({
+    binding: () => undefined,
+    sha256: async () => profile.sha256,
+  });
+  const stage = await known.inspect('left', text, 'renamed-version-99.99.hex');
+  expect(known.executionSource('left', stage.id)?.expectedAfter).toEqual({
+    core: profile.coreVersion,
+    firmware: profile.bundleVersion,
+    source: 'known-content-profile',
+  });
+  const unknown = createFirmwareWorkspace({ binding: () => undefined });
+  const other = await unknown.inspect('left', text, 'official-looking-5.7.hex');
+  expect(unknown.executionSource('left', other.id)?.expectedAfter).toBeUndefined();
 });

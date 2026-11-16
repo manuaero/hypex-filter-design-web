@@ -5,6 +5,12 @@ import {
   type FirmwareBundle,
   type FirmwareFamily,
 } from '../domain/firmware';
+import {
+  isQualifiedFirmwarePhysicalProfile,
+  type FirmwareQualifiedPhysicalProfile,
+} from './firmware-physical-profile';
+
+export type FirmwareExecutionQualifier = 'reference-simulation' | 'qualified-physical';
 
 export interface FirmwareConnectionStamp {
   connectionId: string;
@@ -28,7 +34,8 @@ export interface FirmwareCorrelatedReply extends FirmwareConnectionStamp {
   reportId: number;
   payload: Uint8Array;
 }
-/** Injected reference/simulation only. No WebHID or production adapter is created here. */
+/** Strict one-request port contract. A reference fixture or the separate
+ * qualified WebHID channel supplies it; local IDs are not target echoes. */
 export interface FirmwareReferencePort {
   readBootloaderIdentity(): Promise<FirmwareBootloaderIdentity>;
   currentConnection(): FirmwareConnectionStamp;
@@ -40,6 +47,7 @@ export interface FirmwareProgramChannel {
 }
 type ChannelState = {
   port: FirmwareReferencePort;
+  qualifier: FirmwareExecutionQualifier;
   used: boolean;
   busy: boolean;
   poisoned: boolean;
@@ -48,7 +56,7 @@ type ChannelState = {
 const channels = new WeakMap<FirmwareProgramChannel, ChannelState>();
 /** The retry issuer is local to this exact injected channel. A serialized flag,
  * a normal transport exception or another channel's error cannot grant retries.
- * No physical channel factory exists until loader correlation/replay is proved. */
+ * Physical issuance is separate and cannot obtain this retry-error issuer. */
 export function createReferenceFirmwareChannel(port: FirmwareReferencePort) {
   if (
     !port ||
@@ -60,6 +68,7 @@ export function createReferenceFirmwareChannel(port: FirmwareReferencePort) {
   const channel = Object.freeze({}) as FirmwareProgramChannel,
     state: ChannelState = {
       port,
+      qualifier: 'reference-simulation',
       used: false,
       busy: false,
       poisoned: false,
@@ -80,12 +89,37 @@ export function createReferenceFirmwareChannel(port: FirmwareReferencePort) {
     },
   });
 }
+/** Separate physical issuance. The production registry currently issues no
+ * profile. In particular this factory has no reference retry-error issuer. */
+export function createQualifiedPhysicalFirmwareChannel(
+  port: FirmwareReferencePort,
+  profile: FirmwareQualifiedPhysicalProfile,
+): FirmwareProgramChannel {
+  if (
+    !isQualifiedFirmwarePhysicalProfile(profile) ||
+    !port ||
+    !['readBootloaderIdentity', 'currentConnection', 'exchange'].every(
+      (key) => typeof port[key as keyof FirmwareReferencePort] === 'function',
+    )
+  )
+    throw new Error('Physical firmware channel lacks a qualified source-owned profile');
+  const channel = Object.freeze({}) as FirmwareProgramChannel;
+  channels.set(channel, {
+    port,
+    qualifier: 'qualified-physical',
+    used: false,
+    busy: false,
+    poisoned: false,
+    retryFailures: new WeakMap(),
+  });
+  return channel;
+}
 export interface FirmwareProgramCursor {
   pass: 0 | 1;
   index: number;
 }
 export interface FirmwareProgramResult {
-  qualifier: 'reference-simulation';
+  qualifier: FirmwareExecutionQualifier;
   outcome: 'stream-complete' | 'blocked' | 'rejected' | 'unconfirmed' | 'cancelled';
   serial: string;
   family: FirmwareFamily;
@@ -215,7 +249,7 @@ export async function programNativeFirmware(
       options.sleep ??
       ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds))),
     result: FirmwareProgramResult = {
-      qualifier: 'reference-simulation',
+      qualifier: state.qualifier,
       outcome: 'blocked',
       serial: '',
       family: bundle.family,
@@ -323,7 +357,12 @@ export async function programNativeFirmware(
               );
             }
             state.poisoned = true;
-            fail('unconfirmed', error);
+            fail(
+              state.qualifier === 'qualified-physical' && !sent && result.wireRequests === 0
+                ? 'blocked'
+                : 'unconfirmed',
+              error,
+            );
           }
           let payload: Uint8Array;
           try {

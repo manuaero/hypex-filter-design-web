@@ -110,6 +110,24 @@ const envelope = (...records: FirmwareJournalRecord[]): FirmwareJournalEnvelope 
   revision: 1,
   records,
 });
+it('retains exact known-content provenance separately from record metadata and simulation', () => {
+  const value = record();
+  value.roles[0].source.expectedAfter = {
+    core: '5.5',
+    firmware: '5.82',
+    source: 'known-content-profile',
+  };
+  const parsed = parseFirmwareJournalEnvelope(envelope(value));
+  expect(parsed.records[0].roles[0].source.expectedAfter).toEqual(
+    value.roles[0].source.expectedAfter,
+  );
+  const edited = structuredClone(parsed);
+  edited.revision++;
+  edited.records[0].roles[0].source.expectedAfter!.source = 'bundle-record-metadata';
+  expect(() => assertFirmwareJournalWrite(parsed, parsed.revision, edited)).toThrow(
+    /immutable|source|plan/i,
+  );
+});
 const reseal = (r: FirmwareJournalRecord) => {
   for (const role of r.roles) {
     for (const part of role.before.images) part.sha256 = firmwareImageSha256(part.hex);

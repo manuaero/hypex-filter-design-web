@@ -9,6 +9,8 @@ import {
 import { MAX_UI_TEXT_CHARACTERS, MAX_UI_FILE_BYTES } from './file-budget';
 import type { UsbDescriptorProof } from '../hardware/usb-descriptor';
 import { lookupKnownFirmwareProfile, type KnownFirmwareProfile } from '../domain/firmware-profile';
+import { MAX_FIRMWARE_EXECUTION_SOURCE_BYTES } from './firmware-update-storage';
+import type { FirmwareUpdateSource } from '../hardware/firmware-update';
 
 /** Ordinary connected-device identity, NOT a HID descriptor/product serial. */
 export interface FirmwareDeviceBinding {
@@ -83,6 +85,8 @@ export interface FirmwareWorkspaceOptions {
   sha256?: (bytes: Uint8Array) => Promise<string>;
   /** A proof created by the read-only descriptor verifier; never tool arguments. */
   descriptor?: (slot: Slot) => UsbDescriptorProof | undefined;
+  /** Stable assignment lease; expected runtime disconnect must not change it. */
+  assignmentId?: (slot: Slot) => string | undefined;
 }
 declare const inspectionTokenBrand: unique symbol;
 /** Opaque page-owned token. Serialized or foreign-factory objects are invalid. */
@@ -103,6 +107,8 @@ export interface FirmwareWorkspace {
   /** Reconcile metadata only; never changes the originally captured binding. */
   refreshTarget(slot: Slot): void;
   packetPreview(slot: Slot, pass: 0 | 1, offset?: number, limit?: number): FirmwarePacketPage;
+  /** Trusted execution port only. Exact original Text never enters public status. */
+  executionSource(slot: Slot, stageId: string): Readonly<FirmwareUpdateSource> | undefined;
 }
 
 export const FIRMWARE_SEGMENT_PREVIEW_LIMIT = 20;
@@ -180,7 +186,7 @@ const blockedReasons = (
   {
     code: 'bootloader-correlation-unavailable',
     message:
-      'Bootloader descriptors and reconnect correlation have no implemented, verified adapter.',
+      'The guarded production adapter has no qualified same-unit loader and reconnect profile; physical programming remains unavailable.',
   },
   {
     code: 'preservation-unverified',
@@ -194,7 +200,7 @@ const blockedReasons = (
   {
     code: 'writer-unavailable',
     message:
-      'Firmware programming is unavailable. This service only inspects files and previews packets.',
+      'This file-stage metadata does not authorize programming. Shared firmware update-status and review admission additionally require a qualified physical source and loader profile.',
   },
 ];
 async function sha256(bytes: Uint8Array): Promise<string> {
@@ -212,9 +218,16 @@ export function createFirmwareWorkspace(options: FirmwareWorkspaceOptions): Firm
   });
   const generations: Record<Slot, number> = { left: 0, right: 0 };
   const bundles: Partial<Record<Slot, FirmwareBundle>> = {};
+  const executionAssignments: Partial<Record<Slot, string>> = {};
+  const executionSources: Partial<Record<Slot, Readonly<FirmwareUpdateSource>>> = {};
   const tokens = new WeakMap<
     FirmwareInspectionToken,
-    { slot: Slot; binding: FirmwareDeviceBinding | undefined; generation: number }
+    {
+      slot: Slot;
+      binding: FirmwareDeviceBinding | undefined;
+      generation: number;
+      assignmentId?: string;
+    }
   >();
   const listeners = new Set<() => void>();
   let targetNotificationQueued = false;
@@ -302,7 +315,7 @@ export function createFirmwareWorkspace(options: FirmwareWorkspaceOptions): Firm
     const binding = cloneBinding(options.binding(slot)),
       generation = ++generations[slot];
     const token = Object.freeze({}) as FirmwareInspectionToken;
-    tokens.set(token, { slot, binding, generation });
+    tokens.set(token, { slot, binding, generation, assignmentId: options.assignmentId?.(slot) });
     // A cancelled chooser never leaves a superseded older hash showing busy.
     if (snapshot[slot].phase === 'inspecting')
       publish(
@@ -337,6 +350,9 @@ export function createFirmwareWorkspace(options: FirmwareWorkspaceOptions): Firm
           'Firmware inspection target was cleared, superseded, or belongs to another role/workspace',
         );
       tokens.delete(opaque);
+      // A new selected file invalidates an earlier execution review even when
+      // parsing/hash fails and its previous inspection metadata is retained.
+      delete executionSources[slot];
       const bound = captured.binding,
         token = captured.generation,
         previous = snapshot[slot].stage;
@@ -391,6 +407,24 @@ export function createFirmwareWorkspace(options: FirmwareWorkspaceOptions): Firm
           programming: { available: false, reasons: blockedReasons(bound, changed, target) },
         });
         bundles[slot] = bundle;
+        executionAssignments[slot] = captured.assignmentId;
+        if (bytes.byteLength <= MAX_FIRMWARE_EXECUTION_SOURCE_BYTES)
+          executionSources[slot] = immutable({
+            stageId: stage.id,
+            name,
+            text,
+            sha256: stage.sha256,
+            family: stage.family,
+            ...(contentProfile
+              ? {
+                  expectedAfter: {
+                    core: contentProfile.coreVersion,
+                    firmware: contentProfile.bundleVersion,
+                    source: 'known-content-profile' as const,
+                  },
+                }
+              : {}),
+          });
         publish(slot, { phase: 'ready', stage });
         return stage;
       } catch (error) {
@@ -409,9 +443,19 @@ export function createFirmwareWorkspace(options: FirmwareWorkspaceOptions): Firm
       checkedSlot(slot);
       generations[slot]++;
       delete bundles[slot];
+      delete executionSources[slot];
       publish(slot, { phase: 'empty' });
     },
     refreshTarget: (slot) => refreshTarget(slot, true),
+    executionSource: (slot, stageId) => {
+      checkedSlot(slot);
+      const source = executionSources[slot];
+      return source?.stageId === stageId &&
+        snapshot[slot].stage?.id === stageId &&
+        executionAssignments[slot] === options.assignmentId?.(slot)
+        ? source
+        : undefined;
+    },
     packetPreview: (slot, pass, offset = 0, limit = FIRMWARE_PACKET_PAGE_LIMIT) => {
       checkedSlot(slot);
       if (pass !== 0 && pass !== 1) throw new Error('Firmware preview pass must be 0 or 1');

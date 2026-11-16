@@ -4,6 +4,30 @@ Agents use the same controllers and validation as the human interface. Normal us
 
 The current registry contains **91 commands**, including stateless native parameter-wheel adjustments, shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
 
+## V44 shared firmware workflow
+
+Firmware actions extend the existing `fusion_device_read` namespace; the registry remains at **91 commands**. Normal file inspection, runtime identity, update review and execution admission are distinct. A filename, content profile, runtime version, loader product name or caller-supplied flag cannot qualify physical programming. The physical-profile registry is empty, so update review refuses unavailable physical routes before device I/O.
+
+```json
+{
+  "name": "fusion_device_read",
+  "arguments": {
+    "target": "both",
+    "firmware": { "action": "update-status" }
+  }
+}
+```
+
+- `update-status` returns the shared cached workflow. `update-history` reads owner-bound local journal history, with `offset` and `limit` (1–16). These are not device reads.
+- `update-review` requires exact current `stageIds` for every intended role. Left and Right retain independent files and captured identities.
+- `update-apply` requires that fixed `reviewId` and `confirm: true`; consumed operations replay their retained outcome rather than sending again. The human checkbox is bound to the exact shared review ID.
+- `update-discard` discards the identified pending review. `update-review-recovery` takes `recordId` and an explicit covered-role target; it uses the original journal source and before-images, not a newly staged file. A partial Both record may be reviewed for only its affected role.
+- `update-export` returns owner-admitted record pages using `recordId`, `offset` and `limit` (up to 16,384 characters). Raw source/images stay out of ordinary status summaries.
+
+Cold-page recovery may restore historical expected-role metadata only after trusted owner, execution-route, source and qualification checks. It refuses occupied or conflicting assignments, never opens a device by that metadata alone, and still requires independently qualified same-unit loader correlation. No command accepts a transport, physical profile, fabricated identity or arbitrary expected firmware version. Reference-simulation journals cannot become physical execution authority.
+
+Runtime entry sends fixed `40/00` once, retires the old transport and bounds host settlement to five seconds; a settled host send is not a target acknowledgement. Physical stream sends do not acquire a retry capability from reference simulations. There is no automatic cancel `0x41`, reentry, rollback or settings replay. Matching 43 known before/after images is not a full original-program or calibration backup. See [workflow and qualification](FIRMWARE-WORKFLOW-v44.md).
+
 ## V43 graph-Q and selected FIR transfer
 
 `fusion_filter_adjust` defaults to `surface: "field"`. Field Q/Q2/gain keeps its existing publication, continuous-human-versus-stateless-command distinction and AdditionalGain display/store behavior. An unchanged final displayed Text alone does not prove an unchanged canonical value: the gain postguard can change Text after a model callback.

@@ -43,7 +43,7 @@ export interface FirmwareJournalSource {
   expectedAfter?: {
     core?: string;
     firmware?: string;
-    source: 'bundle-record-metadata' | 'explicit-simulation';
+    source: 'bundle-record-metadata' | 'known-content-profile' | 'explicit-simulation';
   };
 }
 export interface FirmwareJournalStep {
@@ -172,7 +172,11 @@ const uuid = z.string().regex(/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i),
         .object({
           core: text.optional(),
           firmware: text.optional(),
-          source: z.enum(['bundle-record-metadata', 'explicit-simulation']),
+          source: z.enum([
+            'bundle-record-metadata',
+            'known-content-profile',
+            'explicit-simulation',
+          ]),
         })
         .strict()
         .refine(

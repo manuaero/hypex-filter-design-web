@@ -12,6 +12,11 @@ import {
 } from '../src/application/firmware-workspace';
 import { MAX_UI_FILE_BYTES } from '../src/application/file-budget';
 import type { Slot } from '../src/domain/model';
+import type {
+  FirmwareExecutionWorkflow,
+  FirmwareExecutionSnapshot,
+} from '../src/application/firmware-execution';
+import * as fileDownloads from '../src/domain/files';
 import {
   createUsbDescriptorVerifier,
   type UsbDescriptorVerifier,
@@ -322,4 +327,356 @@ it('disables the metadata chooser without a live binding or browser API and keep
   expect(host.textContent).toContain('Connect and identify the selected amplifier');
   expect(button('Recheck granted identity').disabled).toBe(true);
   expect(button('Program firmware').disabled).toBe(true);
+});
+
+const executionActor = {
+  owner: 'workspace:11111111-1111-4111-8111-111111111111',
+  scope: 'ui:firmware-panel',
+};
+function executionFixture() {
+  const workspace = createFirmwareWorkspace({ binding: () => undefined });
+  const listeners = new Set<() => void>();
+  let state: FirmwareExecutionSnapshot = {
+    files: workspace.getSnapshot(),
+    availability: {
+      left: { available: false, reasons: ['Physical loader profile unqualified.'] },
+      right: { available: false, reasons: ['Physical loader profile unqualified.'] },
+    },
+    update: {
+      busy: false,
+      phase: 'idle',
+      records: [],
+      availability: {
+        left: {
+          available: false,
+          qualifier: 'unqualified-physical',
+          route: 'physical',
+          qualified: false,
+          reasons: ['Unqualified'],
+        },
+        right: {
+          available: false,
+          qualifier: 'unqualified-physical',
+          route: 'physical',
+          qualified: false,
+          reasons: ['Unqualified'],
+        },
+      },
+    },
+  };
+  const workflow: FirmwareExecutionWorkflow = {
+    getSnapshot: () => state,
+    subscribe: (fn) => {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    status: vi.fn((context) => {
+      if (context.owner !== executionActor.owner) throw new Error('Foreign workspace');
+      return state;
+    }),
+    inspect: vi.fn(async (slot, source, name, _context, token) =>
+      workspace.inspect(slot, source, name, token),
+    ),
+    clear: vi.fn((target) => {
+      if (target === 'both') {
+        workspace.clear('left');
+        workspace.clear('right');
+      } else workspace.clear(target);
+    }),
+    review: vi.fn(),
+    reviewRecovery: vi.fn(),
+    apply: vi.fn(),
+    discard: vi.fn(),
+    hydrate: vi.fn(async () => {}),
+    history: vi.fn(() => ({ records: [], total: 0, nextOffset: null })),
+    exportRecord: vi.fn(),
+    exportPage: vi.fn(),
+    refreshContext: vi.fn(),
+    dispose: vi.fn(),
+  };
+  return {
+    workspace,
+    workflow,
+    publish: (patch: Partial<FirmwareExecutionSnapshot['update']>) => {
+      state = { ...state, update: { ...state.update, ...patch } };
+      listeners.forEach((fn) => fn());
+    },
+    enable: () => {
+      state = {
+        ...state,
+        availability: {
+          left: { available: true, reasons: [] },
+          right: { available: true, reasons: [] },
+        },
+      };
+      listeners.forEach((fn) => fn());
+    },
+  };
+}
+it('shows the actual shared physical availability and never queries a device or opens a permission chooser on entry', async () => {
+  const f = executionFixture();
+  await act(async () =>
+    root.render(
+      <FirmwarePanel
+        workspace={f.workspace}
+        execution={f.workflow}
+        slot="left"
+        getContext={() => executionActor}
+      />,
+    ),
+  );
+  expect(host.textContent).toContain('Physical programming is unavailable');
+  expect(host.textContent).toContain('Physical loader profile unqualified');
+  expect(button('Review firmware update').disabled).toBe(true);
+  expect(button('Program firmware').disabled).toBe(true);
+  expect(f.workflow.status).toHaveBeenCalled();
+  for (const fn of [f.workflow.review, f.workflow.apply, f.workflow.hydrate, f.workflow.inspect])
+    expect(fn).not.toHaveBeenCalled();
+});
+it('routes picker/Clear through the owner-admitted workflow and preserves the captured role', async () => {
+  const f = executionFixture();
+  await act(async () =>
+    root.render(
+      <FirmwarePanel
+        workspace={f.workspace}
+        execution={f.workflow}
+        slot="right"
+        getContext={() => executionActor}
+      />,
+    ),
+  );
+  await choose(file());
+  expect(f.workflow.inspect).toHaveBeenCalledWith(
+    'right',
+    text,
+    'fixture.hex',
+    executionActor,
+    expect.any(Object),
+  );
+  expect(f.workspace.getSnapshot().left.phase).toBe('empty');
+  await click('Clear staged firmware');
+  expect(f.workflow.clear).toHaveBeenCalledExactlyOnceWith('right', executionActor);
+});
+it('shows consumed outcomes published externally and exports journal filename/content/persistence at the download boundary', async () => {
+  const f = executionFixture(),
+    record = {
+      id: 'external-partial',
+      target: 'right',
+      phase: 'partial',
+      qualifier: 'qualified-physical',
+    } as never;
+  const raw = {
+    id: 'external-partial',
+    roles: [{ source: { text: 'EXACT SOURCE' }, before: { images: [{ hex: '00' }] } }],
+    exportPersistence: 'unavailable' as const,
+  };
+  vi.mocked(f.workflow.exportRecord).mockReturnValue(raw as never);
+  const download = vi.spyOn(fileDownloads, 'download').mockImplementation(() => {});
+  await act(async () =>
+    root.render(
+      <FirmwarePanel
+        workspace={f.workspace}
+        execution={f.workflow}
+        slot="right"
+        getContext={() => executionActor}
+      />,
+    ),
+  );
+  expect(host.querySelector('[aria-label="Firmware update outcome"]')).toBeNull();
+  await act(async () =>
+    f.publish({ records: [record], latestOutcome: { record, persistence: 'unavailable' } }),
+  );
+  expect(host.querySelector('[aria-label="Firmware update outcome"]')?.textContent).toContain(
+    'partial',
+  );
+  expect(host.querySelector('[aria-label="Firmware update outcome"]')?.textContent).toContain(
+    'persistence unavailable',
+  );
+  expect(host.textContent).not.toContain('EXACT SOURCE');
+  await click('Export firmware journal external-partial');
+  expect(download).toHaveBeenCalledExactlyOnceWith(
+    'firmware-journal-external-partial.json',
+    JSON.stringify(raw),
+    'application/json',
+  );
+});
+it('requires the exact shared review and explicit confirmation; owner changes hide private outcomes and disable actions', async () => {
+  const f = executionFixture();
+  const review = {
+    id: 'fixed-review',
+    target: 'both' as const,
+    qualifier: 'qualified-physical' as const,
+    roles: [],
+  };
+  await act(async () =>
+    root.render(
+      <FirmwarePanel
+        workspace={f.workspace}
+        execution={f.workflow}
+        slot="left"
+        getContext={() => executionActor}
+      />,
+    ),
+  );
+  await act(async () => {
+    f.enable();
+    f.publish({ activeReview: review });
+  });
+  expect(
+    (host.querySelector('[aria-label="Firmware program target"]') as HTMLSelectElement).value,
+  ).toBe('both');
+  expect(button('Program firmware').disabled).toBe(true);
+  const confirm = host.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  await act(async () => confirm.click());
+  await click('Program firmware');
+  expect(f.workflow.apply).toHaveBeenCalledExactlyOnceWith('fixed-review', executionActor, {
+    confirm: true,
+  });
+  await act(async () =>
+    root.render(
+      <FirmwarePanel
+        workspace={f.workspace}
+        execution={f.workflow}
+        slot="left"
+        getContext={() => ({ ...executionActor, owner: 'foreign' })}
+      />,
+    ),
+  );
+  expect(host.querySelector('[aria-label="Firmware update review"]')).toBeNull();
+  expect(button('Program firmware').disabled).toBe(true);
+  expect(host.textContent).toContain('Foreign workspace');
+});
+
+it('binds confirmation to the exact shared review ID so an external replacement requires its own confirmation', async () => {
+  const f = executionFixture();
+  await act(async () =>
+    root.render(
+      <FirmwarePanel
+        workspace={f.workspace}
+        execution={f.workflow}
+        slot="left"
+        getContext={() => executionActor}
+      />,
+    ),
+  );
+  await act(async () => {
+    f.enable();
+    f.publish({
+      activeReview: { id: 'review-A', target: 'left', qualifier: 'qualified-physical', roles: [] },
+    });
+  });
+  await act(async () => host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+  expect(button('Program firmware').disabled).toBe(false);
+  await act(async () =>
+    f.publish({
+      activeReview: { id: 'review-B', target: 'left', qualifier: 'qualified-physical', roles: [] },
+    }),
+  );
+  expect(host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false);
+  expect(button('Program firmware').disabled).toBe(true);
+  await click('Program firmware');
+  expect(f.workflow.apply).not.toHaveBeenCalled();
+  await act(async () => host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+  await click('Program firmware');
+  expect(f.workflow.apply).toHaveBeenCalledExactlyOnceWith('review-B', executionActor, {
+    confirm: true,
+  });
+});
+
+it('reviews and applies captured recovery while ordinary runtime and current file availability are absent', async () => {
+  const f = executionFixture(),
+    record = {
+      id: 'historical-partial',
+      target: 'right',
+      phase: 'partial',
+      qualifier: 'qualified-physical',
+    } as never;
+  vi.mocked(f.workflow.reviewRecovery).mockImplementation(async (id, target) => {
+    const review = {
+      id: 'recovery-review',
+      sourceRecordId: id,
+      target,
+      qualifier: 'qualified-physical' as const,
+      roles: [],
+    };
+    f.publish({ activeReview: review });
+    return review;
+  });
+  await act(async () =>
+    root.render(
+      <FirmwarePanel
+        workspace={f.workspace}
+        execution={f.workflow}
+        slot="left"
+        getContext={() => executionActor}
+      />,
+    ),
+  );
+  await act(async () => f.publish({ records: [record] }));
+  expect(f.workspace.getSnapshot().left.stage).toBeUndefined();
+  expect(f.workspace.getSnapshot().right.stage).toBeUndefined();
+  expect(button('Review firmware update').disabled).toBe(true);
+  expect(button('Review recovery historical-partial').disabled).toBe(false);
+  await click('Review recovery historical-partial');
+  expect(f.workflow.reviewRecovery).toHaveBeenCalledExactlyOnceWith(
+    'historical-partial',
+    'right',
+    executionActor,
+  );
+  await act(async () => host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+  expect(button('Program firmware').disabled).toBe(false);
+  await click('Program firmware');
+  expect(f.workflow.apply).toHaveBeenCalledExactlyOnceWith('recovery-review', executionActor, {
+    confirm: true,
+  });
+});
+
+it('lets a partial Both journal recover only the selected original role without re-entering its completed peer', async () => {
+  const f = executionFixture();
+  const record = {
+    id: 'partial-both',
+    target: 'both',
+    phase: 'partial',
+    qualifier: 'qualified-physical',
+    roles: [
+      {
+        slot: 'left',
+        binding: { serial: 'SYNTHETIC-LEFT' },
+        steps: [{ id: 'runtime', state: 'verified', attempted: true }],
+      },
+      {
+        slot: 'right',
+        binding: { serial: 'SYNTHETIC-RIGHT' },
+        steps: [{ id: 'runtime', state: 'unconfirmed', attempted: true }],
+      },
+    ],
+  } as never;
+  await act(async () =>
+    root.render(
+      <FirmwarePanel
+        workspace={f.workspace}
+        execution={f.workflow}
+        slot="left"
+        getContext={() => executionActor}
+      />,
+    ),
+  );
+  await act(async () => f.publish({ records: [record] }));
+  expect(host.textContent).toContain('Left · SYNTHETIC-LEFT · runtime: verified');
+  expect(host.textContent).toContain('Right · SYNTHETIC-RIGHT · runtime: unconfirmed');
+  const target = host.querySelector<HTMLSelectElement>(
+    '[aria-label="Firmware recovery target partial-both"]',
+  )!;
+  await act(async () => {
+    target.value = 'right';
+    target.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await click('Review recovery partial-both');
+  expect(f.workflow.reviewRecovery).toHaveBeenCalledExactlyOnceWith(
+    'partial-both',
+    'right',
+    executionActor,
+  );
+  expect(f.workflow.review).not.toHaveBeenCalled();
+  expect(f.workflow.apply).not.toHaveBeenCalled();
 });

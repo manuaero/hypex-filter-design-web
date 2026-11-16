@@ -2,6 +2,22 @@ export interface Transport {
   exchange(payload: Uint8Array, timeout?: number): Promise<Uint8Array>;
   close(): Promise<void>;
 }
+/** Host send settlement only. Native40 entry can return stale TX data, so this
+ * timeout is never a target acknowledgement or evidence of loader identity. */
+export const FIRMWARE_ENTRY_SEND_TIMEOUT_MS = 5000;
+function runWireFence(fence: () => void) {
+  const returned = (fence as () => unknown)();
+  if (
+    returned !== null &&
+    (typeof returned === 'object' || typeof returned === 'function') &&
+    typeof (returned as { then?: unknown }).then === 'function'
+  ) {
+    // A mistakenly async callback must not authorize a send before it settles.
+    // Observe its eventual rejection while refusing this unattempted request.
+    void Promise.resolve(returned).catch(() => {});
+    throw new Error('The HID wire fence must finish synchronously');
+  }
+}
 export class AsyncQueue {
   private tail: Promise<unknown> = Promise.resolve();
   run<T>(task: () => Promise<T>): Promise<T> {
@@ -62,26 +78,106 @@ export class WebHidTransport implements Transport {
     p.resolve(b);
   };
   exchange(payload: Uint8Array, timeout = 1200): Promise<Uint8Array> {
+    return this.exchangeQueued(payload, timeout);
+  }
+  /** A final synchronous assignment/epoch fence inside this interface's queue.
+   * Request IDs are local routing metadata; unsequenced target replies still
+   * require an independently qualified physical delivery profile. */
+  exchangeWithFence(
+    payload: Uint8Array,
+    timeout: number,
+    beforeWireSend: () => void,
+  ): Promise<Uint8Array> {
+    if (
+      typeof beforeWireSend !== 'function' ||
+      !Number.isSafeInteger(timeout) ||
+      timeout <= 0 ||
+      timeout > 0x7fffffff
+    )
+      return Promise.reject(new Error('A synchronous HID send fence and timeout are required'));
+    return this.exchangeQueued(payload, timeout, beforeWireSend);
+  }
+  private exchangeQueued(
+    payload: Uint8Array,
+    timeout: number,
+    beforeWireSend?: () => void,
+  ): Promise<Uint8Array> {
     return this.queue.run(async () => {
       if (this.fault) throw this.fault;
       if (!this.device.opened || payload.length !== 64)
         throw new Error('HID device is closed or packet size invalid');
+      const request = new Uint8Array(payload);
+      // There is no await between this callback and sendReport. A refusal has
+      // no pending request/timer and does not poison an unattempted transport.
+      if (beforeWireSend) runWireFence(beforeWireSend);
       return new Promise<Uint8Array>((resolve, reject) => {
         const timer = setTimeout(
           () => this.fail(new Error('USB reply timed out; reconnect before continuing')),
           timeout,
         );
-        this.pending = { command: payload[0], resolve, reject, timer };
-        this.device
-          .sendReport(0, new Uint8Array(payload))
-          .catch((e) => this.fail(new Error(String(e))));
+        this.pending = { command: request[0], resolve, reject, timer };
+        try {
+          this.device.sendReport(0, request).catch((e) => this.fail(new Error(String(e))));
+        } catch (error) {
+          this.fail(new Error(String(error)));
+        }
       });
     });
   }
-  async close() {
-    this.fail(new Error('USB session closed'));
+  /** Fixed runtime40/00 transition, not an ordinary request/reply exchange.
+   * This method does not grant firmware qualification or discover a loader.
+   * A qualified owner must reserve the session and supply the final wire fence.
+   * The old epoch is retired before exactly one host send; no automatic retry. */
+  transitionToBootloader(
+    payload: Uint8Array,
+    beforeWireSend: () => void,
+  ): Promise<'sent' | 'unconfirmed'> {
+    const request = new Uint8Array(payload);
+    return this.queue.run(async () => {
+      if (this.fault) throw this.fault;
+      if (
+        request.length !== 64 ||
+        request[0] !== 0x40 ||
+        request.subarray(1).some((byte) => byte !== 0) ||
+        typeof beforeWireSend !== 'function'
+      )
+        throw new Error('Firmware entry requires the fixed64-byte40/00 frame and wire fence');
+      if (!this.device.opened) throw new Error('HID device is closed before firmware entry');
+      runWireFence(beforeWireSend);
+      this.fail(
+        new Error(
+          'Runtime USB connection retired for firmware transition; reconnect before continuing',
+        ),
+      );
+      this.removeListeners();
+      return new Promise<'sent' | 'unconfirmed'>((resolve) => {
+        let settled = false;
+        const finish = (outcome: 'sent' | 'unconfirmed') => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(outcome);
+        };
+        const timer = setTimeout(() => finish('unconfirmed'), FIRMWARE_ENTRY_SEND_TIMEOUT_MS);
+        try {
+          // A fulfilled host promise is not proof of a target ACK or transition.
+          this.device.sendReport(0, request).then(
+            () => finish('sent'),
+            () => finish('unconfirmed'),
+          );
+        } catch {
+          finish('unconfirmed');
+        }
+      });
+    });
+  }
+  private removeListeners() {
     this.device.removeEventListener('inputreport', this.receive);
     navigator.hid.removeEventListener('disconnect', this.disconnect);
+  }
+  async close() {
+    this.fail(new Error('USB session closed'));
+    this.removeListeners();
     if (this.device.opened) await this.device.close();
   }
 }

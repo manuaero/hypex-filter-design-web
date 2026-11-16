@@ -106,6 +106,15 @@ import {
 import FirmwarePanel from './firmware-panel';
 import { createFirmwareWorkspace } from '../application/firmware-workspace';
 import {
+  createFirmwareExecutionWorkflow,
+  planFirmwareRecoveryAssignments,
+  type FirmwareAssignmentLease,
+  type FirmwareExecutionWorkflow,
+} from '../application/firmware-execution';
+import { createFirmwareUpdateCoordinator } from '../hardware/firmware-update';
+import { createFirmwareWebHidUpdateAdapter } from '../hardware/firmware-webhid-adapter';
+import type { FirmwareJournalBinding } from '../application/firmware-update-storage';
+import {
   createFirmwareRuntimeController,
   FirmwareRuntimeDiagnosticError,
 } from '../application/firmware-runtime';
@@ -886,6 +895,8 @@ export default function Studio() {
     pendingFile = useRef<((text: string, name: string) => void) | null>(null),
     liveRef = useRef(live);
   liveRef.current = live;
+  const firmwareAssignments = useRef<Partial<Record<Slot, FirmwareAssignmentLease>>>({});
+  const firmwareAssignmentEpoch = useRef(0);
   const firmwareCandidates = useRef<
     Partial<
       Record<
@@ -1164,6 +1175,7 @@ export default function Studio() {
   const firmwareWorkspace = useMemo(
     () =>
       createFirmwareWorkspace({
+        assignmentId: (slot) => firmwareAssignments.current[slot]?.assignmentId,
         descriptor: (slot) => descriptorVerifier.getSnapshot()[slot].proof,
         binding: (slot) => {
           const identity = liveRef.current[slot]?.identity;
@@ -1179,6 +1191,123 @@ export default function Studio() {
       }),
     [descriptorVerifier],
   );
+  const firmwareExecution = useMemo(() => {
+    let workflow: FirmwareExecutionWorkflow;
+    const binding = (slot: Slot): FirmwareJournalBinding | undefined => {
+      const lease = firmwareAssignments.current[slot],
+        connection = liveRef.current[slot],
+        proof = descriptorVerifier.getSnapshot()[slot].proof;
+      if (
+        !lease ||
+        !connection ||
+        connection.connectionId !== lease.connectionId ||
+        connection.identity.serial !== lease.serial ||
+        !proof ||
+        proof.family !== 'FUSION32' ||
+        JSON.stringify(proof.binding) !==
+          JSON.stringify({
+            serial: connection.identity.serial,
+            product: connection.identity.product,
+            core: connection.identity.core,
+            firmware: connection.identity.firmware,
+          })
+      )
+        return undefined;
+      return {
+        assignmentId: lease.assignmentId,
+        connectionId: lease.connectionId,
+        connectionEpoch: lease.connectionEpoch,
+        serial: lease.serial,
+        hidSerial: proof.hidSerial,
+        family: proof.family,
+        product: connection.identity.product,
+        core: connection.identity.core,
+        firmware: connection.identity.firmware,
+      };
+    };
+    const coordinator = createFirmwareUpdateCoordinator({
+      adapter: createFirmwareWebHidUpdateAdapter({
+        capture: (captured) => {
+          const current = binding(capturedSlot(captured));
+          if (!current || JSON.stringify(current) !== JSON.stringify(captured)) return undefined;
+          const slot = capturedSlot(captured),
+            connection = liveRef.current[slot]!;
+          return {
+            binding: current,
+            device: connection.device,
+            session: connection.session,
+            descriptor: descriptorVerifier.getSnapshot()[slot].proof,
+          };
+        },
+        isCurrent: (captured) =>
+          Object.values(firmwareAssignments.current).some(
+            (lease) =>
+              lease.assignmentId === captured.assignmentId && lease.serial === captured.serial,
+          ),
+        assignedDevices: () =>
+          Object.values(liveRef.current).map((connection) => connection.device),
+        onRuntimeRetired: (captured) => {
+          const slot = SLOTS.find(
+            (role) => firmwareAssignments.current[role]?.assignmentId === captured.assignmentId,
+          );
+          if (!slot || liveRef.current[slot]?.connectionId !== captured.connectionId) return;
+          const next = { ...liveRef.current };
+          delete next[slot];
+          liveRef.current = next;
+          setLive(next);
+          descriptorVerifier.clear(slot);
+          deviceAuth.clear(slot);
+        },
+      }),
+      binding,
+      prepareRecovery: (roles) => {
+        const planned = planFirmwareRecoveryAssignments(
+          firmwareAssignments.current,
+          Object.fromEntries(
+            Object.entries(liveRef.current).map(([slot, connection]) => [
+              slot,
+              connection.identity.serial,
+            ]),
+          ),
+          roles,
+        );
+        // Validate all roles before publishing this metadata map. No interface
+        // is opened or claimed, and the historical bindings remain unchanged.
+        firmwareAssignments.current = planned;
+        firmwareAssignmentEpoch.current = Math.max(
+          firmwareAssignmentEpoch.current,
+          ...roles.map((role) => role.binding.connectionEpoch),
+        );
+        workflow.refreshContext();
+      },
+      assignmentId: (slot) => firmwareAssignments.current[slot]?.assignmentId,
+      source: (slot) => {
+        const id = firmwareWorkspace.getSnapshot()[slot].stage?.id;
+        return id ? firmwareWorkspace.executionSource(slot, id) : undefined;
+      },
+    });
+    function capturedSlot(captured: Readonly<FirmwareJournalBinding>): Slot {
+      const slot = SLOTS.find(
+        (role) => firmwareAssignments.current[role]?.assignmentId === captured.assignmentId,
+      );
+      if (!slot) throw new Error('Firmware role assignment changed');
+      return slot;
+    }
+    workflow = createFirmwareExecutionWorkflow({
+      workspace: firmwareWorkspace,
+      coordinator,
+      assignmentId: (slot) => firmwareAssignments.current[slot]?.assignmentId,
+    });
+    return workflow;
+  }, [firmwareWorkspace, descriptorVerifier]);
+  const firmwareExecutionLifetime = useRef(0);
+  useEffect(() => {
+    const lifetime = ++firmwareExecutionLifetime.current;
+    return () =>
+      queueMicrotask(() => {
+        if (firmwareExecutionLifetime.current === lifetime) firmwareExecution.dispose();
+      });
+  }, [firmwareExecution]);
   const firmwareRuntime = useMemo(
     () =>
       createFirmwareRuntimeController(
@@ -1224,6 +1353,7 @@ export default function Studio() {
     nativeLimiter.refreshBindings();
     nativeMixer.refreshBindings();
     firmwareRuntime.refreshBindings();
+    firmwareExecution.refreshContext();
     noiseController.refreshBindings();
   }, [
     live,
@@ -1236,6 +1366,7 @@ export default function Studio() {
     nativeLimiter,
     nativeMixer,
     firmwareRuntime,
+    firmwareExecution,
     noiseController,
   ]);
   const revealInspector = () => {
@@ -1460,6 +1591,8 @@ export default function Studio() {
           ? 'No previously permitted amplifier found. Use Connect once to grant browser access.'
           : 'No amplifier selected',
       );
+    delete firmwareAssignments.current[slot];
+    firmwareExecution.refreshContext();
     await operate(`Connecting ${slot}`, async () => {
       if (liveRef.current[slot])
         throw new Error(`The ${slot} amplifier role was assigned while choosing a device.`);
@@ -1485,6 +1618,12 @@ export default function Studio() {
           const next = {
             ...liveRef.current,
             [slot]: { session, identity, status, device, connectionId: crypto.randomUUID() },
+          };
+          firmwareAssignments.current[slot] = {
+            assignmentId: crypto.randomUUID(),
+            connectionId: next[slot]!.connectionId,
+            connectionEpoch: ++firmwareAssignmentEpoch.current,
+            serial: identity.serial,
           };
           firmwareRemembered.current[slot] = {
             key: crypto.randomUUID(),
@@ -1990,6 +2129,8 @@ export default function Studio() {
     setAuthView('closed');
   }, [w.slot, selectedLive?.connectionId]);
   const disconnectAmplifier = async (slot: Slot) => {
+    delete firmwareAssignments.current[slot];
+    firmwareExecution.refreshContext();
     const connection = liveRef.current[slot];
     if (!connection) return;
     let noiseFailure: unknown;
@@ -2043,6 +2184,7 @@ export default function Studio() {
     capture: audioAccess?.controller,
     firmware: firmwareWorkspace,
     firmwareRuntime,
+    firmwareExecution,
     noise: noiseController,
     descriptorVerifier,
     sources: projectSources,
@@ -4056,6 +4198,7 @@ export default function Studio() {
               <FirmwarePanel
                 workspace={firmwareWorkspace}
                 runtime={firmwareRuntime}
+                execution={firmwareExecution}
                 getContext={() =>
                   (projectSourceContext.current ??= workspaceAuthority.localContext('ui'))
                 }

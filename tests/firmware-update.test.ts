@@ -1,8 +1,9 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { parseFirmwareBundle } from '../src/domain/firmware';
 import {
   createFirmwareUpdateCoordinator,
   createReferenceFirmwareUpdateAdapter,
+  createGuardedPhysicalFirmwareUpdateAdapter,
   FirmwareUpdateError,
   type FirmwareReferenceUpdatePort,
   type FirmwareUpdateSource,
@@ -22,6 +23,8 @@ import {
   type FirmwareJournalBefore,
   type FirmwareJournalEnvelope,
   type FirmwareJournalStore,
+  type FirmwareJournalRecord,
+  FIRMWARE_JOURNAL_STEPS,
 } from '../src/application/firmware-update-storage';
 import type { Slot } from '../src/domain/model';
 const text = [
@@ -242,6 +245,177 @@ async function fixture() {
   };
 }
 
+function retainedCrash(
+  f: Awaited<ReturnType<typeof fixture>>,
+  intent: 'entry' | 'loader' | 'prepared' = 'entry',
+  qualifier: FirmwareJournalRecord['qualifier'] = 'reference-simulation',
+): FirmwareJournalRecord {
+  const { stageId: _stage, ...source } = f.sources.left;
+  return {
+    id: crypto.randomUUID(),
+    owner: actor.owner,
+    scope: actor.scope,
+    target: 'left',
+    qualifier,
+    createdAt: 1,
+    updatedAt: 1,
+    phase: intent === 'prepared' ? 'prepared' : 'running',
+    roles: [
+      {
+        slot: 'left',
+        binding: structuredClone(f.bindings.left),
+        source: {
+          ...structuredClone(source),
+          expectedAfter: { core: '5.5', firmware: '5.82', source: 'bundle-record-metadata' },
+        },
+        before: snapshot(f.panels.left),
+        steps: FIRMWARE_JOURNAL_STEPS.map((id) => ({
+          id,
+          state: id === intent ? 'intent' : 'pending',
+          attempted: false,
+        })),
+      },
+    ],
+  };
+}
+
+it.each(['entry', 'loader', 'prepared'] as const)(
+  'distinguishes crash-ambiguous %s intent from readonly/prepared no-attempt history',
+  async (intent) => {
+    const f = await fixture(),
+      crash = retainedCrash(f, intent);
+    f.stored.records.push(crash);
+    await f.controller.hydrate(actor);
+    const preserved = structuredClone(crash),
+      review = await f.controller.review('left', actor);
+    if (intent === 'entry') {
+      await expect(f.controller.apply(review.id, actor, { confirm: true })).rejects.toThrow(
+        /interrupted|recovery/i,
+      );
+      expect(f.audit.entries).toEqual([]);
+      expect(f.loaders.left.requests).toEqual([]);
+    } else
+      expect((await f.controller.apply(review.id, actor, { confirm: true })).phase).toBe(
+        'complete',
+      );
+    expect(f.stored.records[0]).toEqual(preserved);
+    expect(f.stored.records[0].roles[0].steps.every((step) => step.attempted === false)).toBe(true);
+  },
+);
+
+it.each(['reference-simulation', 'qualified-physical'] as const)(
+  'never promotes or demotes a %s recovery receipt into another execution route',
+  async (historicalQualifier) => {
+    const f = await fixture(),
+      crash = retainedCrash(f, 'entry', historicalQualifier);
+    f.stored.records.push(crash);
+    f.mode.left = 'loader';
+    const adapter =
+      historicalQualifier === 'qualified-physical'
+        ? f.options.adapter
+        : createGuardedPhysicalFirmwareUpdateAdapter({
+            ...f.port,
+            availability: () => ({
+              available: true,
+              route: 'physical',
+              qualified: true,
+              qualifier: 'qualified-physical',
+              reasons: [],
+            }),
+          });
+    const prepareRecovery = vi.fn(),
+      controller = createFirmwareUpdateCoordinator({ ...f.options, adapter, prepareRecovery }),
+      reserve = vi.spyOn(f.port, 'reserve');
+    await controller.hydrate(actor);
+    const before = structuredClone(f.stored.records);
+    await expect(controller.reviewRecovery(crash.id, 'left', actor)).rejects.toThrow(
+      /execution route|qualifier/i,
+    );
+    expect(reserve).not.toHaveBeenCalled();
+    expect(prepareRecovery).not.toHaveBeenCalled();
+    expect(f.audit.entries).toEqual([]);
+    expect(f.loaders.left.requests).toEqual([]);
+    expect(f.stored.records).toEqual(before);
+  },
+);
+
+it('adopts only validated historical metadata after cold hydration and captures the new invalidation generation before loader recovery', async () => {
+  const f = await fixture(),
+    crash = retainedCrash(f),
+    original = structuredClone(crash);
+  f.stored.records.push(crash);
+  f.mode.left = 'loader';
+  delete (f.assignments as Partial<typeof f.assignments>).left;
+  let controller: ReturnType<typeof createFirmwareUpdateCoordinator>;
+  const prepareRecovery = vi.fn(
+    (roles: readonly { slot: Slot; binding: FirmwareJournalBinding }[]) => {
+      expect(f.audit.reservations).toBe(0);
+      expect(f.loaders.left.requests).toEqual([]);
+      expect(Object.isFrozen(roles)).toBe(true);
+      expect(Object.isFrozen(roles[0].binding)).toBe(true);
+      for (const role of roles) f.assignments[role.slot] = role.binding.assignmentId;
+      // The facade refreshes its assignment baseline before the new review is
+      // captured. This intentional old-context invalidation must not kill it.
+      controller.invalidateReview();
+    },
+  );
+  controller = createFirmwareUpdateCoordinator({
+    ...f.options,
+    source: () => undefined,
+    binding: () => undefined,
+    prepareRecovery,
+  });
+  await controller.hydrate(actor);
+  await expect(controller.reviewRecovery(crash.id, 'left', other)).rejects.toThrow(/workspace/);
+  expect(prepareRecovery).not.toHaveBeenCalled();
+  const review = await controller.reviewRecovery(crash.id, 'left', actor);
+  expect(prepareRecovery).toHaveBeenCalledOnce();
+  expect(prepareRecovery.mock.calls[0][0]).toEqual([
+    { slot: 'left', binding: original.roles[0].binding },
+  ]);
+  expect(f.audit.entries).toEqual([]);
+  expect((await controller.apply(review.id, actor, { confirm: true })).phase).toBe('complete');
+  expect(f.audit.entries).toEqual([]);
+  expect(f.stored.records[0]).toEqual(original);
+  expect(f.stored.records[1].roles[0].steps[0]).toMatchObject({
+    state: 'skipped',
+    attempted: false,
+  });
+});
+
+it('validates historical content before adoption and refuses asynchronous adoption before reserving any interface', async () => {
+  const f = await fixture(),
+    crash = retainedCrash(f);
+  f.stored.records.push(crash);
+  const invalidSource = structuredClone(crash);
+  invalidSource.roles[0].source.expectedAfter!.source = 'known-content-profile';
+  f.stored.records[0] = invalidSource;
+  const prepareRecovery = vi.fn(),
+    reserve = vi.spyOn(f.port, 'reserve'),
+    invalid = createFirmwareUpdateCoordinator({ ...f.options, prepareRecovery });
+  await invalid.hydrate(actor);
+  await expect(invalid.reviewRecovery(crash.id, 'left', actor)).rejects.toThrow(
+    /known content profile/i,
+  );
+  expect(prepareRecovery).not.toHaveBeenCalled();
+  f.stored.records[0] = crash;
+  const asynchronous = createFirmwareUpdateCoordinator({
+    ...f.options,
+    prepareRecovery: async () => {
+      throw new Error('Synthetic rejected asynchronous adoption');
+    },
+  });
+  await asynchronous.hydrate(actor);
+  await expect(asynchronous.reviewRecovery(crash.id, 'left', actor)).rejects.toThrow(
+    /synchronous/i,
+  );
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  expect(reserve).not.toHaveBeenCalled();
+  expect(f.audit.entries).toEqual([]);
+  expect(f.loaders.left.requests).toEqual([]);
+  expect(f.stored.records).toEqual([crash]);
+});
+
 it('reviews both roles read-only, captures all known areas without credentials, and exposes bounded metadata only', async () => {
   const f = await fixture(),
     review = await f.controller.review('both', actor);
@@ -402,6 +576,28 @@ it('allows explicit same-owner correlated bootloader recovery under a new token 
   expect(result.roles[0].steps[0]).toMatchObject({ state: 'skipped', attempted: false });
   expect(f.stored.records[0]).toEqual(original);
   expect(f.audit.entries).toEqual(['right']);
+});
+
+it('explicit source invalidation during recovery fences every future stream sender while keeping the original receipt', async () => {
+  const f = await fixture(),
+    review = await f.controller.review('left', actor);
+  f.loaders.left.fault = { at: 0, kind: 'lost-ack' };
+  await expect(f.controller.apply(review.id, actor, { confirm: true })).rejects.toBeInstanceOf(
+    FirmwareUpdateError,
+  );
+  const original = structuredClone(f.stored.records[0]);
+  const recovery = await f.controller.reviewRecovery(review.id, 'left', ui);
+  const before = f.loaders.left.requests.length;
+  f.afterWrite = (value) => {
+    const latest = value.records.at(-1)!;
+    if (latest.sourceRecordId === review.id && latest.roles[0].steps[2].state === 'intent')
+      f.controller.invalidateReview();
+  };
+  await expect(f.controller.apply(recovery.id, ui, { confirm: true })).rejects.toBeInstanceOf(
+    FirmwareUpdateError,
+  );
+  expect(f.loaders.left.requests).toHaveLength(before);
+  expect(f.stored.records[0]).toEqual(original);
 });
 
 it('does not mistake exit43 or a different normal-mode device for successful reconnect', async () => {

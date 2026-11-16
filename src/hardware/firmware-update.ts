@@ -4,6 +4,7 @@ import {
   describeFirmwarePacketPlan,
   type FirmwareBundle,
 } from '../domain/firmware';
+import { lookupKnownFirmwareProfile } from '../domain/firmware-profile';
 import {
   parseExecutionPrincipal,
   type ToolExecutionContext,
@@ -31,6 +32,7 @@ import {
   type FirmwareBootloaderIdentity,
   type FirmwareProgramChannel,
   type FirmwareProgramResult,
+  type FirmwareExecutionQualifier,
 } from './firmware-program';
 
 export type FirmwareUpdateTarget = Slot | 'both';
@@ -47,11 +49,15 @@ export interface FirmwareEntryContext {
   timeoutMs: 5000;
   beforeWireSend(): void;
 }
-/** All methods are injected. There is intentionally no navigator/HID factory.
- * A future physical adapter must prove entry, correlation, preservation and
- * recovery before gaining a private coordinator capability. */
+/** Coordinator port contract shared by explicit reference fixtures and the
+ * separate guarded WebHID adapter. Physical I/O requires its source-issued
+ * profile; the production registry currently issues no such profile. */
 export interface FirmwareReferenceUpdatePort {
-  reserve<T>(bindings: readonly FirmwareJournalBinding[], work: () => Promise<T>): Promise<T>;
+  reserve<T>(
+    bindings: readonly FirmwareJournalBinding[],
+    work: () => Promise<T>,
+    hooks?: { signal?: AbortSignal; assertCurrent?(): void },
+  ): Promise<T>;
   preflightRuntime(binding: FirmwareJournalBinding): Promise<FirmwareJournalBinding>;
   captureBefore(binding: FirmwareJournalBinding): Promise<FirmwareJournalBefore>;
   enterBootloader(
@@ -68,11 +74,34 @@ export interface FirmwareReferenceUpdatePort {
   ): Promise<FirmwareJournalBinding>;
   captureAfter(binding: FirmwareJournalBinding): Promise<FirmwareJournalBefore>;
 }
+export interface FirmwareUpdateAvailability {
+  available: boolean;
+  qualifier: FirmwareExecutionQualifier | 'unqualified-physical';
+  route: 'reference' | 'physical';
+  qualified: boolean;
+  reasons: readonly string[];
+}
+export interface FirmwarePhysicalUpdatePort extends FirmwareReferenceUpdatePort {
+  availability(
+    binding?: Readonly<FirmwareJournalBinding>,
+    source?: Readonly<FirmwareJournalSource>,
+  ): FirmwareUpdateAvailability;
+}
 declare const adapterBrand: unique symbol;
 export interface FirmwareUpdateAdapter {
   readonly [adapterBrand]: true;
 }
-const adapters = new WeakMap<FirmwareUpdateAdapter, FirmwareReferenceUpdatePort>();
+const adapters = new WeakMap<
+  FirmwareUpdateAdapter,
+  {
+    port: FirmwareReferenceUpdatePort;
+    qualifier: FirmwareExecutionQualifier;
+    availability(
+      binding?: Readonly<FirmwareJournalBinding>,
+      source?: Readonly<FirmwareJournalSource>,
+    ): FirmwareUpdateAvailability;
+  }
+>();
 /** Only trusted source code can construct this reference capability. It is not
  * a serialized/tool-settable qualification and cannot enable a physical route. */
 export function createReferenceFirmwareUpdateAdapter(
@@ -92,13 +121,50 @@ export function createReferenceFirmwareUpdateAdapter(
   )
     throw new Error('Invalid injected firmware update port');
   const adapter = Object.freeze({}) as FirmwareUpdateAdapter;
-  adapters.set(adapter, port);
+  adapters.set(adapter, {
+    port,
+    qualifier: 'reference-simulation',
+    availability: () => ({
+      available: true,
+      qualifier: 'reference-simulation',
+      route: 'reference',
+      qualified: true,
+      reasons: [],
+    }),
+  });
+  return adapter;
+}
+/** Registers a guarded production route, not a qualification. The private port
+ * must enforce its source-owned physical profile before every I/O method. */
+export function createGuardedPhysicalFirmwareUpdateAdapter(
+  port: FirmwarePhysicalUpdatePort,
+): FirmwareUpdateAdapter {
+  if (
+    !port ||
+    ![
+      'reserve',
+      'preflightRuntime',
+      'captureBefore',
+      'enterBootloader',
+      'discoverBootloader',
+      'discoverRuntime',
+      'captureAfter',
+      'availability',
+    ].every((key) => typeof port[key as keyof FirmwarePhysicalUpdatePort] === 'function')
+  )
+    throw new Error('Invalid guarded physical firmware port');
+  const adapter = Object.freeze({}) as FirmwareUpdateAdapter;
+  adapters.set(adapter, {
+    port,
+    qualifier: 'qualified-physical',
+    availability: (binding, source) => port.availability(binding, source),
+  });
   return adapter;
 }
 export interface FirmwareUpdateReview {
   id: string;
   target: FirmwareUpdateTarget;
-  qualifier: 'reference-simulation';
+  qualifier: FirmwareExecutionQualifier;
   sourceRecordId?: string;
   roles: {
     slot: Slot;
@@ -112,6 +178,7 @@ export interface FirmwareUpdateReview {
 }
 export interface FirmwareUpdateSnapshot {
   busy: boolean;
+  availability: Readonly<Record<Slot, FirmwareUpdateAvailability>>;
   phase: 'idle' | 'ready' | 'busy' | 'error';
   activeReview?: FirmwareUpdateReview;
   records: ReturnType<typeof firmwareUpdateRecordSummary>[];
@@ -127,6 +194,11 @@ export interface FirmwareUpdateOptions {
   binding(slot: Slot): FirmwareJournalBinding | undefined;
   /** Remains stable during an expected USB disconnect, changes on role reassignment. */
   assignmentId(slot: Slot): string | undefined;
+  /** Trusted, synchronous metadata-only adoption after validated recovery
+   * eligibility. Never acquires an interface or substitutes loader correlation. */
+  prepareRecovery?(
+    roles: readonly Readonly<{ slot: Slot; binding: FirmwareJournalBinding }>[],
+  ): void;
   journal?: FirmwareJournalStore;
   withLock?<T>(name: string, work: () => Promise<T>): Promise<T>;
   now?: () => number;
@@ -136,6 +208,9 @@ export interface FirmwareUpdateOptions {
 export interface FirmwareUpdateCoordinator {
   getSnapshot(): Readonly<FirmwareUpdateSnapshot>;
   subscribe(listener: () => void): () => void;
+  availability(target: FirmwareUpdateTarget): Readonly<FirmwareUpdateAvailability>;
+  /** Trusted binding/source lifecycle hook; never performs hardware I/O. */
+  invalidateReview(): void;
   hydrate(context: ToolExecutionContext): Promise<void>;
   status(context: ToolExecutionContext): Readonly<FirmwareUpdateSnapshot>;
   review(
@@ -214,6 +289,17 @@ function checkedSource(source: FirmwareUpdateSource): {
     throw new FirmwareUpdateError(
       'Firmware execution requires explicit reference or proved content version expectations',
     );
+  if (copy.expectedAfter.source === 'known-content-profile') {
+    const profile = lookupKnownFirmwareProfile(copy.sha256);
+    if (
+      !profile ||
+      profile.coreVersion !== copy.expectedAfter.core ||
+      profile.bundleVersion !== copy.expectedAfter.firmware
+    )
+      throw new FirmwareUpdateError(
+        'Expected firmware versions differ from the exact known content profile',
+      );
+  }
   return { source: copy, bundle };
 }
 function checkedBefore(input: FirmwareJournalBefore): FirmwareJournalBefore {
@@ -249,6 +335,23 @@ function changedImages(before: FirmwareJournalBefore, after: FirmwareJournalBefo
       return false;
     })
     .map((image) => image.id);
+}
+function sameBeforeProjection(
+  before: FirmwareJournalBefore,
+  fresh: FirmwareJournalBefore,
+): boolean {
+  const manifest = (value: FirmwareJournalBefore) =>
+    value.images.map(({ id, kind, address, compareMaskHex }) => ({
+      id,
+      kind,
+      address,
+      compareMaskHex,
+    }));
+  return (
+    same(manifest(before), manifest(fresh)) &&
+    same(before.gaps, fresh.gaps) &&
+    changedImages(before, fresh).length === 0
+  );
 }
 export function firmwareUpdateRecordSummary(record: FirmwareJournalRecord) {
   return freeze({
@@ -287,16 +390,41 @@ async function browserLock<T>(name: string, work: () => Promise<T>): Promise<T> 
 }
 let activeUpdate: object | undefined;
 
-/** Complete injected workflow, with no physical adapter registration. Normal
- * WebHID transport and firmware staging remain untouched and cannot invoke it. */
+/** Shared journaled workflow. Reference and guarded physical routes are
+ * separately registered; unavailable physical profiles permit cached history
+ * but refuse review/execution before hardware acquisition. */
 export function createFirmwareUpdateCoordinator(
   options: FirmwareUpdateOptions,
 ): FirmwareUpdateCoordinator {
-  const port = adapters.get(options.adapter);
-  if (!port)
+  const registered = adapters.get(options.adapter),
+    port = registered?.port;
+  if (!registered || !port)
     throw new FirmwareUpdateError(
       'Firmware adapter is unqualified; no production writer is enabled',
     );
+  const registration = registered,
+    qualifier = registration.qualifier;
+  const availability = (target: FirmwareUpdateTarget): Readonly<FirmwareUpdateAvailability> => {
+    const reasons: string[] = [];
+    for (const slot of slotsFor(target)) {
+      try {
+        const value = registration.availability(options.binding(slot), options.source(slot));
+        if (!value.available) reasons.push(...value.reasons.map((reason) => `${slot}: ${reason}`));
+      } catch (error) {
+        reasons.push(`${slot}: ${problem(error)}`);
+      }
+    }
+    const available = reasons.length === 0;
+    return freeze({
+      available,
+      qualifier:
+        qualifier === 'qualified-physical' && !available ? 'unqualified-physical' : qualifier,
+      route: qualifier === 'reference-simulation' ? 'reference' : 'physical',
+      qualified: qualifier === 'reference-simulation' || available,
+      reasons,
+    });
+  };
+  const roleAvailability = () => ({ left: availability('left'), right: availability('right') });
   const journal = options.journal ?? createFirmwareJournalStore(),
     withLock = options.withLock ?? browserLock,
     now = options.now ?? Date.now,
@@ -310,6 +438,7 @@ export function createFirmwareUpdateCoordinator(
     bundle: FirmwareBundle;
     before: FirmwareJournalBefore;
     recovery: boolean;
+    invalidation: number;
   };
   let envelope: FirmwareJournalEnvelope = { version: 1, revision: 0, records: [] },
     loaded = false,
@@ -317,12 +446,14 @@ export function createFirmwareUpdateCoordinator(
     flight = false,
     disposed = false,
     epoch = 0,
+    invalidation = 0,
     pending:
       | { owner: string; scope: string; review: FirmwareUpdateReview; captures: Capture[] }
       | undefined,
     writes: Promise<unknown> = Promise.resolve(),
     snapshot: Readonly<FirmwareUpdateSnapshot> = freeze({
       busy: false,
+      availability: roleAvailability(),
       phase: 'idle',
       records: [],
     });
@@ -342,6 +473,7 @@ export function createFirmwareUpdateCoordinator(
     snapshot = freeze({
       ...snapshot,
       busy: flight,
+      availability: roleAvailability(),
       activeReview: pending?.review,
       records: envelope.records.filter((r) => r.owner === owner).map(firmwareUpdateRecordSummary),
       ...patch,
@@ -357,6 +489,7 @@ export function createFirmwareUpdateCoordinator(
   const current = (capture: Capture) => {
     if (
       disposed ||
+      capture.invalidation !== invalidation ||
       options.assignmentId(capture.slot) !== capture.binding.assignmentId ||
       (!capture.recovery && options.source(capture.slot)?.stageId !== capture.source.stageId)
     )
@@ -415,12 +548,18 @@ export function createFirmwareUpdateCoordinator(
     pending = undefined;
     publish({ phase: 'busy', error: undefined });
     try {
+      if (!sourceRecordId) {
+        const eligible = availability(target);
+        if (!eligible.available) throw new FirmwareUpdateError(eligible.reasons.join('; '));
+      }
       if (!loaded) await load();
       const parent = sourceRecordId
         ? envelope.records.find((r) => r.id === sourceRecordId && r.owner === owner)
         : undefined;
       if (sourceRecordId && !parent)
         throw new FirmwareUpdateError('Firmware recovery source is unavailable');
+      if (parent && parent.qualifier !== qualifier)
+        throw new FirmwareUpdateError('Firmware recovery belongs to a different execution route');
       const captures = slotsFor(target).map((slot) => {
         const previous = parent?.roles.find((r) => r.slot === slot),
           binding = clone(previous?.binding ?? options.binding(slot));
@@ -441,13 +580,38 @@ export function createFirmwareUpdateCoordinator(
           ...checked,
           before: previous ? clone(previous.before) : undefined,
           recovery: !!previous,
+          invalidation,
         };
       });
+      for (const capture of captures) {
+        const eligible = registration.availability(capture.binding, capture.source);
+        if (!eligible.available) throw new FirmwareUpdateError(eligible.reasons.join('; '));
+      }
       if (
         new Set(captures.map((c) => c.binding.serial)).size !== captures.length ||
         new Set(captures.map((c) => c.binding.assignmentId)).size !== captures.length
       )
         throw new FirmwareUpdateError('Firmware targets must be distinct physical assignments');
+      if (parent && options.prepareRecovery) {
+        context.signal?.throwIfAborted();
+        const result: unknown = options.prepareRecovery(
+          freeze(captures.map(({ slot, binding }) => ({ slot, binding: clone(binding) }))),
+        );
+        if (
+          result &&
+          (typeof result === 'object' || typeof result === 'function') &&
+          'then' in result &&
+          typeof result.then === 'function'
+        ) {
+          void Promise.resolve(result).catch(() => {});
+          throw new FirmwareUpdateError('Firmware recovery adoption must be synchronous');
+        }
+        // Adopting an empty page's historical leases may invalidate an older
+        // facade context. The new review captures the generation afterwards.
+        captures.forEach((capture) => {
+          capture.invalidation = invalidation;
+        });
+      }
       const prepared = await port!.reserve(
         captures.map((c) => c.binding),
         async () => {
@@ -479,13 +643,17 @@ export function createFirmwareUpdateCoordinator(
           if (failed?.status === 'rejected') throw failed.reason;
           return results.map((r) => (r as PromiseFulfilledResult<Capture>).value);
         },
+        {
+          signal: context.signal,
+          assertCurrent: () => captures.forEach((c) => current(c as Capture)),
+        },
       );
       context.signal?.throwIfAborted();
       prepared.forEach(current);
       const value: FirmwareUpdateReview = freeze({
         id: nextId(),
         target,
-        qualifier: 'reference-simulation',
+        qualifier,
         ...(sourceRecordId ? { sourceRecordId } : {}),
         roles: prepared.map((c) => {
           const { text: _text, ...source } = c.source;
@@ -518,6 +686,13 @@ export function createFirmwareUpdateCoordinator(
   }
   return {
     getSnapshot: () => snapshot,
+    availability,
+    invalidateReview() {
+      pending = undefined;
+      epoch++;
+      invalidation++;
+      publish();
+    },
     subscribe(fn) {
       listeners.add(fn);
       return () => listeners.delete(fn);
@@ -571,6 +746,10 @@ export function createFirmwareUpdateCoordinator(
         });
       };
       try {
+        for (const capture of captured.captures) {
+          const eligible = registration.availability(capture.binding, capture.source);
+          if (!eligible.available) throw new FirmwareUpdateError(eligible.reasons.join('; '));
+        }
         return await withLock('fusion-studio-firmware-update', async () => {
           if (activeUpdate)
             throw new FirmwareUpdateError(
@@ -619,7 +798,11 @@ export function createFirmwareUpdateCoordinator(
                         role.stream?.streamComplete &&
                         role.steps.every((step) => ['verified', 'skipped'].includes(step.state))
                       ) &&
-                      role.steps.some((s) => s.attempted) &&
+                      role.steps.some(
+                        (s) =>
+                          s.attempted ||
+                          (['entry', 'stream', 'exit'].includes(s.id) && s.state === 'intent'),
+                      ) &&
                       !knownRecords
                         .slice(recordIndex + 1)
                         .some(
@@ -658,7 +841,7 @@ export function createFirmwareUpdateCoordinator(
                     )
                       throw new FirmwareUpdateError('Firmware source or runtime changed');
                     const fresh = checkedBefore(await port!.captureBefore(c.binding));
-                    if (!same(fresh, c.before))
+                    if (!sameBeforeProjection(c.before, fresh))
                       throw new FirmwareUpdateError('Firmware preservation snapshot changed');
                   }
                   current(c);
@@ -671,7 +854,7 @@ export function createFirmwareUpdateCoordinator(
                 owner: principal.owner,
                 scope: captured.scope,
                 target: captured.review.target,
-                qualifier: 'reference-simulation',
+                qualifier,
                 ...(captured.review.sourceRecordId
                   ? { sourceRecordId: captured.review.sourceRecordId }
                   : {}),
@@ -859,6 +1042,7 @@ export function createFirmwareUpdateCoordinator(
               outcome(result, 'verified');
               return result;
             },
+            { signal: context.signal, assertCurrent: () => captured.captures.forEach(current) },
           );
         });
       } catch (error) {
@@ -929,7 +1113,12 @@ export function createFirmwareUpdateCoordinator(
       pending = undefined;
       overlays.clear();
       listeners.clear();
-      snapshot = freeze({ busy: false, phase: 'idle', records: [] });
+      snapshot = freeze({
+        busy: false,
+        availability: roleAvailability(),
+        phase: 'idle',
+        records: [],
+      });
     },
   };
 }

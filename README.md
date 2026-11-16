@@ -23,6 +23,8 @@ Open [the local application](http://127.0.0.1:3210) in desktop Chrome or Edge. W
 
 The app works offline for design tasks. No amplifier or agent connection is needed to create filters, import measurements or inspect responses.
 
+Firmware file staging, fixed-target review, exact-review confirmation, outcomes and recovery history now share one UI/MCP controller. The real WebHID adapter has queued transition and stream fences, durable known-range before-images and explicit journal-based recovery; its source-owned physical qualification registry remains empty, so physical firmware programming is unavailable. Neither a staged-file match nor a reported runtime version grants programming permission. See [firmware workflow](docs/FIRMWARE-WORKFLOW-v44.md).
+
 ## What is implemented
 
 - Three presets, three output channels and fifteen biquad slots per channel; low/high-pass, shelves, asymmetric shelves, peak, all-pass, unity and explicit raw coefficients.
@@ -78,6 +80,8 @@ The server prints a loopback MCP URL, a WebSocket bridge URL and a newly generat
 See [MCP setup and workflow guidance](docs/MCP.md).
 
 ## Checks and build
+
+V44 public checks passed **3,012 tests plus the sole optional-PDF skip: 3,013 total in 197 files**, TypeScript, Next production build and Worker packaging. The private suite passed **3,013 canonical product tests** plus **108 included ignored diagnostic assertions**. The registry remains **91 commands** and the reviewed export has **408 source plus 13 protected files, 421 total**. This increment adds automated workflow/transport checks and **10/10 owned local HTTP protocol checks**. One isolated synthetic browser baseline was accepted, with two pairing interruptions retained; paired browser execution and a completed firmware UI workflow were not verified. No remote/production MCP or physical-firmware acceptance is claimed. See the [V44 qualification checkpoint](docs/VERIFICATION.md#v44-firmware-workflow-checkpoint).
 
 V43 public checks passed **2,933 tests plus the sole optional-PDF skip: 2,934 total in 194 files**, TypeScript, Next production build and Worker packaging. Development coverage passed **2,934 canonical tests**; the full private run additionally includes **108 local diagnostic assertions**. Final isolated UI verification recorded **36 accepted checks and 1 retained unaccepted setup check**; the earlier iteration retains **4 accepted checks and one corrected layout failure**. The registry has **91 commands** and the reviewed export has **414 files**. Detailed native observations, retained verification failures and remaining hardware, firmware, macOS, two-amplifier and remote MCP qualification are documented in [verification](docs/VERIFICATION.md#v43-graph-q-and-fir-checkpoint).
 
