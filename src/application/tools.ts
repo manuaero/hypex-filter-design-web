@@ -85,6 +85,7 @@ import {
   projectMicrophoneStatus,
 } from '../domain/hfd-microphone';
 import { buildHfdResponseView, sampleHfdView } from '../domain/hfd-response-view';
+import { prepareNativeElectricalView } from '../domain/native-electrical-view';
 import { buildMagnitudeLayers } from '../domain/plot-layers';
 import type { GraphViewPatch } from './graph-view';
 import { NoiseControlError, type NoiseController } from './noise-control';
@@ -1768,7 +1769,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   fusion_measurement_export: 'Return impulse samples or frequency/dB/phase text for saving.',
   fusion_state: 'Read workspace selection, amplifier connections and capabilities.',
   fusion_select:
-    'Select the editing role, preset, channel or filter and set linking preferences. Explicit navigation to a visible Crossover output graph shares the human graph-entry operation: its first entry can normalize that channel’s stored compensation/Gain and clear explicitly unloaded microphone application, with one combined Undo. Explicit channel navigation also records the native selected group. Mirror does not initialize the opposite role; hidden editor selections, status reads, hydration and Undo do not run initialization. No amplifier I/O.',
+    'Select the editing role, preset, channel or filter and set linking preferences. Explicit navigation to a visible Crossover output graph shares the human graph-entry operation: its first entry can normalize that channel’s stored compensation/Gain and clear explicitly unloaded microphone application, with one combined Undo. Qualified explicit graph entry also repeats the immediate-source processing copy for a linked channel, including revisits; filter-only selection and graph-option changes do not trigger that copy. Explicit channel navigation also records the native selected group. Mirror does not initialize the opposite role; hidden editor selections, status reads, hydration and Undo do not run initialization. No amplifier I/O.',
   fusion_project_new: 'Create a new FA503 design in the chosen roles.',
   fusion_rename:
     'Rename the existing project (up to 200 characters), or one preset when preset is supplied, without changing processing or selection. Paired changes use one Undo.',
@@ -1827,7 +1828,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   fusion_help:
     'Return the same bundled manual, verified General page, official vendor links and app-version metadata shown in Help, or show Help/Verification in the app. Resource inspection does not open links, fetch documents, prompt for permissions or contact a device. Only the fixed registered resources are available; arbitrary URLs are not accepted.',
   fusion_view:
-    'Choose the visible workspace and graph view. Explicitly opening a Crossover output graph shares first-entry compensation and known-unloaded microphone initialization for only the selected role, with one combined Undo and no amplifier I/O. graph.phase controls independent role-local Phase curve visibility (three channels) and phase-sum visibility without changing the design or canonical sum membership; Phase sum is separate from Magnitude sum. dbMin/dbMax set frequency-chart Y limits in dB, degrees or milliseconds. zoomRectangle:true requires all four axis bounds for the selected mode and invokes the same forward rectangle/history as the UI; zoomBack uses retained reverse history. Explicit Crossover Impulse time ranges, Fit and zoom write the selected channel’s saved native viewport in seconds with one Undo. Other modes and browser Reset do not write that native tuple.',
+    'Choose the visible workspace and graph view. Explicitly opening a Crossover output graph shares first-entry compensation and known-unloaded microphone initialization for only the selected role, with one combined Undo and no amplifier I/O. Qualified explicit graph entry repeats the immediate-source processing copy for a linked channel, including revisits; graph-option changes alone do not trigger that copy. graph.phase controls independent role-local Phase curve visibility (three channels) and phase-sum visibility without changing the design or canonical sum membership; Phase sum is separate from Magnitude sum. dbMin/dbMax set frequency-chart Y limits in dB, degrees or milliseconds. zoomRectangle:true requires all four axis bounds for the selected mode and invokes the same forward rectangle/history as the UI; zoomBack uses retained reverse history. Explicit Crossover Impulse time ranges, Fit and zoom write the selected channel’s saved native viewport in seconds with one Undo. Other modes and browser Reset do not write that native tuple.',
   fusion_noise:
     'Read session-local rotating-noise request status, or explicitly Start/Stop it on Left, Right or Both using native 08/1e. Every selected role is preflighted before writes. ACK confirms command acceptance, not audible output; per-role partial results remain explicit. No automatic Start, retry or rollback.',
   fusion_connect:
@@ -3177,6 +3178,7 @@ export function createToolExecutor(adapter: ToolAdapter) {
         case 'fusion_analyze': {
           const p = schemas.fusion_analyze.parse(a),
             pr = state.documents[p.slot].presets[p.preset - 1],
+            electricalView = prepareNativeElectricalView(pr.channels, pr),
             view = buildHfdResponseView(pr.channels, {
               preset: pr,
               measured: p.measured,
@@ -3230,11 +3232,16 @@ export function createToolExecutor(adapter: ToolAdapter) {
             points: p.frequencies.map((frequency) => {
               const channels = pr.channels.map((c, index) => {
                   const [real, imaginary] = presetResponse(
-                    pr,
-                    pr.channels.indexOf(c),
-                    frequency,
-                    p.measured,
-                  );
+                      pr,
+                      pr.channels.indexOf(c),
+                      frequency,
+                      p.measured,
+                    ),
+                    [viewReal, viewImaginary] = electricalView.evaluate(
+                      index,
+                      frequency,
+                      p.measured,
+                    );
                   return {
                     real,
                     imaginary,
@@ -3244,12 +3251,12 @@ export function createToolExecutor(adapter: ToolAdapter) {
                       ? view.channels[index].visible === false
                         ? null
                         : sampleHfdView(view, view.channels[index].db, frequency)
-                      : 20 * Math.log10(Math.max(1e-12, Math.hypot(real, imaginary))),
+                      : 20 * Math.log10(Math.max(1e-12, Math.hypot(viewReal, viewImaginary))),
                     viewPhaseDegrees: view
                       ? view.channels[index].visible === false
                         ? null
                         : sampleHfdView(view, view.channels[index].phase, frequency)
-                      : (Math.atan2(imaginary, real) * 180) / Math.PI,
+                      : (Math.atan2(viewImaginary, viewReal) * 180) / Math.PI,
                   };
                 }),
                 re = channels.reduce(
@@ -3269,6 +3276,18 @@ export function createToolExecutor(adapter: ToolAdapter) {
                       ? 0
                       : c.imaginary),
                   0,
+                ),
+                displaySum = pr.channels.reduce<[number, number]>(
+                  (value, channel, index) => {
+                    if (
+                      channel.includeInSum === false ||
+                      (p.measured && !channel.measurement?.frequency?.length)
+                    )
+                      return value;
+                    const [real, imaginary] = electricalView.evaluate(index, frequency, p.measured);
+                    return [value[0] + real, value[1] + imaginary];
+                  },
+                  [0, 0],
                 );
               return {
                 frequency,
@@ -3279,10 +3298,10 @@ export function createToolExecutor(adapter: ToolAdapter) {
                 sumPhaseDegrees: (Math.atan2(im, re) * 180) / Math.PI,
                 viewSumDb: view?.sum
                   ? sampleHfdView(view, view.sum.db, frequency)
-                  : 20 * Math.log10(Math.max(1e-12, Math.hypot(re, im))),
+                  : 20 * Math.log10(Math.max(1e-12, Math.hypot(...displaySum))),
                 viewSumPhaseDegrees: view?.sum
                   ? sampleHfdView(view, view.sum.phase, frequency)
-                  : (Math.atan2(im, re) * 180) / Math.PI,
+                  : (Math.atan2(displaySum[1], displaySum[0]) * 180) / Math.PI,
               };
             }),
           };
@@ -4269,8 +4288,10 @@ export function createToolExecutor(adapter: ToolAdapter) {
             controller: adapter.nativeMixer,
             context: context ? { ...context, ...(signal ? { signal } : {}) } : undefined,
             view: (preset) => {
-              if (preset !== undefined) adapter.choose({ preset: preset - 1 });
+              // Preset selection must not initialize the Crossover graph while
+              // revealing this separate device editor.
               adapter.view({ tab: 'Device settings' });
+              if (preset !== undefined) adapter.choose({ preset: preset - 1 });
             },
             files: adapter.files,
             transferPage,

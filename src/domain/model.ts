@@ -41,6 +41,23 @@ export interface Filter {
   /** Current native enum, distinct from its type-dependent effective direction. */
   sourceShelfDirection?: NativeShelfDirection;
 }
+export type CoefficientCache = 'base' | 'effective' | 'unresolved';
+/** The context used to turn a saved native first cache into canonical data.
+ * Later channel gain/bypass edits do not change the saved direct Doubles. */
+export interface NativeCacheContext {
+  gain: number;
+  additionalGain?: number;
+  invert: boolean;
+  coefficientCache: CoefficientCache;
+}
+export interface NativeDirectCacheWitness {
+  version: 1;
+  native: Coefficients;
+  firstFilter: Filter;
+  /** Ordered browser slot identities; native source IDs remain on the filters. */
+  filterIds: string[];
+  context: NativeCacheContext;
+}
 export interface Fir {
   name: string;
   enabled: boolean;
@@ -147,7 +164,8 @@ export interface Channel {
   hfdImpulseZoom?: HfdImpulseZoom;
   additionalGain?: number;
   linkedTo?: number;
-  coefficientCache?: 'base' | 'effective' | 'unresolved';
+  coefficientCache?: CoefficientCache;
+  hfdDirectCacheWitness?: NativeDirectCacheWitness;
 }
 export interface Preset {
   name: string;

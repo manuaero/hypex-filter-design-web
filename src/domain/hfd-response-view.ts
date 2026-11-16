@@ -1,5 +1,5 @@
 import type { Channel, Preset } from './model';
-import { channelResponse, presetResponse } from './dsp';
+import { prepareNativeElectricalView } from './native-electrical-view';
 import { measurementResponse } from './measurement';
 import { hfdSmoothPlot } from './hfd-measurement';
 
@@ -98,14 +98,9 @@ export function buildHfdResponseView(
     warnings.push(
       'A silent or out-of-window native response creates an extreme common centering offset. Absolute dB is available.',
     );
-  const electrical = (index: number, f: number) =>
-    options.preset
-      ? presetResponse(options.preset, index, f, false)
-      : channelResponse(channels[index], f, false);
-  const magnitude = (index: number, f: number) =>
-    options.preset
-      ? presetResponse(options.preset, index, f, true)
-      : channelResponse(channels[index], f, true);
+  const projection = prepareNativeElectricalView(channels, options.preset),
+    electrical = (index: number, f: number) => projection.evaluate(index, f),
+    magnitude = (index: number, f: number) => projection.evaluate(index, f, true);
   const dedicated = (index: number, f: number) =>
     multiply(electrical(index, f), phaseReference(channels[index], f));
   const finish = (

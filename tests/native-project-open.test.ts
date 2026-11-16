@@ -427,7 +427,7 @@ it('failed cold cache preflight cannot modify the imported document or return a 
   expect(project).toEqual(before);
 });
 
-it('unqualified native link-load copying is not simulated or used to resolve imported cache interpretation', () => {
+it('an unresolved P1 link outside saved P3 is deactivated without copying or resolving its caches', () => {
   const project = fixture(),
     source = project.presets[0].channels[0],
     linked = project.presets[0].channels[1];
@@ -442,11 +442,11 @@ it('unqualified native link-load copying is not simulated or used to resolve imp
     prepared = prepareNativeProjectOpen(project, 'left', { presetIndex: 0, route: 'dialog' });
   expect(project).toEqual(before);
   expect(prepared.project.presets[0].channels[1]).toMatchObject({
-    gain: 24,
+    gain: 14,
     additionalGain: 10,
-    linkedTo: 0,
     coefficientCache: 'unresolved',
   });
+  expect(prepared.project.presets[0].channels[1].linkedTo).toBeUndefined();
   for (let p = 0; p < 3; p++)
     for (let c = 0; c < 3; c++) {
       expect(prepared.project.presets[p].channels[c].filters).toEqual(

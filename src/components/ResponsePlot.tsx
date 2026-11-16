@@ -7,6 +7,7 @@ import { channelResponse, presetResponse } from '../domain/dsp';
 import { analyzeTimeResponses } from '../domain/time-analysis';
 import { DEFAULT_TIME_RANGE, plotTimeSeries } from '../domain/time-series';
 import { buildHfdResponseView } from '../domain/hfd-response-view';
+import { prepareNativeElectricalView } from '../domain/native-electrical-view';
 import { buildMagnitudeLayers, type MagnitudeLayers } from '../domain/plot-layers';
 import type { PhaseViewState } from '../application/graph-view';
 export const COLORS = ['#efb45d', '#58d6bb', '#a596f5'];
@@ -47,6 +48,14 @@ export default function ResponsePlot({
     [renderer, setRenderer] = useState('');
   const timed = mode === 'Impulse' || mode === 'Step';
   const showSum = mode === 'Phase' ? (phaseLayers?.sum ?? sum) : sum;
+  const electricalData = useMemo(() => {
+    if (mode !== 'Magnitude' && mode !== 'Phase') return { view: null, error: '' };
+    try {
+      return { view: prepareNativeElectricalView(channels, preset), error: '' };
+    } catch (error) {
+      return { view: null, error: String(error) };
+    }
+  }, [channels, preset, mode]);
   const magnitudeData = useMemo(() => {
     if (mode !== 'Magnitude' || !magnitudeLayers) return { view: null, error: '' };
     try {
@@ -289,7 +298,14 @@ export default function ResponsePlot({
           analysis?.channels.forEach((curve, index) => add(curve, COLORS[index % COLORS.length]));
           if (sum) add(analysis?.sum, '#e9eddf');
         } else {
+          if (electricalData.error) throw new Error(electricalData.error);
           const N = 900;
+          const evaluate = (index: number, frequency: number): [number, number] =>
+            electricalData.view
+              ? electricalData.view.evaluate(index, frequency, measured)
+              : preset
+                ? presetResponse(preset, index, frequency, measured)
+                : channelResponse(channels[index], frequency, measured);
           const makeCurve = (evaluate: (frequency: number) => [number, number]) => {
             let lastPhase = 0;
             const curve: number[] = [];
@@ -320,11 +336,7 @@ export default function ResponsePlot({
             if (mode === 'Phase' && phaseLayers && !phaseLayers.channels[index]) return;
             curves.push({
               color: COLORS[index % COLORS.length],
-              points: makeCurve((f) =>
-                preset
-                  ? presetResponse(preset, index, f, measured)
-                  : channelResponse(ch, f, measured),
-              ),
+              points: makeCurve((f) => evaluate(index, f)),
             });
           });
           if (showSum)
@@ -338,9 +350,7 @@ export default function ResponsePlot({
                       (measured && !ch.measurement?.frequency?.length)
                     )
                       return [a, b];
-                    const [r, i] = preset
-                      ? presetResponse(preset, index, f, measured)
-                      : channelResponse(ch, f, measured);
+                    const [r, i] = evaluate(index, f);
                     return [a + r, b + i];
                   },
                   [0, 0],
@@ -437,6 +447,7 @@ export default function ResponsePlot({
     timeData,
     nativeData,
     magnitudeData,
+    electricalData,
   ]);
   return (
     <div

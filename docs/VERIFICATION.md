@@ -2,6 +2,68 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V53 linked Graph, cache and frequency display
+
+Screenshot-driven native HFD Open/Graph/Save comparisons extend the earlier
+linked-channel timing observations with two independent coefficient inputs.
+The effective-cache case retained the scaled first-section numerator in both
+source and destination, subject to native decimal serialization. The arbitrary
+cache case retained all five exact values in both. In both settled Graph
+screenshots HFD showed the same parameter-based Peak shape. No BQ was selected
+for an edit. The original project was reopened without saving, HFD was closed
+normally and the metadata-only exclusive HID handle was released. Settings
+outside the recent-project list, empty ASIO fields, original projects and
+restore copies remained exact. This is offline native evidence; the exclusion
+is neither a physical USB disconnect nor a bus trace.
+
+The shared UI/MCP Graph-opening operation now copies the immediate linked
+source before the selected channel's cold Graph callbacks. It copies only that
+destination, preserving local additional gain, labels, measurements and slot
+identities. It repeats on a later explicit opening, including after Undo, while
+cold compensation/microphone initialization retains its separate visit lifetime.
+Filter selection, graph options, passive hydration and receipt replay do not
+repeat the copy. Native Open resolves links in the incoming saved preset before
+the runtime selection replaces it; unresolved links in other presets are
+deactivated with an explanation. Unlinked legacy projects retain their earlier
+Open behavior. Native auto-Graph data is complete before the atomic role
+replacement and durable receipt; its view hook claims a visit without a second
+document edit. Mixer reveal opens Device settings before choosing its preset,
+avoiding hidden Crossover initialization.
+
+Raw native first-section coefficients now have a versioned witness bound to
+their ordered filter slots, canonical first filter and original normalization
+context. Import, linked copy, JSON and supported XML export retain those values
+without dividing and multiplying them back. Gain/inversion and bypass setters
+can leave the saved BQ cache intact. Linked copying refuses an unprovable
+effective source; older effective snapshots can recover a witness only through a complete matching original-XML
+binding. Copy settlement is limited to its detached operation and classifies
+the final destination after cold compensation. Arbitrary unresolved input stays
+unresolved and blocked from compilation; a Graph view does not grant upload
+permission. Effective export keeps its original direct numerator separate from
+the earlier unscaled zconst export value. Arbitrary imported root arrays and
+complete native XML Graph round-trip parity remain unqualified.
+
+The source-qualified ordinary Magnitude and dedicated Phase paths evaluate
+parameter/root transfer functions and include channel Gain, AdditionalGain and
+inversion. Those native electrical display paths ignore the stored channel Mute
+flag. The web projection follows that scope for channels with native measurement
+metadata, including an unloaded measurement. It preserves explicit raw-vector
+sections, bypass, FIR, delay, measurements and Input EQ. UI layers, bare response
+plots and MCP display fields use the same projection. MCP raw complex/dB/phase
+diagnostics, compilation, Impulse/Step and browser GroupDelay retain their
+separate cache/mute semantics. Native GroupDelay evaluation has not been
+established. Frequency display does not report whether an amplifier is audible.
+
+Focused regressions cover selected-role atomic copy, immediate chains, stale
+plans, final compensation/cache classification, native auto-Graph preparation,
+repeat opening after Undo, passive filter/options paths and UI/MCP equivalence.
+Additional numeric/component/tool cases compare native parameter display with
+cached diagnostics, including mute, raw sections, Input EQ and GroupDelay.
+Final integrated checks, actual browser/MCP acceptance and publication are
+recorded separately. This work adds no fresh physical amplifier status or
+upload proof, no second-amplifier hardware acceptance, no bridge configuration
+test and no browser-download delivery proof. Complete HFD parity remains open.
+
 ## V52 EQ metadata, browser recovery and native link comparisons
 
 The complete private run passed **3,573/3,573 tests in 228 files**: 3,465 canonical tests in 225 files plus 108 retained diagnostic assertions in 3 files. The public run passed **3,464 tests plus the sole optional exact installed-PDF skip**, 3,465 total in 225 files. TypeScript, Next and Worker packaging passed on unchanged checked source. All 449 source and 13 protected public files are tracked separately from ignored native/runtime evidence. Five bounded source/build privacy categories returned zero matches; these scans are not exhaustive secret detection.

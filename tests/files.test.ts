@@ -408,15 +408,22 @@ it('removes the unresolved XML marker only after an explicit gain-cache resoluti
     marked = exportHfd(project);
   project.sourceXml = marked;
   resolveGainCache(project.presets[0].channels[0], 'effective');
+  const channel = project.presets[0].channels[0],
+    canonical = structuredClone(channel.filters[0].coefficients),
+    compiled = encodeChannel(channel),
+    raw = structuredClone(channel.hfdDirectCacheWitness!.native);
   const exported = exportHfd(project),
     reopened = importHfd(exported, 'Explicitly resolved');
   expect(
-    document(exported).querySelectorAll('processobj[fusion-studio-coefficient-cache]'),
+    document(exported).querySelectorAll('processobj[fusion-studio-coefficient-cache="unresolved"]'),
   ).toHaveLength(0);
-  expect(reopened.presets[0].channels[0].coefficientCache).toBe('base');
-  expect(encodeChannel(reopened.presets[0].channels[0])).toEqual(
-    encodeChannel(project.presets[0].channels[0]),
-  );
+  expect(
+    document(exported).querySelector('processobj[fusion-studio-coefficient-cache="effective"]'),
+  ).not.toBeNull();
+  expect(reopened.presets[0].channels[0].coefficientCache).toBe('effective');
+  expect(reopened.presets[0].channels[0].filters[0].coefficients).toEqual(canonical);
+  expect(reopened.presets[0].channels[0].hfdDirectCacheWitness!.native).toEqual(raw);
+  expect(encodeChannel(reopened.presets[0].channels[0])).toEqual(compiled);
 });
 
 it('keeps the unresolved guard through JSON, sidecars and stale-sidecar native fallback', () => {

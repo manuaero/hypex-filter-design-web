@@ -181,8 +181,24 @@ const view = () => seen.adapter!.viewState!() as { tab: string; designer: string
 const flags = () =>
   state().documents.left.presets[0].channels.map((c) => c.hfdMeasurement?.applyMicCorrection);
 // Native XML has no browser UUIDs; independently parsed imports allocate them.
-const processing = (value: unknown) =>
-  JSON.parse(JSON.stringify(value, (key, item) => (key === 'id' ? undefined : item)));
+const processing = (value: unknown) => {
+  const identities = new Map<string, string>();
+  const collect = (item: unknown) => {
+    if (!item || typeof item !== 'object') return;
+    const record = item as Record<string, unknown>;
+    if (typeof record.id === 'string' && !identities.has(record.id))
+      identities.set(record.id, `browser-identity-${identities.size}`);
+    Object.values(record).forEach(collect);
+  };
+  collect(value);
+  // Normalize generated identities consistently, retaining the new raw-cache
+  // witness's ordered slot bindings and first-filter identity in the comparison.
+  return JSON.parse(
+    JSON.stringify(value, (_key, item) =>
+      typeof item === 'string' ? (identities.get(item) ?? item) : item,
+    ),
+  );
+};
 
 it('native MCP Open from Help chooses offline P1/saved CH2 and publishes complete final data in one Undo', async () => {
   const incoming = nativeInput(),

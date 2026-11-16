@@ -2,6 +2,7 @@ import type { Project, Slot } from '../domain/model';
 import { assertProjectLinks } from '../domain/links';
 import { normalizeHardwareGainCallback } from '../domain/hardware-gain';
 import { defaultHfdMeasurementOptions } from '../domain/hfd-measurement';
+import { copyNativeLinkedChannel, settleNativeLinkedCopyCache } from '../domain/native-linked-copy';
 import type { NativeProjectOpenRoute } from './native-project-open';
 
 export interface NativeGraphEntryRequest {
@@ -35,6 +36,9 @@ export interface NativeGraphEntryWorkspace {
 }
 export interface NativeGraphEntryController {
   plan(request: NativeGraphEntryRequest): NativeGraphEntryPlan;
+  /** An explicit Graph opening copies its immediate linked source on every
+   * admission, independently of the cold-constructor visit lifetime. */
+  planGraphOpen(request: NativeGraphEntryRequest): NativeGraphEntryPlan;
   /** Only a newly loaded role generation may receive native file-open effects. */
   planNativeFileOpen(
     request: Omit<NativeGraphEntryRequest, 'explicitChannelSelection'>,
@@ -92,15 +96,34 @@ function target(project: Project, request: NativeGraphEntryRequest) {
   );
   return channel;
 }
-function context(project: Project, request: NativeGraphEntryRequest) {
-  const channel = target(project, request);
+function processingContext(channel: Project['presets'][number]['channels'][number]) {
   return {
     id: channel.id,
+    name: channel.name,
+    outputName: channel.outputName,
+    includeInSum: channel.includeInSum,
     gain: channel.gain,
     additionalGain: channel.additionalGain,
+    invert: channel.invert,
+    muted: channel.muted,
+    delayUs: channel.delayUs,
+    globalDelayUs: channel.globalDelayUs,
     linkedTo: channel.linkedTo,
     coefficientCache: channel.coefficientCache,
     filters: channel.filters,
+    fir: channel.fir,
+    hfdDirectCacheWitness: channel.hfdDirectCacheWitness,
+  };
+}
+function context(project: Project, request: NativeGraphEntryRequest, linkedCopy = false) {
+  const channel = target(project, request);
+  return {
+    ...processingContext(channel),
+    source:
+      linkedCopy && channel.linkedTo !== undefined
+        ? processingContext(project.presets[request.presetIndex].channels[channel.linkedTo])
+        : undefined,
+    nativeSourceXml: linkedCopy ? project.sourceXml : undefined,
     hfdMeasurement: channel.hfdMeasurement,
     hfdGainLowered: project.hfdGainLowered,
     hfdSelectedGroupId: project.hfdSelectedGroupId,
@@ -187,6 +210,8 @@ export function createNativeGraphEntryController(options: {
     workspace: NativeGraphEntryWorkspace;
     project: Project;
     before: ReturnType<typeof context>;
+    expected: ReturnType<typeof context>;
+    linkedCopy: boolean;
     key: string;
     nativeFileOpen?: boolean;
   };
@@ -218,57 +243,94 @@ export function createNativeGraphEntryController(options: {
         latest.documents[plan.slot] === binding.project &&
         (!binding.nativeFileOpen || visits[plan.slot].size === 0) &&
         plan.fresh === !visits[plan.slot].has(binding.key) &&
-        same(context(latest.documents[plan.slot], binding.request), binding.before),
+        same(
+          context(latest.documents[plan.slot], binding.request, binding.linkedCopy),
+          binding.before,
+        ),
       'Native graph entry target changed',
     );
   };
+  const preparePlan = (
+    request: NativeGraphEntryRequest,
+    linkedGraphOpen = false,
+    nativeRoute?: NativeProjectOpenRoute,
+  ): NativeGraphEntryPlan => {
+    assert(
+      request &&
+        (request.slot === 'left' || request.slot === 'right') &&
+        [request.presetIndex, request.channelIndex].every(
+          (n) => Number.isInteger(n) && n >= 0 && n < 3,
+        ) &&
+        (request.explicitChannelSelection === undefined ||
+          typeof request.explicitChannelSelection === 'boolean') &&
+        Object.keys(request).every((k) =>
+          ['slot', 'presetIndex', 'channelIndex', 'explicitChannelSelection'].includes(k),
+        ),
+      'Invalid native graph entry request',
+    );
+    const workspace = current(),
+      project = workspace.documents[request.slot],
+      channel = target(project, request);
+    const generation = generations[request.slot],
+      key = JSON.stringify([generation, request.presetIndex, request.channelIndex, channel.id]);
+    const fresh = !visits[request.slot].has(key),
+      linkedCopy = linkedGraphOpen && channel.linkedTo !== undefined,
+      // These operations replace only selected-channel fields and project hints.
+      // Keep large original impulse arrays out of view-operation preparation.
+      preview: Project = {
+        ...project,
+        presets: project.presets.map((preset, index) =>
+          index === request.presetIndex
+            ? {
+                ...preset,
+                channels: preset.channels.map((item, channelIndex) =>
+                  channelIndex === request.channelIndex ? { ...item } : item,
+                ),
+              }
+            : preset,
+        ),
+      },
+      before = structuredClone(context(project, request, linkedCopy)),
+      patch: NativeGraphEntryPatch = {};
+    if (linkedCopy) copyNativeLinkedChannel(preview, request.presetIndex, request.channelIndex);
+    if (fresh) Object.assign(patch, coldPatch(preview, request, nativeRoute));
+    if (
+      request.explicitChannelSelection &&
+      !Object.is(project.hfdSelectedGroupId, request.channelIndex + 1)
+    )
+      patch.hfdSelectedGroupId = request.channelIndex + 1;
+    applyPatch(preview, request, patch);
+    if (linkedCopy) settleNativeLinkedCopyCache(preview, request.presetIndex, request.channelIndex);
+    const expected = structuredClone(context(preview, request, linkedCopy));
+    const plan: NativeGraphEntryPlan = Object.freeze({
+      slot: request.slot,
+      presetIndex: request.presetIndex,
+      channelIndex: request.channelIndex,
+      channelId: channel.id,
+      revision: workspace.documentRevision,
+      generation,
+      fresh,
+      changed: !same(before, expected),
+      patch: Object.freeze(patch),
+    });
+    pending.set(plan, {
+      request: { ...request },
+      workspace: { ...workspace },
+      project,
+      before,
+      expected,
+      linkedCopy,
+      key,
+      ...(nativeRoute ? { nativeFileOpen: true } : {}),
+    });
+    return plan;
+  };
   const controller: NativeGraphEntryController = {
     plan(request) {
-      assert(
-        request &&
-          (request.slot === 'left' || request.slot === 'right') &&
-          [request.presetIndex, request.channelIndex].every(
-            (n) => Number.isInteger(n) && n >= 0 && n < 3,
-          ) &&
-          (request.explicitChannelSelection === undefined ||
-            typeof request.explicitChannelSelection === 'boolean') &&
-          Object.keys(request).every((k) =>
-            ['slot', 'presetIndex', 'channelIndex', 'explicitChannelSelection'].includes(k),
-          ),
-        'Invalid native graph entry request',
-      );
-      const workspace = current(),
-        project = workspace.documents[request.slot],
-        channel = target(project, request);
-      const generation = generations[request.slot],
-        key = JSON.stringify([generation, request.presetIndex, request.channelIndex, channel.id]);
-      const fresh = !visits[request.slot].has(key),
-        patch: NativeGraphEntryPatch = {};
-      if (fresh) Object.assign(patch, coldPatch(project, request));
-      if (
-        request.explicitChannelSelection &&
-        !Object.is(project.hfdSelectedGroupId, request.channelIndex + 1)
-      )
-        patch.hfdSelectedGroupId = request.channelIndex + 1;
-      const plan: NativeGraphEntryPlan = Object.freeze({
-        slot: request.slot,
-        presetIndex: request.presetIndex,
-        channelIndex: request.channelIndex,
-        channelId: channel.id,
-        revision: workspace.documentRevision,
-        generation,
-        fresh,
-        changed: Object.keys(patch).length > 0,
-        patch: Object.freeze(patch),
-      });
-      pending.set(plan, {
-        request: { ...request },
-        workspace: { ...workspace },
-        project,
-        before: structuredClone(context(project, request)),
-        key,
-      });
-      return plan;
+      return preparePlan(request);
+    },
+    planGraphOpen(request) {
+      return preparePlan(request, true);
     },
     planNativeFileOpen(request, route) {
       assert(
@@ -284,17 +346,7 @@ export function createNativeGraphEntryController(options: {
         visits[request.slot].size === 0,
         'Native file-open graph requires a fresh role generation',
       );
-      const initial = controller.plan(request),
-        binding = pending.get(initial)!,
-        patch = coldPatch(binding.project, request, route);
-      const plan: NativeGraphEntryPlan = Object.freeze({
-        ...initial,
-        changed: Object.keys(patch).length > 0,
-        patch: Object.freeze(patch),
-      });
-      pending.delete(initial);
-      pending.set(plan, { ...binding, nativeFileOpen: true });
-      return plan;
+      return preparePlan(request, false, route);
     },
     commit(plan, publish) {
       const binding = pending.get(plan);
@@ -310,10 +362,14 @@ export function createNativeGraphEntryController(options: {
           slot === plan.slot &&
             project !== binding.workspace.documents.left &&
             project !== binding.workspace.documents.right &&
-            same(context(project, binding.request), binding.before),
+            same(context(project, binding.request, binding.linkedCopy), binding.before),
           'Native graph entry requires its matching detached role proposal',
         );
+        if (binding.linkedCopy)
+          copyNativeLinkedChannel(project, plan.presetIndex, plan.channelIndex);
         applyPatch(project, binding.request, plan.patch);
+        if (binding.linkedCopy)
+          settleNativeLinkedCopyCache(project, plan.presetIndex, plan.channelIndex);
         applied = true;
       });
       if (
@@ -331,21 +387,12 @@ export function createNativeGraphEntryController(options: {
           (!plan.changed || applied),
         'Native graph entry was not published in its current generation',
       );
-      const after = current(),
-        expected = structuredClone(binding.before),
-        patch = plan.patch;
-      if (patch.gain !== undefined) expected.gain = patch.gain;
-      if (patch.additionalGain !== undefined) expected.additionalGain = patch.additionalGain;
-      if (patch.hfdGainLowered !== undefined) expected.hfdGainLowered = patch.hfdGainLowered;
-      if (patch.applyMicCorrection !== undefined)
-        expected.hfdMeasurement = {
-          ...(expected.hfdMeasurement ?? defaultHfdMeasurementOptions()),
-          applyMicCorrection: patch.applyMicCorrection,
-        };
-      if (patch.hfdSelectedGroupId !== undefined)
-        expected.hfdSelectedGroupId = patch.hfdSelectedGroupId;
+      const after = current();
       assert(
-        same(context(after.documents[plan.slot], binding.request), expected) &&
+        same(
+          context(after.documents[plan.slot], binding.request, binding.linkedCopy),
+          binding.expected,
+        ) &&
           (!plan.changed ||
             (after.documentRevision > plan.revision &&
               after.documents[plan.slot] !== binding.project)),

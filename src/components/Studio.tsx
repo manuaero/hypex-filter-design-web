@@ -726,7 +726,7 @@ export default function Studio() {
     captured: WorkspaceState,
     selection: GraphSelection = captured,
     choose?: Parameters<WorkspaceState['choose']>[0],
-    entry?: { explicitChannelSelection?: boolean },
+    entry?: { explicitChannelSelection?: boolean; linkedCopy?: boolean },
     nativeWritebackAllowed = entry !== undefined || graphVisible(),
   ) => {
     const assertCurrent = () => {
@@ -751,11 +751,11 @@ export default function Studio() {
     };
     const { latest, target } = assertCurrent();
     const entryPlan = entry
-      ? nativeGraphEntries.plan({
+      ? nativeGraphEntries[entry.linkedCopy ? 'planGraphOpen' : 'plan']({
           slot: selection.slot,
           presetIndex: selection.preset,
           channelIndex: selection.channel,
-          ...entry,
+          explicitChannelSelection: entry.explicitChannelSelection,
         })
       : undefined;
     const writeback = nativeWritebackAllowed ? plan.writeback : undefined;
@@ -830,17 +830,20 @@ export default function Studio() {
         : {
             explicitChannelSelection:
               options?.explicitChannelSelection ?? patch.channel !== undefined,
+            linkedCopy:
+              options?.openGraph === true ||
+              ['slot', 'preset', 'channel'].some((key) => key in patch),
           },
     );
   };
-  const initializeVisibleGraph = (explicitChannelSelection = false) => {
+  const initializeVisibleGraph = (explicitChannelSelection = false, linkedCopy = true) => {
     const current = useWorkspace.getState();
     commitGraphPlan(
       graphController.selection(graphContext(current), { normalize: true }),
       current,
       current,
       undefined,
-      { explicitChannelSelection },
+      { explicitChannelSelection, linkedCopy },
     );
   };
   const setWorkspaceTabOnly = (next: typeof tab) => {
@@ -1046,7 +1049,7 @@ export default function Studio() {
     if (slots.includes(current.slot) && graphVisible()) {
       // File replacement initializes only the graph actually visible here.
       // Retain the imported selected-group metadata, including native -1.
-      initializeVisibleGraph();
+      initializeVisibleGraph(false, false);
     }
     if (
       slots.includes(useWorkspace.getState().slot) &&
@@ -2932,7 +2935,9 @@ export default function Studio() {
             capturedGraphWorkspace,
             capturedGraphWorkspace,
             undefined,
-            enteringGraph ? {} : undefined,
+            enteringGraph
+              ? { linkedCopy: patch.tab === 'Crossover' || patch.designer === 'graph' }
+              : undefined,
             graphTargetVisible,
           );
         if (patch.authPanel !== undefined) setAuthView(patch.authPanel);

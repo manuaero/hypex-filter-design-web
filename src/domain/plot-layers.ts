@@ -8,11 +8,12 @@ import {
   type Filter,
   type Preset,
 } from './model';
-import { channelResponse, presetResponse, response, FILTER_NAMES } from './dsp';
+import { response, FILTER_NAMES } from './dsp';
 import { designHfd } from './hfd-math';
 import { measurementResponse } from './measurement';
 import { hfdSmoothPlot } from './hfd-measurement';
 import { buildHfdResponseView, hfdCentering } from './hfd-response-view';
+import { prepareNativeElectricalView } from './native-electrical-view';
 
 export interface MagnitudeLayers {
   rawMeasurements: boolean[];
@@ -245,14 +246,9 @@ export function buildMagnitudeLayers(
     centerOffsetDb = center.offsetDb,
     warnings = [...(nativeView?.warnings ?? [])],
     curves: MagnitudeLayerCurve[] = [];
-  const electrical = (index: number, f: number) =>
-      options.preset
-        ? presetResponse(options.preset, index, f, false)
-        : channelResponse(channels[index], f, false),
-    result = (index: number, f: number) =>
-      options.preset
-        ? presetResponse(options.preset, index, f, measured)
-        : channelResponse(channels[index], f, measured),
+  const projection = prepareNativeElectricalView(channels, options.preset),
+    electrical = (index: number, f: number) => projection.evaluate(index, f),
+    result = (index: number, f: number) => projection.evaluate(index, f, measured),
     post = (values: number[], index: number) =>
       Array.from(
         hfdSmoothPlot(values, frequency, channels[index].hfdMeasurement?.smoothPostBw ?? 0),

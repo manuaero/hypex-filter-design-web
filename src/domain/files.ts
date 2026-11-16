@@ -26,11 +26,31 @@ import {
 import { parseHfdCalibration, validateHfdCalibrationCurve } from './hfd-calibration';
 import { firState, validateFirState } from './fir-state';
 import { assertProjectLinks } from './links';
+import {
+  canonicalNativeCache,
+  captureNativeCacheWitness,
+  classifyNativeCache,
+  sameCoefficients,
+  validNativeCacheWitness,
+} from './native-cache';
 import { nativeCloneTemplateSchema, parseNativeCloneInfo } from './clone-template';
 const number = z.number().finite();
 const hfdSelectedGroupIdSchema = number.int().min(HFD_INDEX_MIN).max(HFD_INDEX_MAX);
 const hfdSelectedPresetSchema = number.int().min(HFD_INDEX_MIN).max(HFD_INDEX_MAX);
 const coefficients = z.object({ b0: number, b1: number, b2: number, f1: number, f2: number });
+const cacheClassification = z.enum(['base', 'effective', 'unresolved']);
+const nativeCacheContext = z.strictObject({
+  gain: number,
+  additionalGain: number.optional(),
+  invert: z.boolean(),
+  coefficientCache: cacheClassification,
+});
+const nativeXmlCacheContext = z.strictObject({
+  version: z.literal(1),
+  gain: number,
+  additionalGain: number.optional(),
+  invert: z.boolean(),
+});
 const hfdGraphOptions = z.strictObject({
   showMeasuredResponse: z.boolean(),
   showSum: z.boolean(),
@@ -100,6 +120,28 @@ const filter = z.object({
   shelfDirection: z.enum(['low', 'high']).optional(),
   sourceShelfDirection: nativeShelfDirection.optional(),
 });
+const nativeCacheWitness = z
+  .strictObject({
+    version: z.literal(1),
+    native: coefficients.strict(),
+    firstFilter: filter.extend({ coefficients: coefficients.strict().optional() }).strict(),
+    filterIds: z.array(z.string()).length(15),
+    context: nativeCacheContext,
+  })
+  .superRefine((value, context) => {
+    try {
+      if (
+        !value.firstFilter.coefficients ||
+        !sameCoefficients(
+          canonicalNativeCache(value.native, value.context),
+          value.firstFilter.coefficients,
+        )
+      )
+        throw new Error('Native cache witness canonical data does not match its raw context');
+    } catch (error) {
+      context.addIssue({ code: 'custom', message: String(error) });
+    }
+  });
 const measurementSpectrum = z
   .object({
     frequency: z.array(number).max(MAX_MEASUREMENT_SPECTRUM_POINTS),
@@ -309,6 +351,7 @@ export const projectSchema = z
                   fir: fir(1500),
                   includeInSum: z.boolean().optional(),
                   coefficientCache: z.enum(['base', 'effective', 'unresolved']).optional(),
+                  hfdDirectCacheWitness: nativeCacheWitness.optional(),
                   additionalGain: number.optional(),
                   linkedTo: z.number().int().min(0).max(2).optional(),
                   measurement: measurement.optional(),
@@ -537,9 +580,18 @@ export function importHfd(xml: string, name: string): Project {
           (n) => n.getAttribute('groupid') === group && n.getAttribute('processtype') === 'ptGain',
         );
       if (!gain) throw new Error(`Missing channel ${group} gain`);
-      const cacheMarker = gain.getAttribute('fusion-studio-coefficient-cache');
-      if (cacheMarker !== null && cacheMarker !== 'unresolved')
+      const cacheMarker = gain.getAttribute('fusion-studio-coefficient-cache'),
+        cacheContextText = gain.getAttribute('fusion-studio-cache-context');
+      if (cacheMarker !== null && cacheMarker !== 'unresolved' && cacheMarker !== 'effective')
         throw new Error('Invalid browser channel coefficient cache marker');
+      if ((cacheMarker === 'effective') !== (cacheContextText !== null))
+        throw new Error(
+          'Invalid browser channel cache marker: effective cache requires its normalization context',
+        );
+      const storedCacheContext =
+        cacheContextText === null
+          ? undefined
+          : nativeXmlCacheContext.parse(JSON.parse(cacheContextText));
       const unresolvedCache = cacheMarker === 'unresolved';
       const path: Element[] = [],
         seen = new Set<string>();
@@ -638,8 +690,6 @@ export function importHfd(xml: string, name: string): Project {
       }
       const cacheIsBase =
         doc.documentElement.getAttribute('fusion-studio-coefficient-cache') === 'base';
-      const multiplier =
-        10 ** ((channel.gain + (channel.additionalGain ?? 0)) / 20) * (channel.invert ? -1 : 1);
       channel.filters = bqs.map((b, i): Filter => {
         const type = val(b, 'filtertype'),
           shelf = val(b, 'shelfhl'),
@@ -660,7 +710,6 @@ export function importHfd(xml: string, name: string): Project {
                   ? 'lowshelf2'
                   : 'highshelf2'
                 : (kinds[type] ?? 'raw');
-        const div = i === 0 && !cacheIsBase && !unresolvedCache ? multiplier : 1;
         return {
           ...newFilter(kind),
           enabled: b.getAttribute('enabled') === 'true',
@@ -675,71 +724,42 @@ export function importHfd(xml: string, name: string): Project {
           sourceId: b.getAttribute('id')!,
           provenance: 'hfd',
           coefficients: {
-            b0: num(b, 'b0', 1) / div,
-            b1: num(b, 'b1') / div,
-            b2: num(b, 'b2') / div,
+            b0: num(b, 'b0', 1),
+            b1: num(b, 'b1'),
+            b2: num(b, 'b2'),
             f1: num(b, 'a1'),
             f2: num(b, 'a2'),
           },
         };
       });
-      // HFD serializes a cached direct form: either a base section or an
-      // effective first numerator. Detect both without replacing custom data.
       const first = channel.filters[0];
-      // At an exact unit multiplier the two interpretations are identical,
-      // including native freshly-added zero-Peak caches that are still Unity
-      // instead of parameter-regenerated cancelling poles/zeros. Keep the
-      // original cache; near-unit and inverted caches still need detection.
-      // Browser-only per-channel metadata overrides the root base-cache marker:
-      // an unresolved vector must remain untouched and blocked after XML reopen.
-      channel.coefficientCache = unresolvedCache
-        ? 'unresolved'
-        : cacheIsBase || multiplier === 1
-          ? 'base'
-          : 'effective';
-      if (!unresolvedCache && !cacheIsBase && multiplier !== 1 && first.coefficients) {
-        // Read original native Doubles directly: dividing then multiplying to
-        // undo speculative de-embedding can change a cache by one ULP.
-        const original = {
-          b0: num(bqs[0], 'b0', 1),
-          b1: num(bqs[0], 'b1'),
-          b2: num(bqs[0], 'b2'),
-          f1: num(bqs[0], 'a1'),
-          f2: num(bqs[0], 'a2'),
-        };
-        let base;
-        try {
-          base = designHfd({ ...first, enabled: true });
-        } catch {
-          /* Custom/raw first section has no recoverable parameter baseline. */
-        }
-        if (base) {
-          const keys = ['b0', 'b1', 'b2', 'f1', 'f2'] as const,
-            scaled = {
-              ...base,
-              b0: base.b0 * multiplier,
-              b1: base.b1 * multiplier,
-              b2: base.b2 * multiplier,
-            };
-          const matches = (expected: typeof base) =>
-            keys.every(
-              (k) => Math.abs(original[k] - expected[k]) / (1 + Math.abs(expected[k])) < 1e-9,
-            );
-          if (matches(base) && !matches(scaled)) {
-            first.coefficients = original;
-            channel.coefficientCache = 'base';
-          } else if (!matches(base) && !matches(scaled)) {
-            first.coefficients = original;
-            channel.coefficientCache = 'unresolved';
-            project.warnings.push(
-              `Preset ${p + 1}, channel ${ch + 1}: choose whether the custom first-section coefficients already include channel gain before upload.`,
-            );
+      const rawFirst = { ...first.coefficients! };
+      const context = storedCacheContext
+        ? {
+            gain: storedCacheContext.gain,
+            additionalGain: storedCacheContext.additionalGain,
+            invert: storedCacheContext.invert,
+            coefficientCache: 'effective' as const,
           }
-        } else if (Math.abs(multiplier - 1) > 1e-12) {
-          first.coefficients = original;
-          channel.coefficientCache = 'unresolved';
-        }
-      }
+        : undefined;
+      const classified = context
+        ? {
+            coefficients: canonicalNativeCache(rawFirst, context),
+            coefficientCache: 'effective' as const,
+          }
+        : classifyNativeCache(
+            rawFirst,
+            first,
+            channel,
+            unresolvedCache ? 'unresolved' : cacheIsBase ? 'base' : undefined,
+          );
+      first.coefficients = classified.coefficients;
+      channel.coefficientCache = classified.coefficientCache;
+      channel.hfdDirectCacheWitness = captureNativeCacheWitness(channel, rawFirst, context);
+      if (classified.coefficientCache === 'unresolved')
+        project.warnings.push(
+          `Preset ${p + 1}, channel ${ch + 1}: choose whether the custom first-section coefficients already include channel gain before upload.`,
+        );
       const f = path.find((n) => n.getAttribute('processtype') === 'ptFir');
       if (f) channel.fir = readNativeFir(f, 1500);
     }
@@ -866,7 +886,22 @@ export function exportHfd(project: Project): string {
           (n) => n.getAttribute('groupid') === group && n.getAttribute('processtype') === 'ptGain',
         );
       if (!gain) throw new Error('Missing HFD channel gain');
-      if (c.coefficientCache === 'unresolved')
+      const nativeWitness = validNativeCacheWitness(c),
+        preserveEffective = c.coefficientCache === 'effective' && nativeWitness !== undefined;
+      gain.removeAttribute('fusion-studio-cache-context');
+      if (preserveEffective) {
+        gain.setAttribute('fusion-studio-coefficient-cache', 'effective');
+        const context = nativeWitness.context;
+        gain.setAttribute(
+          'fusion-studio-cache-context',
+          JSON.stringify({
+            version: 1,
+            gain: context.gain,
+            additionalGain: context.additionalGain,
+            invert: context.invert,
+          }),
+        );
+      } else if (c.coefficientCache === 'unresolved')
         gain.setAttribute('fusion-studio-coefficient-cache', 'unresolved');
       else gain.removeAttribute('fusion-studio-coefficient-cache');
       const path: Element[] = [],
@@ -885,7 +920,8 @@ export function exportHfd(project: Project): string {
       if (bqs.length !== 15) throw new Error('Missing HFD biquad slots');
       c.filters.forEach((f, j) => {
         const node = bqs[j],
-          coeff = f.coefficients ?? designHfd({ ...f, enabled: true });
+          canonical = f.coefficients ?? designHfd({ ...f, enabled: true }),
+          coeff = j === 0 && preserveEffective ? nativeWitness.native : canonical;
         node.setAttribute('enabled', String(f.enabled));
         for (const [key, value] of Object.entries({
           b0: coeff.b0,
@@ -898,7 +934,7 @@ export function exportHfd(project: Project): string {
           q1: f.q,
           q2: f.q2,
           gain: f.gain,
-          zconst: coeff.b0,
+          zconst: canonical.b0,
         }))
           set(node, key, value);
         set(node, 'filtertype', type[f.kind]);
@@ -1034,6 +1070,7 @@ export function resolveGainCache(
     throw new Error('Channel cache is already resolved');
   const c = channel.filters[0].coefficients;
   if (!c) throw new Error('No imported coefficient cache');
+  const raw = { ...c };
   const scalar =
     10 ** ((channel.gain + (channel.additionalGain ?? 0)) / 20) * (channel.invert ? -1 : 1);
   if (interpretation === 'effective') {
@@ -1042,6 +1079,7 @@ export function resolveGainCache(
     c.b2 /= scalar;
   }
   channel.coefficientCache = interpretation;
+  channel.hfdDirectCacheWitness = captureNativeCacheWitness(channel, raw);
 }
 export function parseFir(text: string, count: number) {
   const taps = text

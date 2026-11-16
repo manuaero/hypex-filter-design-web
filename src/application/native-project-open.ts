@@ -6,6 +6,7 @@ import {
   recomputeHfdMeasurement,
 } from '../domain/hfd-measurement';
 import { applyColdNativeFileOpenGraph } from './native-graph-entry';
+import { copyNativeLinkedChannel, settleNativeLinkedCopyCache } from '../domain/native-linked-copy';
 import { phaseCurveAvailable } from './graph-view';
 
 export type NativeProjectOpenRoute = 'dialog' | 'inner';
@@ -19,8 +20,21 @@ export interface NativeProjectOpenRequest {
   presetIndex: number;
   route: NativeProjectOpenRoute;
 }
+export interface NativeProjectOpenLinkResolution {
+  /** Original saved preset, before the later runtime selection is applied. */
+  readonly resolvedPresetIndex: number;
+  readonly unresolvedLinks: readonly Readonly<{
+    presetIndex: number;
+    channelIndex: number;
+    channelId: string;
+    linkedTo: number;
+  }>[];
+  /** Browser explanation of actual deactivation, not a native popup claim. */
+  readonly warning?: string;
+}
 export interface NativeProjectOpenPatch {
   readonly hfdSelectedPreset?: number;
+  readonly linkResolution?: NativeProjectOpenLinkResolution;
   /** The opened Graph owns its own final microphone state. */
   readonly microphoneChanges: readonly Readonly<{
     channelIndex: number;
@@ -100,6 +114,43 @@ function checkProject(project: Readonly<Project>) {
   assertProjectLinks(project);
 }
 
+function linkResolution(project: Readonly<Project>): NativeProjectOpenLinkResolution | undefined {
+  if (!project.presets.some((preset) => preset.channels.some((c) => c.linkedTo !== undefined)))
+    return undefined;
+  const savedPreset = project.hfdSelectedPreset;
+  assert(
+    savedPreset !== undefined && savedPreset >= 1 && savedPreset <= 3,
+    'Native Open with channel links requires original saved preset 1–3',
+  );
+  const resolvedPresetIndex = savedPreset - 1,
+    unresolvedLinks = Object.freeze(
+      project.presets.flatMap((preset, presetIndex) =>
+        presetIndex === resolvedPresetIndex
+          ? []
+          : preset.channels.flatMap((channel, channelIndex) =>
+              channel.linkedTo === undefined
+                ? []
+                : [
+                    Object.freeze({
+                      presetIndex,
+                      channelIndex,
+                      channelId: channel.id,
+                      linkedTo: channel.linkedTo,
+                    }),
+                  ],
+            ),
+      ),
+    ),
+    explanation = `Native Open resolved channel links only in saved preset ${savedPreset}; ${unresolvedLinks.length} unresolved ${unresolvedLinks.length === 1 ? 'link' : 'links'} in other presets were deactivated.`;
+  return Object.freeze({
+    resolvedPresetIndex,
+    unresolvedLinks,
+    ...(unresolvedLinks.length && !project.warnings.includes(explanation)
+      ? { warning: explanation }
+      : {}),
+  });
+}
+
 /** Inert document delta. The runtime preset is supplied by trusted coordination,
  * never inferred from saved XML or a Clone template. No Graph is claimed here. */
 export function planNativeProjectOpen(
@@ -118,7 +169,8 @@ export function planNativeProjectOpen(
     'Invalid Native Open request',
   );
   checkProject(project);
-  const group = project.hfdSelectedGroupId,
+  const resolution = linkResolution(project),
+    group = project.hfdSelectedGroupId,
     channelIndex =
       group === -1 ? 0 : group !== undefined && group >= 1 && group <= 3 ? group - 1 : null,
     channels = project.presets[request.presetIndex].channels,
@@ -141,6 +193,7 @@ export function planNativeProjectOpen(
       ...(Object.is(project.hfdSelectedPreset, request.presetIndex + 1)
         ? {}
         : { hfdSelectedPreset: request.presetIndex + 1 }),
+      ...(resolution ? { linkResolution: resolution } : {}),
       microphoneChanges,
     });
   const plan: NativeProjectOpenPlan = Object.freeze({
@@ -149,7 +202,11 @@ export function planNativeProjectOpen(
     route: request.route,
     channelIndex,
     ...(channelIndex === null ? {} : { channelId: channels[channelIndex].id }),
-    changed: patch.hfdSelectedPreset !== undefined || microphoneChanges.length > 0,
+    changed:
+      patch.hfdSelectedPreset !== undefined ||
+      microphoneChanges.length > 0 ||
+      (resolution?.unresolvedLinks.length ?? 0) > 0 ||
+      resolution?.warning !== undefined,
     patch,
   });
   bindings.set(plan, { project, before: structuredClone(project) });
@@ -187,6 +244,13 @@ export function applyNativeProjectOpen(
   );
   if (plan.patch.hfdSelectedPreset !== undefined)
     project.hfdSelectedPreset = plan.patch.hfdSelectedPreset;
+  if (plan.patch.linkResolution) {
+    for (const change of plan.patch.linkResolution.unresolvedLinks)
+      delete project.presets[change.presetIndex].channels[change.channelIndex].linkedTo;
+    const warning = plan.patch.linkResolution.warning;
+    if (warning !== undefined && !project.warnings.includes(warning))
+      project.warnings.push(warning);
+  }
   for (const change of plan.patch.microphoneChanges) {
     const channel = project.presets[plan.presetIndex].channels[change.channelIndex];
     channel.hfdMeasurement = {
@@ -215,11 +279,16 @@ export function prepareNativeProjectOpen(
           });
   applyNativeProjectOpen(project, slot, plan);
   if (selection) {
+    const linked =
+      project.presets[selection.presetIndex].channels[selection.channelIndex].linkedTo !==
+      undefined;
+    if (linked) copyNativeLinkedChannel(project, selection.presetIndex, selection.channelIndex);
     applyColdNativeFileOpenGraph(
       project,
       { slot, presetIndex: selection.presetIndex, channelIndex: selection.channelIndex },
       request.route,
     );
+    if (linked) settleNativeLinkedCopyCache(project, selection.presetIndex, selection.channelIndex);
     const channel = project.presets[selection.presetIndex].channels[selection.channelIndex];
     if (channel.hfdGraph?.showMeasuredResponse && !phaseCurveAvailable(channel))
       channel.hfdGraph = { ...channel.hfdGraph, showMeasuredResponse: false };
