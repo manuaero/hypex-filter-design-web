@@ -168,6 +168,9 @@ export interface Project {
   /** Native document hint; explicit channel compensation edits set it locally.
    * It is not a measurement of physical amplifier attenuation. */
   hfdGainLowered?: boolean;
+  /** Saved native group ID, including -1 and unsupported signed32 IDs.
+   * Metadata alone does not choose a browser channel or refresh processing. */
+  hfdSelectedGroupId?: number;
   hfdCalibration?: HfdProjectCalibration;
   /** Physical settings/EQ captured by HFD, independent of editable designs. */
   hfdCloneTemplate?: NativeCloneTemplate;
@@ -196,6 +199,7 @@ export function newProject(name = 'Untitled crossover'): Project {
     name,
     model: 'FA503',
     sampleRate: FS,
+    hfdSelectedGroupId: -1,
     warnings: [],
     presets: Array.from({ length: 3 }, (_, p) => ({
       name: `Preset ${p + 1}`,

@@ -28,6 +28,7 @@ import { firState, validateFirState } from './fir-state';
 import { assertProjectLinks } from './links';
 import { nativeCloneTemplateSchema, parseNativeCloneInfo } from './clone-template';
 const number = z.number().finite();
+const hfdSelectedGroupIdSchema = number.int().min(HFD_INDEX_MIN).max(HFD_INDEX_MAX);
 const coefficients = z.object({ b0: number, b1: number, b2: number, f1: number, f2: number });
 const hfdGraphOptions = z.strictObject({
   showMeasuredResponse: z.boolean(),
@@ -278,6 +279,7 @@ export const projectSchema = z
     sampleRate: z.literal(93750),
     sourceXml: z.string().max(20e6).optional(),
     hfdGainLowered: z.boolean().optional(),
+    hfdSelectedGroupId: hfdSelectedGroupIdSchema.optional(),
     hfdCalibration: hfdCalibrationSchema.optional(),
     hfdCloneTemplate: nativeCloneTemplateSchema.optional(),
     warnings: z.array(z.string()),
@@ -413,6 +415,16 @@ function readNativeFir(node: Element, capacity: number): Project['presets'][0]['
   validateFirState(result, capacity);
   return result;
 }
+function nativeSelectedGroupId(node: Element): number | undefined {
+  const fields = node.querySelectorAll(':scope > selectedgroupid');
+  if (fields.length > 1) throw new Error('Duplicate HFD selectedgroupid');
+  if (!fields.length) return undefined;
+  const value = fields[0].getAttribute('value')?.trim();
+  if (!value || !/^[+-]?\d+$/.test(value)) throw new Error('Invalid HFD selectedgroupid');
+  const parsed = hfdSelectedGroupIdSchema.safeParse(Number(value));
+  if (!parsed.success) throw new Error('Invalid HFD selectedgroupid');
+  return parsed.data;
+}
 function nativeGraphFlag(node: Element, name: string): boolean | undefined {
   const fields = node.querySelectorAll(`:scope > ${name}`);
   if (fields.length > 1) throw new Error(`Duplicate HFD ${name}`);
@@ -468,6 +480,9 @@ export function importHfd(xml: string, name: string): Project {
     throw new Error('Expected an FA503 project at 93,750 Hz');
   const project = newProject(name);
   project.sourceXml = xml;
+  const selectedGroupId = nativeSelectedGroupId(doc.documentElement);
+  if (selectedGroupId === undefined) delete project.hfdSelectedGroupId;
+  else project.hfdSelectedGroupId = selectedGroupId;
   const gainLowered = device.getAttribute('gainlowered');
   if (gainLowered !== null) {
     if (gainLowered !== 'true' && gainLowered !== 'false')
@@ -754,6 +769,14 @@ export function exportHfd(project: Project): string {
     }
     field.setAttribute('value', String(value));
   };
+  // Only explicit typed metadata owns this field. Legacy source XML remains
+  // untouched when the optional browser field is absent.
+  if (project.hfdSelectedGroupId !== undefined)
+    set(
+      doc.documentElement,
+      'selectedgroupid',
+      hfdSelectedGroupIdSchema.parse(project.hfdSelectedGroupId),
+    );
   if (project.hfdCalibration) {
     const calibration = hfdCalibrationSchema.parse(project.hfdCalibration);
     let microphone = doc.querySelector('project > microphone');

@@ -274,6 +274,12 @@ it.each([
     expect(field.value).toBe('7');
     expect(state().documents).toEqual(before);
     expect(await command('fusion_select', target.selection)).toEqual({ ok: true });
+    const expected = structuredClone(before),
+      selectionWritesMetadata = 'channel' in target.selection;
+    if (selectionWritesMetadata) expected[target.slot].hfdSelectedGroupId = target.channel + 1;
+    // The qualified channel navigation owns its native selection metadata.
+    // The stale Time draft must not change either role's processing or bounds.
+    expect(state().documents).toEqual(expected);
     expect(state().slot).toBe(target.slot);
     expect(state().channel).toBe(target.channel);
     await act(async () => field.blur());
@@ -283,9 +289,14 @@ it.each([
       selectedField.focus();
       selectedField.blur();
     });
-    expect(state().documents).toEqual(before);
-    expect(state().past).toHaveLength(0);
-    expect(state().documentRevision).toBe(0);
+    expect(state().documents).toEqual(expected);
+    expect(state().past).toHaveLength(selectionWritesMetadata ? 1 : 0);
+    expect(state().documentRevision).toBe(selectionWritesMetadata ? 1 : 0);
+    if (selectionWritesMetadata) {
+      await act(async () => state().undo());
+      expect(state().documents).toEqual(before);
+      expect(state().past).toHaveLength(0);
+    }
   },
 );
 

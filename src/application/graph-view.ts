@@ -59,6 +59,8 @@ export interface GraphViewController {
     context: GraphViewContext,
     options: { normalize: boolean; selectSection?: boolean; refreshPhase?: boolean },
   ): GraphViewPlan;
+  /** Inert preflight for callers composing a model transaction with this view. */
+  validate(plan: GraphViewPlan): void;
   commit(plan: GraphViewPlan): GraphViewState;
 }
 
@@ -144,6 +146,10 @@ export function createGraphViewController(): GraphViewController {
       context.channelIndex,
     );
     return { ...state, rawMeasurements: restored.rawMeasurements, sum: restored.showSum };
+  }
+  function validate(plan: GraphViewPlan): void {
+    if (!pending.has(plan) || plan.revision !== revisions[plan.slot])
+      throw new Error('Graph view plan is stale or does not belong to this controller');
   }
   return {
     getSnapshot: () => snapshot,
@@ -304,9 +310,9 @@ export function createGraphViewController(): GraphViewController {
       phaseSelections.set(plan, phaseBinding);
       return plan;
     },
+    validate,
     commit(plan) {
-      if (!pending.has(plan) || plan.revision !== revisions[plan.slot])
-        throw new Error('Graph view plan is stale or does not belong to this controller');
+      validate(plan);
       pending.delete(plan);
       const phaseBinding = phaseSelections.get(plan);
       if (phaseBinding !== undefined) phaseBindings[plan.slot] = phaseBinding;

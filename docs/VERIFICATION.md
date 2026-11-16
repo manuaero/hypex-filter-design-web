@@ -2,6 +2,28 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V50 channel graph-entry checkpoint
+
+The web implementation and its existing 91-command MCP server now share qualified visible channel graph entry. Only the selected role initializes despite Mirror. Nonzero compensation, independent/linked Gain publication, explicit known unloaded microphone application and saved native selection are separate from passive parsing/hydration. Plans validate before one edit; refusal, no-op, Undo, auxiliary views and palette pre-stage/one-Apply-Undo boundaries are covered without clearing filter caches.
+
+| V50 check | Recorded result |
+| --- | --- |
+| Complete FINAL private run | **3,454 passed / 3,454 total in 220 files**. |
+| Canonical / retained diagnostics | **3,346 passed in 217 files**, plus **108 included ignored diagnostics in 3 files**; no filters, omissions or changed timeouts. |
+| Core / metadata / Studio focus | **72/4, 11/1, 203/5** passed tests/files. Three proof inventories cover nine distinct changed files; focused suites overlap and are not added to full counts. |
+| Retained first full run | 22 failures remain retained: seven palette regressions and 14 ignored duplicates, plus one existing expectation that navigation left all document metadata unchanged. Product history behavior was fixed; the latter test now checks only selected-group metadata and exact Undo. |
+| Native offline observations | V49 retained independent Gain 24 / AdditionalGain 10 before first view, then saved Gain 14. V50 stopped its linked Gain 24 retention test after early normalization, and separately observed view from actual Gain 0 / AdditionalGain 6 to Gain 0 / AdditionalGain 10. |
+| Fresh public checks | **3,345 passed plus the sole optional exact PDF skip: 3,346 total in 217 files**; TypeScript, Next build and Worker packaging passed. |
+| Public source | **439 source files plus 13 protected public files: 452 total**. The existing tool-description and native-selection test changes, plus the scope document, are included in the full manifest alongside the nine owner files. |
+
+The independent V49 view cleared microphone application and recorded group 2 with the other Gains and all 135 BQ caches exact. V50's early linked route had already copied the source Peak into the target and changed cached Gain 24 to 0; its microphone change did not match the source and remains unisolated. The separately reviewed view retained cached Gain 0, normalized AdditionalGain 6 to 10, cleared microphone application and recorded group 2 with all 135 BQ caches unchanged. These observations do not establish a linked Gain 24 cap, global passive-import normalization, every linked-refresh side effect, genuine Hide/Show or instrumented callback counts. The linked checkbox was visibly checked; its Enabled property/manual toggling were not qualified. HFD closed before metadata-only exclusion release; that is not physical USB absence or a bus trace.
+
+Current V50 source-bound actual Studio browser fixture: **22 accepted checks, 3 retained unaccepted checks**, using synthetic projects. That bounded synthetic fixture includes the actual local Agent Access client and paired production-server implementation. Source-bound synthetic browser/component results are not production Site authentication, physical two-amplifier, macOS or acoustic qualification. The earlier V48-source round's 12 UI and 20 paired assertions, with 52 local MCP requests, stay dated separately.
+
+Both complete runs used two workers with unchanged timeouts and checked source/Next environment bytes. The public build produced **24 assets / 2,030,408 bytes** and a **3,288,686-byte Worker**, SHA-256 `1ee742cf740b0b3bc0cb797e2cc2f4fbc842ddb80e4b666b029a06b0a93a08ff`. Actual compiled client/Worker manual metadata stayed optional and unbundled; process-free home 200 / manual 404 and five bounded source/build privacy categories passed. These scans are not exhaustive secret detection.
+
+A fresh manual transfer began with an observed size of 2,159,767 bytes; terminal delivery and the downloaded file hash remain unverified. Last single-amplifier physical sector/hash evidence stays dated V35. Complete native File Open/passive lifecycle coverage, physical firmware programming, two amplifiers, macOS, acoustics and download delivery remain open. See [channel graph-entry scope](NATIVE-GRAPH-ENTRY-v50.md).
+
 ## V48 channel Gain checkpoint
 
 Ordinary offline channel Gain now uses passive Double-to-Single Text presentation, explicit raw Text/two-decimal Double commits, factory -125..24 dB bounds and sign-only0.1 dB wheel steps. The channel callback publishes its final AdditionalGain-capped value; it remains distinct from the BQ late display guard. Original typed Text reaches both roles before their independent caps. A human source-basis wheel mirrors only a changed canonical result; stateless MCP each-mode computes every role independently. All-target preflight, scoped link propagation, cache no-ops, one Undo and V47 field cancellation authority are covered.

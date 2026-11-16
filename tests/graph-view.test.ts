@@ -23,6 +23,38 @@ function fixture() {
 }
 
 describe('staged role-local graph view', () => {
+  it('inert repeated validation leaves a current plan available for one later commit', () => {
+    const controller = createGraphViewController(),
+      context = fixture(),
+      plan = controller.selection(context, { normalize: true }),
+      before = controller.getSnapshot(),
+      notify = vi.fn();
+    controller.subscribe(notify);
+    controller.validate(plan);
+    controller.validate(plan);
+    expect(controller.getSnapshot()).toBe(before);
+    expect(notify).not.toHaveBeenCalled();
+    controller.commit(plan);
+    expect(() => controller.validate(plan)).toThrow(/stale/);
+  });
+  it('stale and foreign graph validation refuses before a composed model publisher runs', () => {
+    const controller = createGraphViewController(),
+      other = createGraphViewController(),
+      context = fixture(),
+      stale = controller.plan(context, { sum: false }),
+      foreign = other.plan(context, { sum: false }),
+      publish = vi.fn();
+    controller.commit(controller.plan(context, { measured: true }));
+    const before = controller.getSnapshot();
+    const composed = (plan: typeof stale) => {
+      controller.validate(plan);
+      publish();
+    };
+    expect(() => composed(stale)).toThrow(/stale/);
+    expect(() => composed(foreign)).toThrow(/belong/);
+    expect(publish).not.toHaveBeenCalled();
+    expect(controller.getSnapshot()).toBe(before);
+  });
   it('has independent frozen browser defaults and stable snapshots until commit', () => {
     const controller = createGraphViewController(),
       snapshot = controller.getSnapshot();

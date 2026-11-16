@@ -52,6 +52,7 @@ import InteractivePlot, { type PlotRange } from './InteractivePlot';
 import { createPlotViewController } from '../application/plot-view';
 import {
   createNativeImpulseView,
+  nativeImpulseZoomFromRange,
   projectNativeImpulseZoom,
   type NativeImpulseBinding,
 } from '../application/native-impulse-view';
@@ -63,6 +64,7 @@ import {
   type GraphViewPatch,
   type GraphViewPlan,
 } from '../application/graph-view';
+import { createNativeGraphEntryController } from '../application/native-graph-entry';
 import ProjectLibrary from './ProjectLibrary';
 import SourceBrowser from './SourceBrowser';
 import ProjectSaveDialog from './ProjectSaveDialog';
@@ -347,6 +349,11 @@ export default function Studio() {
   };
   const projectSourceContext = useRef<ToolExecutionContext | undefined>(undefined);
   const graphController = useMemo(() => createGraphViewController(), []);
+  const projectViewGenerations = useRef<Record<Slot, number>>({ left: 0, right: 0 });
+  const nativeGraphEntries = useMemo(
+    () => createNativeGraphEntryController({ current: useWorkspace.getState }),
+    [],
+  );
   const plotViews = useSyncExternalStore(
     plotController.subscribe,
     plotController.getSnapshot,
@@ -454,6 +461,8 @@ export default function Studio() {
   const modeRef = useRef(mode);
   const tabRef = useRef(tab);
   tabRef.current = tab;
+  const designerRef = useRef(designer);
+  designerRef.current = designer;
   const nativeRangeGesture = useRef<NativeImpulseBinding | undefined>(undefined);
   async function commitWorkspaceFile(
     ...args: Parameters<ReturnType<typeof useWorkspace.getState>['commitFileImport']>
@@ -654,6 +663,10 @@ export default function Studio() {
   );
   type WorkspaceState = ReturnType<typeof useWorkspace.getState>;
   type GraphSelection = Pick<WorkspaceState, 'slot' | 'preset' | 'channel'>;
+  const graphVisible = (requestedTab = tabRef.current, requestedDesigner = designerRef.current) =>
+    requestedTab === 'Crossover' && requestedDesigner === 'graph';
+  const graphBinding = (selection: GraphSelection) =>
+    `${selection.slot}:${projectViewGenerations.current[selection.slot]}:${selection.preset}`;
   const graphContext = (state: WorkspaceState, selection: GraphSelection = state) => {
     const selectedPreset = state.documents[selection.slot]?.presets[selection.preset];
     if (!selectedPreset) throw new Error('Invalid graph preset selection');
@@ -661,7 +674,7 @@ export default function Studio() {
       slot: selection.slot,
       channels: selectedPreset.channels,
       channelIndex: selection.channel,
-      binding: `${selection.slot}:${selection.preset}`,
+      binding: graphBinding(selection),
     };
   };
   const commitGraphPlan = (
@@ -669,48 +682,88 @@ export default function Studio() {
     captured: WorkspaceState,
     selection: GraphSelection = captured,
     choose?: Parameters<WorkspaceState['choose']>[0],
+    entry?: { explicitChannelSelection?: boolean },
+    nativeWritebackAllowed = entry !== undefined || graphVisible(),
   ) => {
-    const latest = useWorkspace.getState(),
-      target =
-        latest.documents[selection.slot]?.presets[selection.preset]?.channels[selection.channel];
-    if (
-      latest.documents !== captured.documents ||
-      latest.documentRevision !== captured.documentRevision ||
-      latest.slot !== captured.slot ||
-      latest.preset !== captured.preset ||
-      latest.channel !== captured.channel ||
-      latest.filter !== captured.filter ||
-      plan.slot !== selection.slot ||
-      plan.channelIndex !== selection.channel ||
-      plan.binding !== `${selection.slot}:${selection.preset}` ||
-      target?.id !== plan.channelId
-    )
-      throw new Error('The graph target changed; choose the view again');
-    if (
-      plan.writeback &&
-      (target.hfdGraph?.showMeasuredResponse !== plan.writeback.showMeasuredResponse ||
-        target.hfdGraph?.showSum !== plan.writeback.showSum)
-    ) {
-      latest.editAt(
-        [selection.slot],
-        (document) => {
-          const destination = document.presets[selection.preset].channels[selection.channel];
-          if (destination.id !== plan.channelId) throw new Error('The graph output changed');
-          destination.hfdGraph = { ...plan.writeback! };
-        },
-        { synchronizeLinks: false },
-      );
-    }
-    if (choose) useWorkspace.getState().choose(choose);
-    graphController.commit(plan);
+    const assertCurrent = () => {
+      const latest = useWorkspace.getState(),
+        target =
+          latest.documents[selection.slot]?.presets[selection.preset]?.channels[selection.channel];
+      if (
+        latest.documents !== captured.documents ||
+        latest.documentRevision !== captured.documentRevision ||
+        latest.slot !== captured.slot ||
+        latest.preset !== captured.preset ||
+        latest.channel !== captured.channel ||
+        latest.filter !== captured.filter ||
+        plan.slot !== selection.slot ||
+        plan.channelIndex !== selection.channel ||
+        plan.binding !== graphBinding(selection) ||
+        target?.id !== plan.channelId
+      )
+        throw new Error('The graph target changed; choose the view again');
+      graphController.validate(plan);
+      return { latest, target };
+    };
+    const { latest, target } = assertCurrent();
+    const entryPlan = entry
+      ? nativeGraphEntries.plan({
+          slot: selection.slot,
+          presetIndex: selection.preset,
+          channelIndex: selection.channel,
+          ...entry,
+        })
+      : undefined;
+    const writeback = nativeWritebackAllowed ? plan.writeback : undefined;
+    const changesGraph =
+      !!writeback &&
+      (target.hfdGraph?.showMeasuredResponse !== writeback.showMeasuredResponse ||
+        target.hfdGraph?.showSum !== writeback.showSum);
+    const publish = (apply?: (document: Project, slot: Slot) => void) => {
+      assertCurrent();
+      if (entryPlan?.changed || changesGraph)
+        latest.editAt(
+          [selection.slot],
+          (document, slot) => {
+            assertCurrent();
+            apply?.(document, slot);
+            const destination = document.presets[selection.preset].channels[selection.channel];
+            if (slot !== selection.slot || destination.id !== plan.channelId)
+              throw new Error('The graph output changed');
+            if (changesGraph) destination.hfdGraph = { ...writeback! };
+          },
+          { synchronizeLinks: false },
+        );
+      if (choose) useWorkspace.getState().choose(choose);
+      graphController.commit(plan);
+    };
+    if (entryPlan) nativeGraphEntries.commit(entryPlan, publish);
+    else publish();
   };
   const patchGraph = (patch: GraphViewPatch) => {
     const captured = useWorkspace.getState();
-    commitGraphPlan(graphController.plan(graphContext(captured), patch), captured);
+    commitGraphPlan(
+      graphController.plan(graphContext(captured), patch),
+      captured,
+      captured,
+      undefined,
+      graphVisible() ? {} : undefined,
+    );
   };
-  const chooseWorkspace = (patch: Parameters<WorkspaceState['choose']>[0]) => {
+  const chooseWorkspace = (
+    patch: Parameters<WorkspaceState['choose']>[0],
+    options?: {
+      openGraph?: boolean;
+      explicitChannelSelection?: boolean;
+      initializeGraph?: boolean;
+    },
+  ) => {
     const captured = useWorkspace.getState();
     if (!['slot', 'preset', 'channel', 'filter'].some((key) => key in patch)) {
+      captured.choose(patch);
+      return;
+    }
+    if (!graphVisible() && !options?.openGraph) {
       captured.choose(patch);
       return;
     }
@@ -720,10 +773,47 @@ export default function Studio() {
       channel: patch.channel ?? captured.channel,
     };
     const plan = graphController.selection(graphContext(captured, selection), {
-      normalize: true,
+      normalize: options?.initializeGraph !== false,
       ...(patch.filter === undefined ? {} : { selectSection: true }),
     });
-    commitGraphPlan(plan, captured, selection, patch);
+    commitGraphPlan(
+      plan,
+      captured,
+      selection,
+      patch,
+      options?.initializeGraph === false
+        ? undefined
+        : {
+            explicitChannelSelection:
+              options?.explicitChannelSelection ?? patch.channel !== undefined,
+          },
+    );
+  };
+  const initializeVisibleGraph = (explicitChannelSelection = false) => {
+    const current = useWorkspace.getState();
+    commitGraphPlan(
+      graphController.selection(graphContext(current), { normalize: true }),
+      current,
+      current,
+      undefined,
+      { explicitChannelSelection },
+    );
+  };
+  const setWorkspaceTabOnly = (next: typeof tab) => {
+    tabRef.current = next;
+    setTab(next);
+  };
+  const setWorkspaceDesignerOnly = (next: typeof designer) => {
+    designerRef.current = next;
+    setDesigner(next);
+  };
+  const openWorkspaceTab = (next: typeof tab) => {
+    if (graphVisible(next)) initializeVisibleGraph();
+    setWorkspaceTabOnly(next);
+  };
+  const openWorkspaceDesigner = (next: typeof designer) => {
+    if (graphVisible(tabRef.current, next)) initializeVisibleGraph();
+    setWorkspaceDesignerOnly(next);
   };
   useEffect(() => {
     if (!hydrated || !persistenceStatus.hydrated) return;
@@ -803,6 +893,8 @@ export default function Studio() {
     return result;
   };
   function projectViewsReplaced(slots: readonly Slot[]) {
+    nativeGraphEntries.invalidateRoles(slots);
+    for (const slot of slots) projectViewGenerations.current[slot]++;
     for (const [key, view] of retainedHardwareGainViews.current)
       if (slots.includes(view.slot)) retainedHardwareGainViews.current.delete(key);
     setDocumentEpochs((previous) => ({
@@ -812,6 +904,11 @@ export default function Studio() {
     nativeImpulseView.invalidate(slots);
     const current = useWorkspace.getState();
     refreshPhaseMeasurements(slots, current.preset, [current.channel]);
+    if (slots.includes(current.slot) && graphVisible()) {
+      // File replacement initializes only the graph actually visible here.
+      // Retain the imported selected-group metadata, including native -1.
+      initializeVisibleGraph();
+    }
     if (
       slots.includes(useWorkspace.getState().slot) &&
       modeRef.current === 'Impulse' &&
@@ -1576,7 +1673,7 @@ export default function Studio() {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'F1' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
-        setTab('Help');
+        setWorkspaceTabOnly('Help');
         return;
       }
       if (!getWorkspacePersistenceStatus().hydrated) {
@@ -1695,7 +1792,7 @@ export default function Studio() {
                   device,
                 };
                 if (!report.controlsQualified) {
-                  setTab('Device settings');
+                  setWorkspaceTabOnly('Device settings');
                   chooseWorkspace({ slot });
                   throw new FirmwareRuntimeDiagnosticError(
                     `Firmware ${report.identity.firmware} / DSP core ${report.identity.core} identified read-only. Controls for this runtime are unavailable.`,
@@ -2208,34 +2305,75 @@ export default function Studio() {
     }
   };
   function openPalette(mode: 'add' | 'replace', requestedIndex?: number, frequency?: number) {
-    const eq = tab === 'Input EQ',
-      list = eq ? preset.inputEq : channel.filters,
+    const captured = useWorkspace.getState(),
+      eq = tabRef.current === 'Input EQ',
+      selectedPreset = captured.documents[captured.slot].presets[captured.preset],
+      selectedChannel = selectedPreset.channels[captured.channel],
+      slots: Slot[] = captured.linkedEdits ? ['left', 'right'] : [captured.slot],
+      list = eq ? selectedPreset.inputEq : selectedChannel.filters,
       index =
         mode === 'add'
           ? list.findIndex((f) => isUnusedBiquad(f) && (!eq || !f.enabled))
-          : (requestedIndex ?? (eq ? eqIndex : w.filter));
+          : (requestedIndex ?? (eq ? eqIndex : captured.filter));
     if (index < 0 || index >= list.length) {
       setError('All sections are in use. Change an existing filter shape or remove a section.');
       return false;
     }
-    if (!eq && channel.linkedTo !== undefined) {
-      setError('Edit the linked master channel or unlink it first.');
-      return false;
+    for (const slot of slots) {
+      const targetPreset = captured.documents[slot].presets[captured.preset],
+        targetChannel = targetPreset?.channels[captured.channel],
+        targetList = eq ? targetPreset?.inputEq : targetChannel?.filters,
+        target = targetList?.[index];
+      if (
+        !target ||
+        (!eq && targetChannel.linkedTo !== undefined) ||
+        (mode === 'add' && (!isUnusedBiquad(target) || (eq && target.enabled)))
+      ) {
+        setError(`The ${slot} section is unavailable or its channel is linked to a master.`);
+        return false;
+      }
     }
-    const draft =
+    // Admit every palette target and construct its draft before entering the
+    // source Graph. Opening this ordinary editor explicitly reveals that Graph;
+    // it is separate from passive role/channel selection in a hidden editor.
+    let draft =
       mode === 'add'
         ? { ...newFilter('peak'), frequency: frequency ?? 1000, gain: 3 }
         : structuredClone(list[index]);
+    if (!eq) {
+      try {
+        chooseWorkspace(
+          {
+            slot: captured.slot,
+            preset: captured.preset,
+            channel: captured.channel,
+            filter: index,
+          },
+          { openGraph: true, explicitChannelSelection: false },
+        );
+        setWorkspaceTabOnly('Crossover');
+        setWorkspaceDesignerOnly('graph');
+        if (mode === 'replace')
+          draft = structuredClone(
+            useWorkspace.getState().documents[captured.slot].presets[captured.preset].channels[
+              captured.channel
+            ].filters[index],
+          );
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error));
+        return false;
+      }
+    }
     paletteEnabledExplicit.current = false;
     setPaletteDraft(draft);
     setPaletteFailure('');
     setPalette({
       mode,
       index,
-      slot: w.slot,
-      slots: w.linkedEdits ? ['left', 'right'] : [w.slot],
-      preset: w.preset,
-      channel: w.channel,
+      slot: captured.slot,
+      slots,
+      preset: captured.preset,
+      channel: captured.channel,
       eq,
     });
     return true;
@@ -2294,14 +2432,17 @@ export default function Studio() {
         if (palette.eq) encodeEq(list);
         else encodeChannel(c);
       });
-      chooseWorkspace({
-        slot: palette.slot,
-        preset: palette.preset,
-        channel: palette.channel,
-        ...(!palette.eq ? { filter: palette.index } : {}),
-      });
+      setWorkspaceTabOnly(palette.eq ? 'Input EQ' : 'Crossover');
+      chooseWorkspace(
+        {
+          slot: palette.slot,
+          preset: palette.preset,
+          channel: palette.channel,
+          ...(!palette.eq ? { filter: palette.index } : {}),
+        },
+        { explicitChannelSelection: false, initializeGraph: false },
+      );
       if (palette.eq) setEqIndex(palette.index);
-      setTab(palette.eq ? 'Input EQ' : 'Crossover');
       setNotice(
         `${FILTER_LABELS[paletteDraft.kind]} applied to ${palette.slots.join(' + ')} design. Upload when ready.`,
       );
@@ -2553,15 +2694,25 @@ export default function Studio() {
           patch.graph.measured !== patch.measured)
       )
         throw new Error('Conflicting graph view values');
+      const requestedTab = (patch.tab as typeof tab | undefined) ?? tabRef.current,
+        requestedDesigner = patch.designer ?? designerRef.current,
+        graphTargetVisible = graphVisible(requestedTab, requestedDesigner);
       const graphPatch: GraphViewPatch = {
           ...patch.graph,
           ...(patch.sum === undefined ? {} : { sum: patch.sum }),
           ...(patch.measured === undefined ? {} : { measured: patch.measured }),
         },
+        enteringGraph =
+          graphTargetVisible &&
+          (patch.tab === 'Crossover' ||
+            patch.designer === 'graph' ||
+            Object.keys(graphPatch).length > 0),
         capturedGraphWorkspace = useWorkspace.getState(),
         graphPlan = Object.keys(graphPatch).length
           ? graphController.plan(graphContext(capturedGraphWorkspace), graphPatch)
-          : undefined;
+          : enteringGraph
+            ? graphController.selection(graphContext(capturedGraphWorkspace), { normalize: true })
+            : undefined;
       const requestedMode = (patch.mode as PlotMode | undefined) ?? modeRef.current,
         plotContext = { slot: capturedGraphWorkspace.slot, mode: requestedMode },
         previousViewport = plotController.getSnapshot()[plotContext.slot][plotContext.mode],
@@ -2587,7 +2738,6 @@ export default function Studio() {
           !rangeKeys.some((key) => key in patch),
         wantsFit = patch.fitTime !== undefined || automaticFit,
         changesRange = patch.resetPlot || Object.keys(rangePatch).length > 0 || wantsFit;
-      const requestedTab = (patch.tab as typeof tab | undefined) ?? tabRef.current;
       const timedPlot = requestedMode === 'Impulse' || requestedMode === 'Step';
       if (patch.zoomRectangle) {
         const required = timedPlot
@@ -2633,8 +2783,18 @@ export default function Studio() {
           ),
         };
       validatePlotRange(nextRange);
+      if (saveNativeBounds) nativeImpulseZoomFromRange(nextRange);
       if (saveNativeBounds) capturedGraphWorkspace.beginGesture();
       try {
+        if (graphPlan)
+          commitGraphPlan(
+            graphPlan,
+            capturedGraphWorkspace,
+            capturedGraphWorkspace,
+            undefined,
+            enteringGraph ? {} : undefined,
+            graphTargetVisible,
+          );
         if (patch.authPanel !== undefined) setAuthView(patch.authPanel);
         if (patch.meters !== undefined) setShowMeters(patch.meters);
         if (patch.healthDetails !== undefined) setHealthDetails(patch.healthDetails);
@@ -2645,7 +2805,7 @@ export default function Studio() {
         if (patch.nativeCentered !== undefined) setNativeCentered(patch.nativeCentered);
         if (patch.showUnloadedFilters !== undefined)
           setShowUnloadedFilters(patch.showUnloadedFilters);
-        if (patch.designer !== undefined) setDesigner(patch.designer);
+        if (patch.designer !== undefined) setWorkspaceDesignerOnly(patch.designer);
         if (patch.selectedBiquads !== undefined)
           setSelectedBiquads(patch.selectedBiquads.map((i) => i - 1));
         if (patch.copySourceChannel !== undefined)
@@ -2685,12 +2845,11 @@ export default function Studio() {
           });
         if (patch.zoomBack)
           plotController.rectangle(plotContext, { kind: 'undo' }, previousViewport.range);
-        if (patch.tab) setTab(patch.tab as (typeof TABS)[number]);
+        if (patch.tab) setWorkspaceTabOnly(patch.tab as (typeof TABS)[number]);
         if (patch.mode) {
           modeRef.current = requestedMode;
           setMode(requestedMode);
         }
-        if (graphPlan) commitGraphPlan(graphPlan, capturedGraphWorkspace);
         if (patch.calibrationCurve !== undefined) {
           const state = useWorkspace.getState(),
             document = state.documents[state.slot];
@@ -2972,7 +3131,7 @@ export default function Studio() {
                 title={t}
                 aria-current={tab === t ? 'page' : undefined}
                 className={tab === t ? 'active' : ''}
-                onClick={() => setTab(t)}
+                onClick={() => designAction(() => openWorkspaceTab(t), `${t} opened.`)}
               >
                 <Icon size={18} />
                 <span>{['XO', 'EQ', 'FIR', 'IR', 'AMP', 'SAVE', 'HELP', 'CHECK', 'MCP'][i]}</span>
@@ -3408,7 +3567,12 @@ export default function Studio() {
                           designer === 'chain' ? 'active designer-switch' : 'designer-switch'
                         }
                         aria-pressed={designer === 'chain'}
-                        onClick={() => setDesigner(designer === 'chain' ? 'graph' : 'chain')}
+                        onClick={() =>
+                          designAction(
+                            () => openWorkspaceDesigner(designer === 'chain' ? 'graph' : 'chain'),
+                            'Crossover view updated.',
+                          )
+                        }
                       >
                         {designer === 'chain' ? 'Response graph' : 'Signal chain'}
                       </button>
@@ -3488,8 +3652,10 @@ export default function Studio() {
                       copySource={copySourceChannel}
                       onSelect={selectChain}
                       onOpenGraph={(channel) => {
-                        chooseWorkspace({ channel });
-                        setDesigner('graph');
+                        designAction(() => {
+                          chooseWorkspace({ channel }, { openGraph: true });
+                          setWorkspaceDesignerOnly('graph');
+                        }, 'Channel graph opened.');
                       }}
                       onMarkCopy={setCopySourceChannel}
                       onCopyTo={(to) => {
@@ -3539,7 +3705,7 @@ export default function Studio() {
                         })
                       }
                       onOutputName={(channel, name) => editChannel({ outputName: name }, channel)}
-                      onNavigate={setTab}
+                      onNavigate={openWorkspaceTab}
                     />
                   ) : (
                     <>
@@ -4682,7 +4848,7 @@ export default function Studio() {
               </div>
             </div>
           )}
-          {tab === 'Help' && <HelpAbout onVerification={() => setTab('Verification')} />}
+          {tab === 'Help' && <HelpAbout onVerification={() => openWorkspaceTab('Verification')} />}
           {tab === 'Verification' && (
             <div className="page-panel">
               <div className="eyebrow">HFD 5.2.4 PARITY</div>
