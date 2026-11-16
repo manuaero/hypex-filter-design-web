@@ -10,6 +10,14 @@ _Filter editor with a persistent parameter inspector._
 
 This is an independent project. Software implementation and simulation coverage do not establish complete HFD compatibility or qualify every hardware operation. Current live protocol support targets FA503 / DSP3-213 core 5.1. Other device families, macOS USB behavior and simultaneous operation of two physical amplifiers remain unqualified.
 
+## V55 native-open Global delay reconciliation
+
+Native HFD project opening now reconciles the three stored Global delay values within an affected preset. If any value differs, it copies the first channel's raw Global value and maximum to all three channels. Equal values preserve differing or missing maxima. This operation uses the stored Doubles directly, without field Text formatting, sample rounding or runtime bounds.
+
+The shared UI/MCP preparation reconciles the original saved preset before Graph construction; an outer dialog open also reconciles the chosen preset after its Graph effects. Each role's complete final document validates before replacement or durable receipt storage. JSON snapshots and retained source XML do not grant native-open intent. See [native project opening](docs/HFD-CHANNEL-DELAY.md#native-project-opening) and [V55 evidence and limits](docs/VERIFICATION.md#v55-native-global-reconciliation).
+
+The complete private run passed **3,906 assertions in 245 files**: 3,798 canonical assertions in 242 files plus 108 retained diagnostics in three files. Nonincremental TypeScript passed; all 460 checked inputs, 10 selected owner files and three documentation pins remained exact. Two offline native first Saves qualify the equal-value and differing-value cases. V55 public validation, build, browser and publication results are not claimed at this checkpoint. These changes add no physical amplifier or bridge-configuration qualification.
+
 ## V54 channel delay
 
 Delay and Global delay now share HFD's microsecond Text callback between the inspector and MCP, including sample rounding, saved maxima and same-value notifications. A local callback also copies processing to immediate linked followers; this can change their gain, inversion and mute. Each role uses its own trusted runtime profile and Global field Text. Both final proposals validate before one undoable workspace edit, with no amplifier command.

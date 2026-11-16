@@ -1742,7 +1742,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   fusion_file_close:
     'Close/abort temporary staged file data after use. This does not undo an import. An in-flight commit can finish; inspect its outcome if marked unknown.',
   fusion_project_import_folder:
-    'Import an HFD Config.xml and its associated impulse DAT files from a list of relative paths and text contents.',
+    'Import an HFD Config.xml and its associated impulse DAT files from relative paths and text contents. A native HFD open reconciles differing Global delays by copying the first raw value and maximum in the original saved preset, then in the chosen preset after the dialog Graph effects. Equal Global values retain differing maxima. A consumed browser JSON sidecar remains passive. All selected roles are prepared before one replacement.',
   fusion_project_files:
     'Return Config.xml, impulse DAT files and the lossless browser project for saving as an HFD project folder.',
   fusion_project_save:
@@ -1794,7 +1794,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   fusion_rename:
     'Rename the existing project (up to 200 characters), or one preset when preset is supplied, without changing processing or selection. Paired changes use one Undo.',
   fusion_project_import:
-    'Import a local HFD XML or Fusion JSON design without applying saved device settings.',
+    'Import a local HFD XML or Fusion JSON design without applying saved device settings. Native HFD Open reconciles differing Global delays using the first raw value and maximum in the original saved preset, then the chosen preset after dialog Graph effects; equal values retain differing maxima. JSON snapshots remain passive. Every selected role is prepared before one replacement.',
   fusion_project_export: 'Return a project file as text for saving.',
   fusion_filter_set:
     'Edit a manual crossover biquad. Explicit frequency/F2 commits use canonical decimal Text, 10–50,000 Hz bounds, one decimal and Single storage. Ordinary FA Q/Q2 commits use 0.1–20, three decimals and Double storage; BQ gain uses −125…24 dB, two decimals and Double storage. Exact zero retains the previous frequency/Q field value; gain zero is accepted. These are recovered profile defaults, not all native custom preference settings. Untouched imported values stay unchanged. A shape change preserves Enabled unless explicitly supplied. Parameter redesign replaces preserved imported caches; raw bypass/latent edits retain coefficients. Raw coefficients accept a strict nonempty finite partial vector, merged independently for each role without rounding. Conversion to raw retains the current unbypassed section; new raw sections start at Unity. Every target is preflighted before one Undoable edit. Cache interpretation and upload stability guards remain independent.',

@@ -62,6 +62,31 @@ workspace publishes an edit. All resulting changes form one Undo step. An
 invalid second role leaves both originals intact. Delay edits make no amplifier
 calls; applying a design still requires the explicit upload workflow.
 
+## Native project opening
+
+Opening a native HFD project has a separate raw Global-delay reconciliation
+operation. Within the affected preset, HFD compares the three stored Global
+values. If they are equal, it preserves differing or missing maximum metadata.
+If any value differs, it copies the first channel's raw Global value **and
+maximum** to all three channels. This uses the stored Doubles directly, without
+Text formatting, sample rounding or runtime bounds. Manual field callbacks
+continue to preserve each destination's own maximum.
+
+The native loader first reconciles the original saved preset, before choosing
+the runtime preset or constructing its selected Graph. The outer File Open
+dialog also reconciles the chosen preset after the selected Graph's linked-copy
+and cold-constructor effects. Inner OpenFile routes have only the loader stage.
+The application prepares these effects on detached role documents before
+publishing a replacement or recording its receipt. Ordinary native parsing,
+JSON snapshots, hydration and browser-created designs remain passive.
+
+A real value mismatch requires a known finite first-channel Global maximum;
+the app does not substitute a factory maximum. Legacy unlinked native input
+with a missing or unsupported saved-preset number is admitted only when every
+possible preset has uniform Global values, proving the loader stage inert.
+Existing linked-input selection checks still apply. Errors leave the workspace
+unchanged and identify the original native project information that is needed.
+
 ## MCP
 
 Use one delay intent per call:
@@ -102,6 +127,19 @@ ASIO selections stayed empty. This is native GUI/file evidence, not a USB bus
 trace or physical upload test. General-format/getter precision vectors and
 connected-runtime bound selection have separate native source evidence.
 
-Broader native File Open delay normalization and alternate selectable delay
-units remain unqualified. This change does not establish complete HFD parity,
+Two additional offline HFD first Saves qualify the separate native-open gate.
+Equal Global values retained all nine differing maxima. With differing values,
+the original saved preset 3 and offline chosen preset 1 copied their first Global
+value and maximum; preset 2's Global values and maxima stayed intact. The first
+case started from an empty designer, whose preset selector was disabled; the
+second started visibly on preset 2. No numeric or Graph input occurred in either
+case. All 135 biquad/cache records, gains and local delays/maxima were retained.
+The differing-value case's first Save also renumbered 15 sink descriptors, including three input-FIR
+descriptors; FIR processing data stayed intact. The source establishes the
+internal load/dialog ordering; the GUI files show combined Open and first Save.
+
+General Save lifecycle behavior and alternate selectable delay units remain
+unqualified. In particular, the native serializer's reconciliation call follows
+its serialization invocation; it is not evidence of a pre-Save operation.
+This change does not establish complete HFD parity,
 physical two-amplifier acceptance, macOS USB behavior or new amplifier state.

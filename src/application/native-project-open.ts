@@ -8,6 +8,11 @@ import {
 import { applyColdNativeFileOpenGraph } from './native-graph-entry';
 import { copyNativeLinkedChannel, settleNativeLinkedCopyCache } from '../domain/native-linked-copy';
 import { phaseCurveAvailable } from './graph-view';
+import {
+  applyNativeGlobalDelayReconciliation,
+  planNativeGlobalDelayReconciliation,
+  type NativeGlobalDelayReconciliationPlan,
+} from '../domain/native-global-delay';
 
 export type NativeProjectOpenRoute = 'dialog' | 'inner';
 /** Trusted parser/source outcome, never a caller-supplied command flag. */
@@ -33,6 +38,8 @@ export interface NativeProjectOpenLinkResolution {
   readonly warning?: string;
 }
 export interface NativeProjectOpenPatch {
+  /** Raw loader reconciliation in the ORIGINAL saved preset, before selection. */
+  readonly globalDelayReconciliation?: NativeGlobalDelayReconciliationPlan;
   readonly hfdSelectedPreset?: number;
   readonly linkResolution?: NativeProjectOpenLinkResolution;
   /** The opened Graph owns its own final microphone state. */
@@ -151,6 +158,30 @@ function linkResolution(project: Readonly<Project>): NativeProjectOpenLinkResolu
   });
 }
 
+function savedGlobalDelayReconciliation(
+  project: Readonly<Project>,
+): NativeGlobalDelayReconciliationPlan | undefined {
+  const savedPreset = project.hfdSelectedPreset;
+  if (savedPreset !== undefined && savedPreset >= 1 && savedPreset <= 3) {
+    const plan = planNativeGlobalDelayReconciliation(project, savedPreset - 1);
+    return plan.changed ? plan : undefined;
+  }
+  // Retained legacy selection can be absent or unsupported. Only accept it
+  // when every possible loader target proves inert, without guessing a preset
+  // or requiring maximum metadata that a no-op never reads.
+  assert(
+    project.presets.every((preset) =>
+      preset.channels.every(
+        (channel) =>
+          Number.isFinite(channel.globalDelayUs) &&
+          channel.globalDelayUs === preset.channels[0].globalDelayUs,
+      ),
+    ),
+    'Native Open requires original saved preset 1–3 to reconcile differing Global delays; reopen the original HFD project',
+  );
+  return undefined;
+}
+
 /** Inert document delta. The runtime preset is supplied by trusted coordination,
  * never inferred from saved XML or a Clone template. No Graph is claimed here. */
 export function planNativeProjectOpen(
@@ -170,6 +201,7 @@ export function planNativeProjectOpen(
   );
   checkProject(project);
   const resolution = linkResolution(project),
+    globalDelayReconciliation = savedGlobalDelayReconciliation(project),
     group = project.hfdSelectedGroupId,
     channelIndex =
       group === -1 ? 0 : group !== undefined && group >= 1 && group <= 3 ? group - 1 : null,
@@ -190,6 +222,7 @@ export function planNativeProjectOpen(
         : [],
     ),
     patch: NativeProjectOpenPatch = Object.freeze({
+      ...(globalDelayReconciliation ? { globalDelayReconciliation } : {}),
       ...(Object.is(project.hfdSelectedPreset, request.presetIndex + 1)
         ? {}
         : { hfdSelectedPreset: request.presetIndex + 1 }),
@@ -203,6 +236,7 @@ export function planNativeProjectOpen(
     channelIndex,
     ...(channelIndex === null ? {} : { channelId: channels[channelIndex].id }),
     changed:
+      globalDelayReconciliation !== undefined ||
       patch.hfdSelectedPreset !== undefined ||
       microphoneChanges.length > 0 ||
       (resolution?.unresolvedLinks.length ?? 0) > 0 ||
@@ -242,6 +276,8 @@ export function applyNativeProjectOpen(
       same(project, binding.before),
     'Native Open requires its matching detached role proposal',
   );
+  if (plan.patch.globalDelayReconciliation)
+    applyNativeGlobalDelayReconciliation(project, plan.patch.globalDelayReconciliation);
   if (plan.patch.hfdSelectedPreset !== undefined)
     project.hfdSelectedPreset = plan.patch.hfdSelectedPreset;
   if (plan.patch.linkResolution) {
@@ -292,6 +328,13 @@ export function prepareNativeProjectOpen(
     const channel = project.presets[selection.presetIndex].channels[selection.channelIndex];
     if (channel.hfdGraph?.showMeasuredResponse && !phaseCurveAvailable(channel))
       channel.hfdGraph = { ...channel.hfdGraph, showMeasuredResponse: false };
+  }
+  // The outer dialog reconciles the CHOSEN preset after OpenFile's selected
+  // Graph construction. Inner OpenFile routes have only the loader stage.
+  // This is raw document reconciliation, separate from notified delay fields.
+  if (request.route === 'dialog') {
+    const global = planNativeGlobalDelayReconciliation(project, request.presetIndex);
+    if (global.changed) applyNativeGlobalDelayReconciliation(project, global);
   }
   if (project.hfdCalibration) reconcileProjectHfdCalibration(project, importedProject);
   else
