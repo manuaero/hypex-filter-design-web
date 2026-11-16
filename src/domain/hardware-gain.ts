@@ -1,12 +1,11 @@
 import type { Channel } from './model';
-import { formatManualNumberValue, normalizeManualNumberText } from './manual-number';
+import { formatHfdChannelGainValue, normalizeHfdChannelGainText } from './channel-gain';
+export { HFD_CHANNEL_GAIN_BOUNDS } from './channel-gain';
 
 type HardwareGainChannel = Readonly<Pick<Channel, 'gain' | 'additionalGain'>>;
 
 /** Offline FA503 factory channel-field profile (c69020/c6d3dc/c6d4d0).
  * This is design compensation, not a live amplifier gain/attenuation command. */
-export const HFD_CHANNEL_GAIN_BOUNDS = Object.freeze({ min: -125, max: 24 });
-
 export interface HardwareGainPresentation {
   /** Fresh native visibility. A trusted view can retain visibility after Off. */
   available: boolean;
@@ -36,13 +35,11 @@ function validate(channel: HardwareGainChannel) {
  * Only presentation is rounded; passive import/canonical values stay untouched. */
 export function hardwareGainPresentation(channel: HardwareGainChannel): HardwareGainPresentation {
   validate(channel);
-  const { min, max } = HFD_CHANNEL_GAIN_BOUNDS,
-    value = Math.min(max, Math.max(min, Math.fround(channel.gain))),
-    nonzero = (channel.additionalGain ?? 0) !== 0;
+  const nonzero = (channel.additionalGain ?? 0) !== 0;
   return {
     available: nonzero,
     checked: nonzero,
-    gainText: formatManualNumberValue(value, 2),
+    gainText: formatHfdChannelGainValue(channel.gain),
   };
 }
 
@@ -59,22 +56,9 @@ export function normalizeHardwareGainCallback(
   validate(channel);
   if (typeof checked !== 'boolean')
     throw new Error('Hardware gain compensation requires a boolean');
-  const normalize = (text: string) =>
-      normalizeManualNumberText(text, {
-        ...HFD_CHANNEL_GAIN_BOUNDS,
-        places: 2,
-        zeroAllowed: true,
-        storage: 'double',
-        label: 'Channel gain',
-      }),
-    additionalGain = checked ? 10 : 0,
+  const additionalGain = checked ? 10 : 0,
     text = options.gainText ?? hardwareGainPresentation(channel).gainText;
-  let gain = normalize(text);
-  // In this explicit factory profile Maximum24 and AdditionalGain0/10 are exact
-  // integers. Comparing the parsed Double to24-AdditionalGain is equivalent to
-  // c64bb5's Extended sum/compare, without introducing a binary64 addition stage.
-  const ceiling = HFD_CHANNEL_GAIN_BOUNDS.max - additionalGain;
-  if (gain.value > ceiling) gain = normalize(String(ceiling));
+  const gain = normalizeHfdChannelGainText(text, { additionalGain });
   return {
     gain: gain.value,
     additionalGain,

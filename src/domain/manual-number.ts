@@ -205,7 +205,7 @@ export interface ManualNumberWheelState {
 }
 export interface ManualNumberWheelOptions {
   parameter: 'frequency' | 'q' | 'gain';
-  profile?: 'ordinary' | 'input-eq' | 'graph-q';
+  profile?: 'ordinary' | 'input-eq' | 'graph-q' | 'channel-gain';
   displayedText?: string;
   state?: ManualNumberWheelState;
   step: number | 'decade';
@@ -225,10 +225,53 @@ interface WheelMemory {
   text: string;
   value: number;
   parameter: 'frequency' | 'q' | 'gain';
-  profile: 'ordinary' | 'input-eq' | 'graph-q';
+  profile: 'ordinary' | 'input-eq' | 'graph-q' | 'channel-gain';
 }
 const wheelMemory = new WeakMap<ManualNumberWheelState, WheelMemory>();
 const addExtended = (a: Ratio, b: Ratio) => extended({ n: a.n * b.d + b.n * a.d, d: a.d * b.d });
+
+function additionalGainCeiling(
+  text: string,
+  additionalGain: number,
+  maximum: Ratio,
+  setValue: (candidate: Ratio) => void,
+) {
+  const parsed = storeDouble(parse(text, 'Channel gain'));
+  if (!Number.isFinite(parsed)) throw new Error('Channel gain cannot be stored as Double');
+  if (compare(addExtended(double(parsed), double(additionalGain)), maximum) > 0n)
+    setValue(addExtended(maximum, double(-additionalGain)));
+}
+
+/** Internal c64b74 channel callback; no Single narrowing in its cap setter.
+ * c64bf0..c64c03 passes Maximum(Extended)-AdditionalGain(Double) as Extended
+ * directly to ba6ecc, before its explicit final Text-to-Double getter. */
+export function normalizeManualChannelGainText(
+  text: string,
+  { min, max, additionalGain }: { min: number; max: number; additionalGain: number },
+): ManualNumberResult {
+  if (!Number.isFinite(additionalGain) || min > max)
+    throw new Error('Channel gain requires finite compensation and valid bounds');
+  let result = normalizeManualNumberText(text, {
+    min,
+    max,
+    places: 2,
+    zeroAllowed: true,
+    storage: 'double',
+    label: 'Channel gain',
+  });
+  const { minimum, maximum } = numberBounds(min, max, undefined, 'Channel gain');
+  additionalGainCeiling(result.text, additionalGain, maximum, (candidate) => {
+    const bounded =
+      compare(candidate, minimum) < 0n
+        ? minimum
+        : compare(candidate, maximum) > 0n
+          ? maximum
+          : candidate;
+    const text = fixed(bounded, 2);
+    result = { text, value: storeDouble(parse(text, 'Channel gain')) };
+  });
+  return result;
+}
 
 /** Extended->Double store, including subnormal rounding. Kept private so callers
  * cannot accidentally replace native Extended addition with binary64 addition. */
@@ -300,17 +343,18 @@ export function adjustManualNumberWheel(
   const { parameter, step, min, max, places, zeroAllowed, additionalGain } = options,
     profile = options.profile ?? 'ordinary';
   if (
-    !['ordinary', 'input-eq', 'graph-q'].includes(profile) ||
+    !['ordinary', 'input-eq', 'graph-q', 'channel-gain'].includes(profile) ||
     !['frequency', 'q', 'gain'].includes(parameter) ||
     (parameter === 'frequency' && profile !== 'input-eq') ||
     (profile === 'graph-q' && parameter !== 'q') ||
+    (profile === 'channel-gain' && parameter !== 'gain') ||
     (direction !== -1 && direction !== 1) ||
     ![1, 2, 3].includes(places) ||
     (step === 'decade' ? parameter !== 'frequency' : !Number.isFinite(step)) ||
     (typeof step === 'number' && Math.abs(step) >= 1e17) ||
-    [value, min, max, additionalGain].some(
-      (number) => !Number.isFinite(number) || Math.abs(number) >= 1e17,
-    ) ||
+    [value, min, max].some((number) => !Number.isFinite(number) || Math.abs(number) >= 1e17) ||
+    !Number.isFinite(additionalGain) ||
+    (profile !== 'channel-gain' && Math.abs(additionalGain) >= 1e17) ||
     min > max
   )
     throw new Error('Invalid manual wheel value, direction or bounds');
@@ -358,6 +402,12 @@ export function adjustManualNumberWheel(
     // c64990 sets InhibitOnChangeEventOnce (ba7664/+533) while normalizing
     // changed Text, then the outer Q/gain callback performs its qword store.
     setBounded(parse(text, 'Wheel value'), false);
+    // Channel c64b74 additionally caps its normalized Text, then explicitly
+    // publishes the final getter. BQ gain's callback does not do this.
+    if (profile === 'channel-gain')
+      additionalGainCeiling(text, additionalGain, maximum, (candidate) =>
+        setBounded(candidate, false),
+      );
     model = storeDouble(parse(text, 'Wheel value'));
   }
 
@@ -375,15 +425,14 @@ export function adjustManualNumberWheel(
   // Extended Value must not run the ordinary changed-Text normalization.
   if (profile === 'graph-q') model = storeDouble(parse(text, 'Wheel value'));
 
-  if (parameter === 'gain' && profile === 'ordinary') {
+  if (parameter === 'gain' && (profile === 'ordinary' || profile === 'channel-gain')) {
     // c64323: Text is narrowed to Double, then channel AdditionalGain is added
     // in Extended. This ceiling follows AddValue even when its delta was0.
-    const parsed = storeDouble(parse(text, 'Wheel value'));
-    if (!Number.isFinite(parsed)) throw new Error('Wheel value cannot be stored as Double');
-    if (compare(addExtended(double(parsed), double(additionalGain)), maximum) > 0n)
+    additionalGainCeiling(text, additionalGain, maximum, (candidate) =>
       // c64359..8b inhibits this Text change's OnChange once. The visible field
-      // is capped, but the BQ model retains the preceding AddValue callback.
-      setBounded(addExtended(maximum, double(-additionalGain)), false);
+      // is capped, but its model retains the preceding callback publication.
+      setBounded(candidate, false),
+    );
   }
 
   if (!Number.isFinite(model)) throw new Error('Wheel value cannot be stored as Double');

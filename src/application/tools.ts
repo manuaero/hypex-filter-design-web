@@ -505,10 +505,16 @@ const eqFilterPatch = z
 const channelPatch = z
   .object({
     hardwareGain: z.boolean(),
+    gainWheel: z
+      .object({
+        direction: z.enum(['up', 'down']),
+        basis: z.enum(['each', 'left', 'right']).optional(),
+      })
+      .strict(),
     includeInSum: z.boolean(),
     name: z.string(),
     outputName: z.string(),
-    gain: finite.min(-96).max(18),
+    gain: z.union([finite, z.string()]),
     invert: z.boolean(),
     muted: z.boolean(),
     delayUs: finite.min(0).max(32000),
@@ -518,6 +524,9 @@ const channelPatch = z
   .strict()
   .refine((patch) => !Object.hasOwn(patch, 'hardwareGain') || Object.keys(patch).length === 1, {
     message: 'hardwareGain is a separate native callback intent; supply it alone',
+  })
+  .refine((patch) => !Object.hasOwn(patch, 'gainWheel') || Object.keys(patch).length === 1, {
+    message: 'gainWheel is a separate native wheel intent; supply it alone',
   });
 export const controlsSchema = z
   .object({
@@ -1777,7 +1786,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   fusion_filter_delete:
     'Delete a crossover biquad using native HFD semantics: retain its slot identity, Enabled state and latent frequency/Q/gain/direction parameters, replace its response with Unity and make the slot available for Add. This is an undoable design edit without amplifier I/O; broader Reset remains separate.',
   fusion_channel_set:
-    'Edit channel gain, polarity, mute, delay and labels with atomic all-target admission and no history for canonical no-ops. A sole patch.hardwareGain boolean invokes the conditional native Hardware gain compensation callback, preserving filter caches: Off sets the selected AdditionalGain to0, On sets it to10 and caps coupled channel Gain at14dB. No arbitrary AdditionalGain scalar or hardware command is exposed. Trusted retained editor contexts can re-enable after Off; otherwise fresh availability requires an existing nonzero imported offset. Each explicit callback normalizes current Gain Text and the selected project hint, even if checked state already matches. Both uses independent role contexts and one Undo.',
+    'Edit offline channel gain, polarity, mute, delay and labels atomically. Gain accepts a finite number or original raw Text, normalizes to two decimals in the native FA503 -125..24dB profile, and applies each role’s own AdditionalGain ceiling. A sole patch.gainWheel {direction:up|down,basis?:each|left|right} performs one sign-only0.1dB fresh-field event; Both defaults to each independently. Fixed source basis mirrors only a changed canonical result, through each destination’s own ceiling. Results report per-role Text and canonical value; continuous human wheel state remains local to the field. Canonical no-ops add no history. A sole patch.hardwareGain boolean invokes the conditional Hardware gain compensation callback: Off sets AdditionalGain0; On sets10 and caps Gain14dB. Trusted retained editor contexts can re-enable after Off; fresh availability requires a nonzero offset. These are undoable design edits, without amplifier I/O; live master-volume bounds remain separate.',
   fusion_copy: 'Copy a channel or preset between roles while retaining independent documents.',
   fusion_history: 'Undo or redo a design edit.',
   fusion_eq_default:
@@ -2431,10 +2440,17 @@ export function createToolExecutor(adapter: ToolAdapter) {
           const slots = roles(p.target),
             presetIndex = p.preset - 1,
             channelIndex = p.channel - 1;
+          const { gainWheel, ...ordinaryPatch } = p.patch;
           const plan = planChannelEdit(
             state.documents,
             slots,
-            { presetIndex, channelIndex, patch: p.patch },
+            {
+              presetIndex,
+              channelIndex,
+              patch: gainWheel
+                ? { gainWheel: { ...gainWheel, direction: gainWheel.direction === 'up' ? 1 : -1 } }
+                : ordinaryPatch,
+            },
             state.documentRevision,
             {
               hardwareGainContext: Object.fromEntries(
@@ -2471,6 +2487,16 @@ export function createToolExecutor(adapter: ToolAdapter) {
               })),
             };
           }
+          if (p.patch.gain !== undefined || p.patch.gainWheel !== undefined)
+            return {
+              ok: true,
+              changed: plan.changedSlots.length > 0,
+              roles: plan.roles.map((role) => ({
+                slot: role.slot,
+                changed: role.changed,
+                gain: role.gainResult ?? role.gainWheelResult,
+              })),
+            };
           if (!plan.changedSlots.length) return { ok: true, changed: false };
           break;
         }

@@ -126,7 +126,7 @@ it('does not redesign vectors or silently resolve first-cache interpretation whe
     fir = channel(docs.left).fir;
   applyChannelEdit(docs.left, 'left', p);
   expect(channel(docs.left)).toMatchObject({
-    gain: -6.123456789,
+    gain: -6.12,
     invert: true,
     muted: true,
     delayUs: 17.123456789,
@@ -140,8 +140,8 @@ it('does not redesign vectors or silently resolve first-cache interpretation whe
 });
 
 it.each([
-  { gain: -96.1 },
-  { gain: 18.1 },
+  { gain: -Infinity },
+  { gain: Infinity },
   { gain: NaN },
   { invert: 1 },
   { muted: 'false' },

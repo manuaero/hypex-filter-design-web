@@ -13,8 +13,10 @@ import {
   planChannelEdit,
   applyChannelEdit,
   type ChannelEditPatch,
+  type ChannelEditOptions,
 } from '../domain/channel-editing';
 import { hardwareGainPresentation } from '../domain/hardware-gain';
+import { HFD_CHANNEL_GAIN_BOUNDS } from '../domain/channel-gain';
 import { supportsHfdGraphQ } from '../domain/manual-graph-q';
 import {
   captureManualFilterDrag,
@@ -249,7 +251,6 @@ type Live = {
 };
 const fmt = (v: number) => (v >= 1000 ? `${+(v / 1000).toFixed(2)}k` : `${+v.toFixed(2)}`);
 // Passive compensation field display only; the retained canonical Double is untouched.
-const formatHardwareGain = (gain: number) => hardwareGainPresentation({ gain }).gainText;
 function Toggle({
   checked,
   onChange,
@@ -1963,7 +1964,11 @@ export default function Studio() {
   const hardwareGainAvailable =
     getHardwareGainContext({ slot: w.slot, presetIndex: w.preset, channelIndex: w.channel })
       ?.available === true;
-  const editChannel = (patch: ChannelEditPatch, channelIndex = w.channel) => {
+  const editChannel = (
+    patch: ChannelEditPatch,
+    channelIndex = w.channel,
+    options: ChannelEditOptions = {},
+  ) => {
     try {
       const current = useWorkspace.getState();
       if (current.slot !== w.slot || current.preset !== w.preset || current.channel !== w.channel)
@@ -1975,6 +1980,7 @@ export default function Studio() {
         { presetIndex: current.preset, channelIndex, patch },
         current.documentRevision,
         {
+          ...options,
           hardwareGainContext: Object.fromEntries(
             slots.map((slot) => [
               slot,
@@ -1998,8 +2004,10 @@ export default function Studio() {
             channelId: role.context[channelIndex].id,
           })),
         );
+      return plan.roles.find((role) => role.slot === current.slot);
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
+      return false;
     }
   };
   const editFilter = (
@@ -3072,17 +3080,37 @@ export default function Studio() {
               data-channel-gain-context={`${w.slot}:${documentEpochs[w.slot]}:${w.preset}:${channel.id}`}
             >
               <Numeric
-                contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:gain:${hardwareGainAvailable ? 'compensation' : 'ordinary'}`}
-                formatValue={hardwareGainAvailable ? formatHardwareGain : undefined}
+                contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:gain:${channel.additionalGain ?? 0}`}
+                channelGain
+                channelGainAdditionalGain={channel.additionalGain ?? 0}
+                channelGainRevision={w.documentRevision}
+                getChannelGainRevision={() => useWorkspace.getState().documentRevision}
                 begin={beginNumericGesture}
                 end={w.endGesture}
                 disabled={channel.linkedTo !== undefined}
                 label="Gain"
                 value={channel.gain}
                 onChange={(gain) => editChannel({ gain })}
+                onTextCommit={(text) => {
+                  const role = editChannel({ gain: text });
+                  return role ? role.gainResult! : false;
+                }}
+                onChannelGainWheel={(result, direction) => {
+                  const role = editChannel({ gainWheel: { direction, basis: w.slot } }, w.channel, {
+                    gainWheelSourceEvent: {
+                      slot: w.slot,
+                      channelId: channel.id,
+                      expectedGain: channel.gain,
+                      expectedAdditionalGain: channel.additionalGain ?? 0,
+                      result,
+                    },
+                  });
+                  return role !== false;
+                }}
                 unit="dB"
-                min={-96}
-                max={18}
+                min={HFD_CHANNEL_GAIN_BOUNDS.min}
+                max={HFD_CHANNEL_GAIN_BOUNDS.max}
+                adjustmentBounds={HFD_CHANNEL_GAIN_BOUNDS}
                 step={0.1}
               />
             </div>

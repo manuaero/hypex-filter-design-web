@@ -5,16 +5,39 @@ import {
   normalizeHardwareGainCallback,
   type HardwareGainCallbackResult,
 } from './hardware-gain';
+import {
+  HFD_CHANNEL_GAIN_BOUNDS,
+  formatHfdChannelGainValue,
+  hfdChannelGainWheelNext,
+  normalizeHfdChannelGainText,
+  type HfdChannelGainResult,
+  type HfdChannelGainWheelResult,
+} from './channel-gain';
 
 export type ChannelEditValues = Pick<
   Channel,
   'name' | 'outputName' | 'includeInSum' | 'gain' | 'invert' | 'muted' | 'delayUs' | 'globalDelayUs'
 >;
-export type ChannelEditPatch = Partial<ChannelEditValues> & { hardwareGain?: boolean };
-/** Existing browser/MCP authoring bounds, not native callback qualification.
- * Values are validated exactly: no new rounding, clamping or import changes. */
+export interface ChannelGainWheelIntent {
+  direction: -1 | 1;
+  basis?: 'each' | Slot;
+}
+export type ChannelEditPatch = Partial<Omit<ChannelEditValues, 'gain'>> & {
+  /** Original request, normalized separately for each role's AdditionalGain. */
+  gain?: number | string;
+  hardwareGain?: boolean;
+  gainWheel?: ChannelGainWheelIntent;
+};
+export interface ChannelGainWheelSourceEvent {
+  slot: Slot;
+  channelId: string;
+  expectedGain: number;
+  expectedAdditionalGain: number;
+  result: Pick<HfdChannelGainWheelResult, 'text' | 'value' | 'changed'>;
+}
+/** Offline channel authoring profile; live master-volume bounds are separate. */
 export const CHANNEL_EDIT_BOUNDS = Object.freeze({
-  gain: Object.freeze({ min: -96, max: 18 }),
+  gain: HFD_CHANNEL_GAIN_BOUNDS,
   delayUs: Object.freeze({ min: 0, max: 32000 }),
   globalDelayUs: Object.freeze({ min: 0, max: 74666.6666667 }),
 });
@@ -27,6 +50,8 @@ export interface ChannelEditOptions {
   /** Trusted current visible view context, never caller-supplied command data.
    * A latched view remains available after Off; absent views use fresh state. */
   hardwareGainContext?: Partial<Record<Slot, { available: boolean; gainText?: string }>>;
+  /** Trusted current human source event; opaque wheel state stays in Numeric. */
+  gainWheelSourceEvent?: ChannelGainWheelSourceEvent;
 }
 interface ChannelContext {
   id: string;
@@ -51,11 +76,13 @@ export interface ChannelEditPlan {
     synchronizeLinks: boolean;
     context: ChannelContext[];
     hardwareGain?: { beforeHint: boolean | undefined; result: HardwareGainCallbackResult };
+    gainResult?: HfdChannelGainResult;
+    gainWheelResult?: Pick<HfdChannelGainWheelResult, 'text' | 'value' | 'changed'>;
     changes: {
       channelIndex: number;
       before: ChannelEditValues;
       value: ChannelEditValues;
-      patch: ChannelEditPatch;
+      patch: Partial<ChannelEditValues>;
     }[];
   }[];
 }
@@ -110,6 +137,20 @@ const values = (channel: Channel): ChannelEditValues => ({
 function checkedPatch(input: ChannelEditPatch): ChannelEditPatch {
   if (!input || typeof input !== 'object' || Array.isArray(input))
     throw new Error('Invalid channel patch');
+  if (Object.hasOwn(input, 'gainWheel')) {
+    const wheel = input.gainWheel;
+    if (
+      Object.keys(input).length !== 1 ||
+      !wheel ||
+      typeof wheel !== 'object' ||
+      Array.isArray(wheel) ||
+      Object.keys(wheel).some((key) => !['direction', 'basis'].includes(key)) ||
+      (wheel.direction !== -1 && wheel.direction !== 1) ||
+      (wheel.basis !== undefined && !['each', 'left', 'right'].includes(wheel.basis))
+    )
+      throw new Error('Channel gain wheel must be a sole valid intent');
+    return { gainWheel: { direction: wheel.direction, basis: wheel.basis ?? 'each' } };
+  }
   if (Object.hasOwn(input, 'hardwareGain')) {
     if (Object.keys(input).length !== 1 || typeof input.hardwareGain !== 'boolean')
       throw new Error('Hardware gain compensation must be a sole boolean intent');
@@ -126,6 +167,12 @@ function checkedPatch(input: ChannelEditPatch): ChannelEditPatch {
       if (typeof value !== 'string') throw new Error('Channel labels must be strings');
     } else if (field === 'includeInSum' || field === 'invert' || field === 'muted') {
       if (typeof value !== 'boolean') throw new Error('Channel flags must be boolean');
+    } else if (field === 'gain') {
+      if (
+        (typeof value !== 'number' && typeof value !== 'string') ||
+        (typeof value === 'number' && !Number.isFinite(value))
+      )
+        throw new Error('Channel gain must be finite numeric Text or a number');
     } else {
       const bounds = CHANNEL_EDIT_BOUNDS[field];
       if (
@@ -201,7 +248,8 @@ function target(
 
 /** Shared authoring transaction. All selected role roots validate even for equal
  * requested processing values. Native compensation is an explicit, conditional
- * callback intent; ordinary scalar patches retain their existing validation. */
+ * callback intent. Ordinary gain Text and wheel requests share its native field
+ * profile without changing passive imports or retained coefficient vectors. */
 export function planChannelEdit(
   documents: Record<Slot, Project>,
   slots: readonly Slot[],
@@ -239,18 +287,58 @@ export function planChannelEdit(
   if (structural.length === 2 && [...structural[0]].some((value) => structural[1].has(value)))
     throw new Error('Channel edit roles alias processing objects');
   const requestsHardware = Object.hasOwn(patch, 'hardwareGain');
+  const wheel = patch.gainWheel;
+  if (options.gainWheelSourceEvent && (!wheel || wheel.basis === 'each'))
+    throw new Error('A channel gain source event requires a fixed wheel basis');
+  if (wheel && wheel.basis !== 'each' && !slots.includes(wheel.basis!))
+    throw new Error('Channel gain wheel source must be a selected role');
   const requestsProcessing =
-    requestsHardware || processing.some((field) => Object.hasOwn(patch, field));
+    requestsHardware ||
+    wheel !== undefined ||
+    processing.some((field) => Object.hasOwn(patch, field));
   for (const role of targets)
     if (
       requestsProcessing &&
       rootChannel(role.preset, request.channelIndex) !== request.channelIndex
     )
       throw new Error(`${role.slot} channel is linked; edit its master or unlink it first`);
+  let sourceResult: Pick<HfdChannelGainWheelResult, 'text' | 'value' | 'changed'> | undefined;
+  if (wheel && wheel.basis !== 'each') {
+    const source = targets.find((role) => role.slot === wheel.basis)!.preset.channels[
+      request.channelIndex
+    ];
+    const event = options.gainWheelSourceEvent;
+    if (event) {
+      if (
+        event.slot !== wheel.basis ||
+        event.channelId !== source.id ||
+        !Object.is(event.expectedGain, source.gain) ||
+        !Object.is(event.expectedAdditionalGain, source.additionalGain ?? 0) ||
+        !Number.isFinite(event.result.value) ||
+        typeof event.result.text !== 'string' ||
+        typeof event.result.changed !== 'boolean' ||
+        event.result.changed !== !Object.is(event.result.value, source.gain)
+      )
+        throw new Error('The channel gain wheel source changed');
+      sourceResult = {
+        text: event.result.text,
+        value: event.result.value,
+        changed: event.result.changed,
+      };
+    } else {
+      const result = hfdChannelGainWheelNext(source.gain, wheel.direction, {
+        additionalGain: source.additionalGain ?? 0,
+      });
+      sourceResult = { text: result.text, value: result.value, changed: result.changed };
+    }
+  }
   const roles = targets.map(({ slot, preset, context }) => {
     const channel = preset.channels[request.channelIndex];
     let hardwareGain: ChannelEditPlan['roles'][number]['hardwareGain'];
-    let ordinaryPatch = patch;
+    let gainResult: HfdChannelGainResult | undefined;
+    let gainWheelResult: ChannelEditPlan['roles'][number]['gainWheelResult'];
+    const { gain: rawGain, hardwareGain: _hardware, gainWheel: _wheel, ...scalarPatch } = patch;
+    let ordinaryPatch: Partial<ChannelEditValues> = scalarPatch;
     if (requestsHardware) {
       const trusted = options.hardwareGainContext?.[slot];
       if (
@@ -268,9 +356,39 @@ export function planChannelEdit(
       });
       hardwareGain = { beforeHint: documents[slot].hfdGainLowered, result };
       ordinaryPatch = { gain: result.gain };
+    } else if (rawGain !== undefined) {
+      gainResult = normalizeHfdChannelGainText(
+        typeof rawGain === 'string' ? rawGain : String(rawGain),
+        {
+          additionalGain: channel.additionalGain ?? 0,
+        },
+      );
+      ordinaryPatch.gain = gainResult.value;
+    } else if (wheel) {
+      if (sourceResult) {
+        if (slot === wheel.basis) gainWheelResult = { ...sourceResult };
+        else if (!sourceResult.changed)
+          gainWheelResult = {
+            text: formatHfdChannelGainValue(channel.gain),
+            value: channel.gain,
+            changed: false,
+          };
+        else {
+          const result = normalizeHfdChannelGainText(String(sourceResult.value), {
+            additionalGain: channel.additionalGain ?? 0,
+          });
+          gainWheelResult = { ...result, changed: !Object.is(result.value, channel.gain) };
+        }
+      } else {
+        const result = hfdChannelGainWheelNext(channel.gain, wheel.direction, {
+          additionalGain: channel.additionalGain ?? 0,
+        });
+        gainWheelResult = { text: result.text, value: result.value, changed: result.changed };
+      }
+      if (gainWheelResult.changed) ordinaryPatch.gain = gainWheelResult.value;
     }
     let synchronizeLinks = false;
-    const patches = new Map<number, ChannelEditPatch>();
+    const patches = new Map<number, Partial<ChannelEditValues>>();
     for (const field of fields) {
       const value = ordinaryPatch[field];
       if (value === undefined) continue;
@@ -307,6 +425,8 @@ export function planChannelEdit(
       context,
       changes,
       ...(hardwareGain ? { hardwareGain } : {}),
+      ...(gainResult ? { gainResult } : {}),
+      ...(gainWheelResult ? { gainWheelResult } : {}),
     };
   });
   return freeze({

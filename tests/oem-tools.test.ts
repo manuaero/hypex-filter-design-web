@@ -312,7 +312,11 @@ describe('OEM permission-aware existing MCP tools', () => {
         channel: 1,
         patch: { gain: -3 },
       }),
-    ).toEqual({ ok: true });
+    ).toEqual({
+      ok: true,
+      changed: true,
+      roles: [{ slot: 'left', changed: true, gain: { text: '-3.00', value: -3 } }],
+    });
     expect(s.state().documents.left.presets[0].channels[0].gain).toBe(-3);
     expect(s.panels.left.requests).toHaveLength(0);
     expect(s.panels.right.requests).toHaveLength(0);

@@ -2,6 +2,26 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V48 channel Gain checkpoint
+
+Ordinary offline channel Gain now uses passive Double-to-Single Text presentation, explicit raw Text/two-decimal Double commits, factory -125..24 dB bounds and sign-only0.1 dB wheel steps. The channel callback publishes its final AdditionalGain-capped value; it remains distinct from the BQ late display guard. Original typed Text reaches both roles before their independent caps. A human source-basis wheel mirrors only a changed canonical result; stateless MCP each-mode computes every role independently. All-target preflight, scoped link propagation, cache no-ops, one Undo and V47 field cancellation authority are covered.
+
+| V48 check | Recorded result |
+| --- | --- |
+| Complete private run | **3,395 passed / 3,395 total in 217 files**. |
+| Canonical product coverage | **3,287 passed in 214 files**; 108 ignored diagnostic assertions in 3 files remain separate. |
+| Core / planner / UI focus | **202/8, 149/9, 144/8** passed tests/files respectively. |
+| Retained reproductions | Original UI RED2 and separate source-predicted foreign-state RED1 remain retained; focused skips are not coverage. The first full run had one obsolete existing test expecting native -125 to be rejected; its raw failure is retained. Root corrected that assertion to accept -125 and reject -125.01, then reran the full suite. |
+| Native offline saves | **13 actual saves: 12 normal work states and one separate conflicting-input load state**. Minimum -125, maximum 24, raw 0.005 to 0.01, signed wheel and 13.95/Add10 to 14.00 were saved. A further positive 360 wheel event at the ceiling left Config bytes unchanged. |
+| Fresh public checks | **3,286 passed plus the sole optional exact PDF skip: 3,287 total in 214 files**. TypeScript, Next build and Worker packaging passed. |
+| Public source | **434 source files plus 13 protected public files: 447 total**; all earlier prose is retained byte for byte. |
+
+The separate conflicting 24/Add10 input loaded as 14 before its saved observation; no wheel was applied to that conflict, and its software-only transient-state tests are not promoted to native acceptance. The first click-only minimum entry attempt reverted; its unisolated cause and all raw screenshots/actions remain retained alongside the later accepted explicit-selection entry. Native work ran offline under the verified metadata-only exclusive interface handle. No amplifier setting, bridge, audio or firmware action and no fresh physical sector/hash read is claimed. Last single-amplifier physical proof remains dated V35.
+
+Both complete runs used two workers with unchanged timeouts and no filters/omissions; checked source and Next environment bytes remained unchanged. The public build produced **24 assets / 2,022,150 bytes** and a **3,276,936-byte Worker**, SHA-256 `c0e9d577c40a02540c5bcb0a930034f771acc9030a9df1c1d76f63e1553af26f`. The compiled client/Worker manual remains optional and unbundled; process-free home 200/manual 404 and all five bounded source/build privacy categories passed. These scans are not exhaustive secret detection.
+
+Automated Studio components/shared executor coverage is not actual V48 browser, production Agent Access, connected MCP schema refresh, remote authentication, physical amplifier or download-delivery acceptance. Earlier V45 pending browser handoff and dated V46 Node results remain historical evidence. Full HFD capabilities, conditional two-amplifier/macOS/acoustic/power and production firmware-programmer qualification remain open. See [channel Gain scope](CHANNEL-GAIN-v48.md).
+
 ## V47 numeric transaction checkpoint
 
 A focused managed numeric field now owns its cancellation lease. The default shared-store boundary protects independent edits, including graph writeback outside the usual adapter edit path. A complete proposal must validate before pending local work is committed and the independent edit receives a separate Undo step. Only the current field's scoped synchronous callback continues its own group. Accepted edits survive stale Escape, while refusals and canonical no-ops preserve the local editing group. Stale drafts and wheel state refresh even when the canonical numeric value is unchanged.

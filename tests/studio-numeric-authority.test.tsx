@@ -138,14 +138,16 @@ async function escape(input: HTMLInputElement) {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
   );
 }
-it('local Gain3 to4 then accepted paired compensation Off survives Escape with two exact Undo steps', async () => {
+it('local Gain3 to3.1 by arrow then accepted paired compensation Off survives Escape with two exact Undo steps', async () => {
   await mount();
   const original = structuredClone(state().documents),
     input = field('Gain');
   await act(async () => input.focus());
-  await type(input, '4');
+  await act(async () =>
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })),
+  );
   const local = structuredClone(state().documents);
-  expect(channel().gain).toBe(4);
+  expect(channel().gain).toBe(3.1);
   await act(async () => expect(await foreignOff()).toMatchObject({ ok: true }));
   const accepted = structuredClone(state().documents);
   expect(state().past).toHaveLength(2);
@@ -162,27 +164,33 @@ it('Right-only foreign edits retire Left focus even when its canonical number do
   await mount();
   const input = field('Gain');
   await act(async () => input.focus());
-  await type(input, '4');
+  await act(async () =>
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })),
+  );
   const local = structuredClone(state().documents);
   await act(async () => expect(await foreignOff('right')).toMatchObject({ ok: true }));
   const accepted = structuredClone(state().documents);
-  expect(channel().gain).toBe(4);
+  expect(channel().gain).toBe(3.1);
   await escape(input);
   expect(state().documents).toEqual(accepted);
   expect(state().past).toHaveLength(2);
   await act(async () => state().undo());
   expect(state().documents).toEqual(local);
 });
-it('new typing in the still-focused field renews against accepted canonical state and Escape cancels only that new group', async () => {
+it('a new arrow edit in the still-focused field renews against accepted canonical state and Escape cancels only that new group', async () => {
   await mount();
   const input = field('Gain');
   await act(async () => input.focus());
-  await type(input, '4');
+  await act(async () =>
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })),
+  );
   await act(async () => expect(await foreignOff()).toMatchObject({ ok: true }));
   const accepted = structuredClone(state().documents);
   expect(document.activeElement).toBe(input);
-  await type(input, '5');
-  expect(channel().gain).toBe(5);
+  await act(async () =>
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })),
+  );
+  expect(channel().gain).toBe(3.2);
   await escape(input);
   expect(state().documents).toEqual(accepted);
   expect(state().past).toHaveLength(2);
@@ -251,13 +259,15 @@ it.each(['refused', 'canonical-noop'] as const)(
     const original = structuredClone(state().documents),
       input = field('Gain');
     await act(async () => input.focus());
-    await type(input, '4');
+    await act(async () =>
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })),
+    );
     const result = await act(async () =>
       execute('fusion_channel_set', {
         target: kind === 'refused' ? 'both' : 'left',
         preset: 1,
         channel: 1,
-        patch: { gain: kind === 'refused' ? 5 : 4 },
+        patch: { gain: kind === 'refused' ? 5 : 3.1 },
       }),
     );
     expect(result).toMatchObject(kind === 'refused' ? { ok: false } : { ok: true, changed: false });
@@ -270,7 +280,9 @@ it('a pre-render stale Escape and old-context input cannot publish into replacem
   await mount();
   const input = field('Gain');
   await act(async () => input.focus());
-  await type(input, '4');
+  await act(async () =>
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })),
+  );
   let replacement: ReturnType<typeof structuredClone>;
   await act(async () => {
     const project = structuredClone(state().documents.left);
@@ -329,7 +341,9 @@ it('an accepted native graph writeback outside adapter edit survives an older fo
   await mount();
   const input = field('Gain');
   await act(async () => input.focus());
-  await type(input, '4');
+  await act(async () =>
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })),
+  );
   const local = structuredClone(state().documents);
   await act(async () =>
     expect(await execute('fusion_view', { graph: { sum: false } })).toMatchObject({ ok: true }),
@@ -349,7 +363,9 @@ it('an unfocused other-field wheel is independent of the still-focused Gain canc
     gain = field('Gain'),
     q = host.querySelector<HTMLInputElement>('#selected-filter-inspector [aria-label="Q factor"]')!;
   await act(async () => gain.focus());
-  await type(gain, '4');
+  await act(async () =>
+    gain.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })),
+  );
   const local = structuredClone(state().documents);
   expect(document.activeElement).toBe(gain);
   await act(async () =>

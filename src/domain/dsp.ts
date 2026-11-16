@@ -2,6 +2,7 @@ import { convolve } from './fft';
 import { measurementResponse } from './measurement';
 import { designHfd } from './hfd-math';
 import { firIsEffective, presetFirPlacement, effectiveFirTaps } from './fir-state';
+import { HFD_CHANNEL_GAIN_BOUNDS } from './channel-gain';
 import { FS, unity, type Coefficients, type Filter, type Channel, type Preset } from './model';
 
 export const FILTER_NAMES: Record<Filter['kind'], string> = {
@@ -52,7 +53,12 @@ export function effectiveSections(channel: Channel): Coefficients[] {
   if (channel.coefficientCache === 'unresolved')
     throw new Error('Resolve imported channel gain interpretation before compiling');
   if (channel.filters.length !== 15) throw new Error('FA503 requires 15 biquad slots per channel');
-  if (channel.gain < -96 || channel.gain > 18) throw new Error('Channel gain outside −96…18 dB');
+  if (
+    !Number.isFinite(channel.gain) ||
+    channel.gain < HFD_CHANNEL_GAIN_BOUNDS.min ||
+    channel.gain > HFD_CHANNEL_GAIN_BOUNDS.max
+  )
+    throw new Error('Channel gain outside −125…24 dB');
   const sections = channel.filters.map(design),
     gain = 10 ** ((channel.gain + (channel.additionalGain ?? 0)) / 20) * (channel.invert ? -1 : 1);
   const first = sections[0];

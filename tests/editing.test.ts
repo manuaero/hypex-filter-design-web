@@ -76,7 +76,7 @@ function localProperties(channel: Channel) {
 }
 
 describe('explicit manual filter commits', () => {
-  it('compiles stable ordinary BQ gains at the native defaults without changing channel gain limits', () => {
+  it('compiles stable ordinary BQ gains and admits the native channel minimum while rejecting lower imports', () => {
     const channel = newProject().presets[0].channels[0];
     channel.filters[0] = editManualFilter(
       channel.filters[0],
@@ -92,6 +92,8 @@ describe('explicit manual filter commits', () => {
     );
     expect(encodeChannel(channel)).toHaveLength(512);
     channel.gain = -125;
+    expect(encodeChannel(channel)).toHaveLength(512);
+    channel.gain = -125.01;
     expect(() => encodeChannel(channel)).toThrow(/Channel gain/);
   });
   it('normalizes only explicit Q/Q2/gain fields as Double and keeps imported and gesture precision separate', () => {
