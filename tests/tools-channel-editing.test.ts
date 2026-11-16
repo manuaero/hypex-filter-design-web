@@ -142,7 +142,7 @@ it('processing edits preflight every target even for equal requested processing 
   expect(f.state().documents).toEqual(before);
   expect(f.editByRole).not.toHaveBeenCalled();
 });
-it('global analysis delay expands all three selected-preset channels without recopying dirty followers', async () => {
+it('global analysis delay normalizes and expands without recopying dirty followers', async () => {
   const f = fixture();
   channel(f, 'right').linkedTo = 1;
   const before = structuredClone(f.state().documents);
@@ -151,8 +151,9 @@ it('global analysis delay expands all three selected-preset channels without rec
   });
   for (const slot of ['left', 'right'] as const) {
     expect(f.state().documents[slot].presets[0].channels.map((c) => c.globalDelayUs)).toEqual([
-      123.456, 123.456, 123.456,
+      128, 128, 128,
     ]);
+    expect(channel(f, slot).hfdDelay?.globalMaximum).toBe(74666.6666666667);
     expect(f.state().documents[slot].presets[1]).toEqual(before[slot].presets[1]);
     expect(channel(f, slot).filters).toEqual(before[slot].presets[0].channels[0].filters);
   }

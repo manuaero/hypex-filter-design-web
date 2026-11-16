@@ -55,6 +55,10 @@ const hfdGraphOptions = z.strictObject({
   showMeasuredResponse: z.boolean(),
   showSum: z.boolean(),
 });
+const hfdDelaySchema = z.strictObject({
+  localMaximum: number.optional(),
+  globalMaximum: number.optional(),
+});
 /** Storage preserves native raw axes. Applying a viewport validates ordering separately. */
 export const hfdImpulseZoomSchema = z.strictObject({
   left: number,
@@ -347,6 +351,7 @@ export const projectSchema = z
                   muted: z.boolean(),
                   delayUs: number,
                   globalDelayUs: number,
+                  hfdDelay: hfdDelaySchema.optional(),
                   filters: z.array(filter).length(15),
                   fir: fir(1500),
                   includeInSum: z.boolean().optional(),
@@ -500,6 +505,8 @@ function nativeZoomNumber(node: Element | null, name: string): number | undefine
     throw new Error(`Invalid HFD ${name}`);
   return Number(value);
 }
+// Reuse the strict optional native scalar reader: an absent maximum is not0.
+const nativeDelayMaximum = (node: Element) => nativeZoomNumber(node, 'maxdelay');
 function xmlDocument(xml: string) {
   if (/<!DOCTYPE|<!ENTITY/i.test(xml))
     throw new Error('XML entities and DOCTYPE are not supported');
@@ -685,8 +692,14 @@ export function importHfd(xml: string, name: string): Project {
         channel.linkedTo = n;
       }
       for (const delay of path.filter((n) => n.getAttribute('processtype') === 'ptDelay')) {
-        if (bool(delay, 'global')) channel.globalDelayUs = num(delay, 'delay');
+        const global = bool(delay, 'global');
+        if (global) channel.globalDelayUs = num(delay, 'delay');
         else channel.delayUs = num(delay, 'delay');
+        const maximum = nativeDelayMaximum(delay);
+        if (maximum !== undefined) {
+          channel.hfdDelay ??= {};
+          channel.hfdDelay[global ? 'globalMaximum' : 'localMaximum'] = maximum;
+        }
       }
       const cacheIsBase =
         doc.documentElement.getAttribute('fusion-studio-coefficient-cache') === 'base';
@@ -956,8 +969,13 @@ export function exportHfd(project: Project): string {
       set(gain, 'additionalgain', c.additionalGain ?? 0);
       set(gain, 'invert', c.invert);
       set(gain, 'mute', c.muted);
-      for (const node of path.filter((n) => n.getAttribute('processtype') === 'ptDelay'))
-        set(node, 'delay', bool(node, 'global') ? c.globalDelayUs : c.delayUs);
+      const delayMetadata = c.hfdDelay === undefined ? undefined : hfdDelaySchema.parse(c.hfdDelay);
+      for (const node of path.filter((n) => n.getAttribute('processtype') === 'ptDelay')) {
+        const global = bool(node, 'global');
+        set(node, 'delay', global ? c.globalDelayUs : c.delayUs);
+        const maximum = global ? delayMetadata?.globalMaximum : delayMetadata?.localMaximum;
+        if (maximum !== undefined) set(node, 'maxdelay', maximum);
+      }
       writeFir(
         path.find((n) => n.getAttribute('processtype') === 'ptFir'),
         c.fir,

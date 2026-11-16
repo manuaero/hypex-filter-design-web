@@ -6,13 +6,22 @@ import {
   type HardwareGainCallbackResult,
 } from './hardware-gain';
 import {
-  HFD_CHANNEL_GAIN_BOUNDS,
   formatHfdChannelGainValue,
   hfdChannelGainWheelNext,
   normalizeHfdChannelGainText,
   type HfdChannelGainResult,
   type HfdChannelGainWheelResult,
 } from './channel-gain';
+import {
+  formatHfdChannelDelayValue,
+  hfdChannelDelayWheelNext,
+  normalizeHfdChannelDelayText,
+  readHfdChannelDelayText,
+  type HfdChannelDelayResult,
+  type HfdChannelDelayWheelResult,
+} from './channel-delay';
+import { resolveChannelDelayProfiles, type ChannelDelayRuntime } from './channel-delay-profile';
+import { copyNativeLinkedChannel, settleNativeLinkedCopyCache } from './native-linked-copy';
 
 export type ChannelEditValues = Pick<
   Channel,
@@ -22,12 +31,32 @@ export interface ChannelGainWheelIntent {
   direction: -1 | 1;
   basis?: 'each' | Slot;
 }
-export type ChannelEditPatch = Partial<Omit<ChannelEditValues, 'gain'>> & {
+export interface ChannelDelayWheelIntent {
+  parameter: 'local' | 'global';
+  direction: -1 | 1;
+  basis?: 'each' | Slot;
+}
+export type ChannelEditPatch = Partial<
+  Omit<ChannelEditValues, 'gain' | 'delayUs' | 'globalDelayUs'>
+> & {
   /** Original request, normalized separately for each role's AdditionalGain. */
   gain?: number | string;
   hardwareGain?: boolean;
   gainWheel?: ChannelGainWheelIntent;
+  delayUs?: number | string;
+  globalDelayUs?: number | string;
+  delayWheel?: ChannelDelayWheelIntent;
 };
+export interface ChannelDelayWheelSourceEvent {
+  slot: Slot;
+  channelId: string;
+  expectedValue: number;
+  expectedContextKey: string;
+  result: Pick<
+    HfdChannelDelayWheelResult,
+    'text' | 'value' | 'changed' | 'notified' | 'maximumValue'
+  >;
+}
 export interface ChannelGainWheelSourceEvent {
   slot: Slot;
   channelId: string;
@@ -35,12 +64,6 @@ export interface ChannelGainWheelSourceEvent {
   expectedAdditionalGain: number;
   result: Pick<HfdChannelGainWheelResult, 'text' | 'value' | 'changed'>;
 }
-/** Offline channel authoring profile; live master-volume bounds are separate. */
-export const CHANNEL_EDIT_BOUNDS = Object.freeze({
-  gain: HFD_CHANNEL_GAIN_BOUNDS,
-  delayUs: Object.freeze({ min: 0, max: 32000 }),
-  globalDelayUs: Object.freeze({ min: 0, max: 74666.6666667 }),
-});
 export interface ChannelEditRequest {
   presetIndex: number;
   channelIndex: number;
@@ -52,6 +75,9 @@ export interface ChannelEditOptions {
   hardwareGainContext?: Partial<Record<Slot, { available: boolean; gainText?: string }>>;
   /** Trusted current human source event; opaque wheel state stays in Numeric. */
   gainWheelSourceEvent?: ChannelGainWheelSourceEvent;
+  /** Current application session and visible Global Text, never command data. */
+  delayContext?: Partial<Record<Slot, { runtime?: ChannelDelayRuntime; globalText?: string }>>;
+  delayWheelSourceEvent?: ChannelDelayWheelSourceEvent;
 }
 interface ChannelContext {
   id: string;
@@ -78,6 +104,10 @@ export interface ChannelEditPlan {
     hardwareGain?: { beforeHint: boolean | undefined; result: HardwareGainCallbackResult };
     gainResult?: HfdChannelGainResult;
     gainWheelResult?: Pick<HfdChannelGainWheelResult, 'text' | 'value' | 'changed'>;
+    delayResult?: HfdChannelDelayResult;
+    delayWheelResult?: ChannelDelayWheelSourceEvent['result'];
+    /** Full native callback proposals are materialized for every role before publication. */
+    delayProposal?: { before: Project; value: Project };
     changes: {
       channelIndex: number;
       before: ChannelEditValues;
@@ -137,6 +167,38 @@ const values = (channel: Channel): ChannelEditValues => ({
 function checkedPatch(input: ChannelEditPatch): ChannelEditPatch {
   if (!input || typeof input !== 'object' || Array.isArray(input))
     throw new Error('Invalid channel patch');
+  if (Object.hasOwn(input, 'delayWheel')) {
+    const wheel = input.delayWheel;
+    if (
+      Object.keys(input).length !== 1 ||
+      !wheel ||
+      typeof wheel !== 'object' ||
+      Array.isArray(wheel) ||
+      Object.keys(wheel).some((key) => !['parameter', 'direction', 'basis'].includes(key)) ||
+      !['local', 'global'].includes(wheel.parameter) ||
+      (wheel.direction !== -1 && wheel.direction !== 1) ||
+      (wheel.basis !== undefined && !['each', 'left', 'right'].includes(wheel.basis))
+    )
+      throw new Error('Channel delay wheel must be a sole valid intent');
+    return {
+      delayWheel: {
+        parameter: wheel.parameter,
+        direction: wheel.direction,
+        basis: wheel.basis ?? 'each',
+      },
+    };
+  }
+  for (const field of ['delayUs', 'globalDelayUs'] as const) {
+    if (!Object.hasOwn(input, field)) continue;
+    const value = input[field];
+    if (
+      Object.keys(input).length !== 1 ||
+      (typeof value !== 'string' && typeof value !== 'number') ||
+      (typeof value === 'number' && !Number.isFinite(value))
+    )
+      throw new Error('A channel delay callback must be a sole finite numeric Text intent');
+    return { [field]: value };
+  }
   if (Object.hasOwn(input, 'gainWheel')) {
     const wheel = input.gainWheel;
     if (
@@ -173,15 +235,6 @@ function checkedPatch(input: ChannelEditPatch): ChannelEditPatch {
         (typeof value === 'number' && !Number.isFinite(value))
       )
         throw new Error('Channel gain must be finite numeric Text or a number');
-    } else {
-      const bounds = CHANNEL_EDIT_BOUNDS[field];
-      if (
-        typeof value !== 'number' ||
-        !Number.isFinite(value) ||
-        value < bounds.min ||
-        value > bounds.max
-      )
-        throw new Error('Channel ' + field + ' outside existing authoring bounds');
     }
     Object.assign(result, { [field]: value });
   }
@@ -246,6 +299,203 @@ function target(
   return { preset, context };
 }
 
+function planDelayEdit(
+  documents: Record<Slot, Project>,
+  slots: readonly Slot[],
+  request: ChannelEditRequest,
+  targets: { slot: Slot; preset: Project['presets'][number]; context: ChannelContext[] }[],
+  revision: number | undefined,
+  options: ChannelEditOptions,
+): ChannelEditPlan {
+  const wheel = request.patch.delayWheel;
+  const parameter =
+    wheel?.parameter ?? (Object.hasOwn(request.patch, 'delayUs') ? 'local' : 'global');
+  const field = parameter === 'local' ? 'delayUs' : 'globalDelayUs';
+  if (options.gainWheelSourceEvent)
+    throw new Error('A gain source event cannot authorize a delay callback');
+  if (options.delayWheelSourceEvent && (!wheel || wheel.basis === 'each'))
+    throw new Error('A delay source event requires a fixed wheel basis');
+  if (wheel && wheel.basis !== 'each' && !slots.includes(wheel.basis!))
+    throw new Error('Channel delay wheel source must be a selected role');
+  const contexts = targets.map((role) => {
+    try {
+      return {
+        ...role,
+        profiles: resolveChannelDelayProfiles(
+          documents[role.slot],
+          request.presetIndex,
+          request.channelIndex,
+          options.delayContext?.[role.slot]?.runtime,
+        ),
+      };
+    } catch (error) {
+      throw new Error(`${role.slot}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+  // All requested local roots validate even for a no-notification wheel event.
+  for (const role of contexts)
+    if (parameter === 'local' && role.preset.channels[request.channelIndex].linkedTo !== undefined)
+      throw new Error(`${role.slot} channel is linked; edit its master or unlink it first`);
+  let sourceResult: ChannelDelayWheelSourceEvent['result'] | undefined;
+  if (wheel && wheel.basis !== 'each') {
+    const source = contexts.find((role) => role.slot === wheel.basis)!;
+    const channel = source.preset.channels[request.channelIndex];
+    const event = options.delayWheelSourceEvent;
+    if (event) {
+      const result = event.result;
+      const profile = source.profiles[parameter];
+      if (
+        event.slot !== source.slot ||
+        event.channelId !== channel.id ||
+        !Object.is(event.expectedValue, channel[field]) ||
+        event.expectedContextKey !== source.profiles.contextKey ||
+        !result ||
+        typeof result.text !== 'string' ||
+        !Number.isFinite(result.value) ||
+        typeof result.notified !== 'boolean' ||
+        typeof result.changed !== 'boolean' ||
+        result.changed !== !Object.is(result.value, channel[field]) ||
+        (result.notified
+          ? !Object.is(readHfdChannelDelayText(result.text), result.value) ||
+            !Object.is(result.maximumValue, readHfdChannelDelayText(profile.maximumText))
+          : result.changed || result.maximumValue !== undefined)
+      )
+        throw new Error('The channel delay wheel source or profile context changed');
+      sourceResult = {
+        text: result.text,
+        value: result.value,
+        changed: result.changed,
+        notified: result.notified,
+        ...(result.maximumValue === undefined ? {} : { maximumValue: result.maximumValue }),
+      };
+    } else {
+      const result = hfdChannelDelayWheelNext(channel[field], wheel.direction, {
+        profile: source.profiles[parameter],
+      });
+      sourceResult = {
+        text: result.text,
+        value: result.value,
+        changed: result.changed,
+        notified: result.notified,
+        ...(result.maximumValue === undefined ? {} : { maximumValue: result.maximumValue }),
+      };
+    }
+  }
+  const roles: ChannelEditPlan['roles'] = contexts.map(({ slot, preset, context, profiles }) => {
+    const original = documents[slot],
+      channel = preset.channels[request.channelIndex];
+    const profile = profiles[parameter];
+    let result: HfdChannelDelayResult | undefined;
+    let wheelResult: ChannelDelayWheelSourceEvent['result'] | undefined;
+    if (!wheel) {
+      const raw = request.patch[field]!;
+      result = normalizeHfdChannelDelayText(typeof raw === 'string' ? raw : String(raw), {
+        profile,
+      });
+    } else if (sourceResult) {
+      if (slot === wheel.basis) wheelResult = { ...sourceResult };
+      else if (!sourceResult.changed || !sourceResult.notified)
+        wheelResult = {
+          text: formatHfdChannelDelayValue(channel[field], { profile }),
+          value: channel[field],
+          changed: false,
+          notified: false,
+        };
+      else {
+        const normalized = normalizeHfdChannelDelayText(String(sourceResult.value), { profile });
+        wheelResult = {
+          ...normalized,
+          changed: !Object.is(normalized.value, channel[field]),
+          notified: true,
+        };
+      }
+    } else {
+      const normalized = hfdChannelDelayWheelNext(channel[field], wheel.direction, { profile });
+      wheelResult = {
+        text: normalized.text,
+        value: normalized.value,
+        changed: normalized.changed,
+        notified: normalized.notified,
+        ...(normalized.maximumValue === undefined ? {} : { maximumValue: normalized.maximumValue }),
+      };
+    }
+    const notified = result !== undefined || wheelResult?.notified === true;
+    if (!notified)
+      return {
+        slot,
+        before: values(channel),
+        value: values(channel),
+        changed: false,
+        synchronizeLinks: false,
+        context,
+        changes: [],
+        ...(wheelResult ? { delayWheelResult: wheelResult } : {}),
+      };
+    const next = structuredClone(original),
+      nextPreset = next.presets[request.presetIndex],
+      selected = nextPreset.channels[request.channelIndex];
+    if (notified) {
+      const normalized = result ?? wheelResult!;
+      selected[field] = normalized.value;
+      selected.hfdDelay = {
+        ...selected.hfdDelay,
+        [parameter === 'local' ? 'localMaximum' : 'globalMaximum']: normalized.maximumValue!,
+      };
+      if (parameter === 'local') {
+        // Native GroupCopyTo runs for immediate resolved followers before the
+        // current Global widget getter is fanned across this preset.
+        for (let index = 0; index < nextPreset.channels.length; index++) {
+          if (nextPreset.channels[index].linkedTo !== request.channelIndex) continue;
+          // An implicit browser factory maximum is known, while an imported
+          // missing maximum has already refused during profile resolution.
+          if (selected.hfdDelay.globalMaximum === undefined)
+            selected.hfdDelay.globalMaximum = readHfdChannelDelayText(profiles.global.maximumText);
+          copyNativeLinkedChannel(next, request.presetIndex, index);
+          settleNativeLinkedCopyCache(next, request.presetIndex, index);
+        }
+      }
+      const globalText = options.delayContext?.[slot]?.globalText;
+      if (globalText !== undefined && typeof globalText !== 'string')
+        throw new Error('Invalid trusted Global Delay Text');
+      const global =
+        parameter === 'global'
+          ? normalized.value
+          : readHfdChannelDelayText(
+              globalText ??
+                formatHfdChannelDelayValue(channel.globalDelayUs, { profile: profiles.global }),
+            );
+      for (const target of nextPreset.channels) target.globalDelayUs = global;
+    }
+    const changes = nextPreset.channels.flatMap((nextChannel, channelIndex) => {
+      const before = context[channelIndex].values,
+        value = values(nextChannel);
+      const patch: Partial<ChannelEditValues> = {};
+      for (const key of fields)
+        if (!Object.is(before[key], value[key])) Object.assign(patch, { [key]: value[key] });
+      return Object.keys(patch).length ? [{ channelIndex, before, value, patch }] : [];
+    });
+    return {
+      slot,
+      before: values(channel),
+      value: values(selected),
+      changed: !same(original, next),
+      synchronizeLinks: false,
+      context,
+      changes,
+      ...(result ? { delayResult: result } : {}),
+      ...(wheelResult ? { delayWheelResult: wheelResult } : {}),
+      delayProposal: { before: structuredClone(original), value: next },
+    };
+  });
+  return freeze({
+    request,
+    ...(revision === undefined ? {} : { revision }),
+    changedSlots: roles.filter((role) => role.changed).map((role) => role.slot),
+    synchronizeLinks: false,
+    roles,
+  });
+}
+
 /** Shared authoring transaction. All selected role roots validate even for equal
  * requested processing values. Native compensation is an explicit, conditional
  * callback intent. Ordinary gain Text and wheel requests share its native field
@@ -286,6 +536,10 @@ export function planChannelEdit(
   );
   if (structural.length === 2 && [...structural[0]].some((value) => structural[1].has(value)))
     throw new Error('Channel edit roles alias processing objects');
+  if (Object.hasOwn(patch, 'delayUs') || Object.hasOwn(patch, 'globalDelayUs') || patch.delayWheel)
+    return planDelayEdit(documents, slots, checkedRequest, targets, revision, options);
+  if (options.delayWheelSourceEvent)
+    throw new Error('A delay source event requires a delay wheel intent');
   const requestsHardware = Object.hasOwn(patch, 'hardwareGain');
   const wheel = patch.gainWheel;
   if (options.gainWheelSourceEvent && (!wheel || wheel.basis === 'each'))
@@ -337,7 +591,15 @@ export function planChannelEdit(
     let hardwareGain: ChannelEditPlan['roles'][number]['hardwareGain'];
     let gainResult: HfdChannelGainResult | undefined;
     let gainWheelResult: ChannelEditPlan['roles'][number]['gainWheelResult'];
-    const { gain: rawGain, hardwareGain: _hardware, gainWheel: _wheel, ...scalarPatch } = patch;
+    const {
+      gain: rawGain,
+      hardwareGain: _hardware,
+      gainWheel: _wheel,
+      delayUs: _localDelay,
+      globalDelayUs: _globalDelay,
+      delayWheel: _delayWheel,
+      ...scalarPatch
+    } = patch;
     let ordinaryPatch: Partial<ChannelEditValues> = scalarPatch;
     if (requestsHardware) {
       const trusted = options.hardwareGainContext?.[slot];
@@ -443,6 +705,14 @@ export function planChannelEdit(
 export function applyChannelEdit(project: Project, slot: Slot, plan: ChannelEditPlan): void {
   const role = plan.roles.find((role) => role.slot === slot);
   if (!role) throw new Error('Channel edit role was not planned');
+  if (role.delayProposal) {
+    if (!same(project, role.delayProposal.before))
+      throw new Error('The channel delay project context changed');
+    for (const key of Object.keys(project))
+      delete (project as unknown as Record<string, unknown>)[key];
+    Object.assign(project, structuredClone(role.delayProposal.value));
+    return;
+  }
   const current = target(project, plan.request);
   if (!same(current.context, role.context))
     throw new Error('The channel edit role or context changed');

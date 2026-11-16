@@ -69,7 +69,7 @@ it('retains the linked exceptions for channel labels and sum membership without 
   }
 });
 
-it('sets global analysis delay on all three channels while retaining linked and independent processing exactly', () => {
+it('sets global delay through its native callback while retaining linked and independent filter processing', () => {
   const docs = fixture();
   linkChannel(docs.right.presets[0], 0, 1);
   const before = structuredClone(docs),
@@ -79,9 +79,15 @@ it('sets global analysis delay on all three channels while retaining linked and 
   expect(p.roles.every((role) => role.changes.length === 3)).toBe(true);
   for (const slot of ['left', 'right'] as const)
     for (const [i, c] of next[slot].presets[0].channels.entries()) {
-      expect(c.globalDelayUs).toBe(74666.6666667);
-      expect({ ...c, globalDelayUs: before[slot].presets[0].channels[i].globalDelayUs }).toEqual(
-        before[slot].presets[0].channels[i],
+      expect(c.globalDelayUs).toBe(74667);
+      expect({
+        ...c,
+        globalDelayUs: before[slot].presets[0].channels[i].globalDelayUs,
+        ...(i === 0 ? { hfdDelay: undefined } : {}),
+      }).toEqual(
+        i === 0
+          ? { ...before[slot].presets[0].channels[i], hfdDelay: undefined }
+          : before[slot].presets[0].channels[i],
       );
     }
 });
@@ -93,7 +99,6 @@ it('retains complete no-op state including omitted default-true sum metadata, ca
     gain: 0,
     name: channel(docs.left).name,
     includeInSum: true,
-    globalDelayUs: 0,
   });
   expect(p.changedSlots).toEqual([]);
   expect(p.synchronizeLinks).toBe(false);
@@ -121,7 +126,7 @@ it('changes only the role which differs and requires processing synchronization 
 
 it('does not redesign vectors or silently resolve first-cache interpretation when ordinary channel scalars change', () => {
   const docs = fixture(),
-    p = plan(docs, { gain: -6.123456789, invert: true, muted: true, delayUs: 17.123456789 });
+    p = plan(docs, { gain: -6.123456789, invert: true, muted: true });
   const filters = channel(docs.left).filters,
     fir = channel(docs.left).fir;
   applyChannelEdit(docs.left, 'left', p);
@@ -129,7 +134,7 @@ it('does not redesign vectors or silently resolve first-cache interpretation whe
     gain: -6.12,
     invert: true,
     muted: true,
-    delayUs: 17.123456789,
+    delayUs: 0,
     additionalGain: 6,
     coefficientCache: 'unresolved',
   });
@@ -145,10 +150,10 @@ it.each([
   { gain: NaN },
   { invert: 1 },
   { muted: 'false' },
-  { delayUs: -1 },
-  { delayUs: 32000.1 },
-  { globalDelayUs: -1 },
-  { globalDelayUs: 74666.6666668 },
+  { delayUs: NaN },
+  { delayUs: 'invalid' },
+  { globalDelayUs: Infinity },
+  { globalDelayUs: 'invalid' },
   { additionalGain: 10 },
   { coefficientCache: 'base' },
   { linkedTo: 1 },
@@ -248,7 +253,7 @@ it('publishes paired metadata once without rewriting dirty imported follower vec
   }
   const f = await workspace(docs),
     before = structuredClone(f.state().documents),
-    p = plan(f.state().documents, { name: 'Relabeled master', globalDelayUs: 100 });
+    p = plan(f.state().documents, { name: 'Relabeled master' });
   expect(p.synchronizeLinks).toBe(false);
   f.state().editAt(p.changedSlots, (project, slot) => applyChannelEdit(project, slot, p), {
     synchronizeLinks: p.synchronizeLinks,
@@ -376,12 +381,12 @@ it('propagates changed processing to the selected root followers while retaining
     }
   }
   const before = structuredClone(docs),
-    p = plan(docs, { gain: -6, delayUs: 2.123456789 }),
+    p = plan(docs, { gain: -6 }),
     next = applied(docs, p);
   for (const slot of ['left', 'right'] as const) {
     expect(channel(next[slot], 1)).toMatchObject({
       gain: -6,
-      delayUs: 2.123456789,
+      delayUs: 0,
       coefficientCache: 'unresolved',
     });
     expect(channel(next[slot], 1).filters[0]).toMatchObject({

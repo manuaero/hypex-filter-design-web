@@ -17,6 +17,12 @@ import {
 } from '../domain/channel-editing';
 import { hardwareGainPresentation } from '../domain/hardware-gain';
 import { HFD_CHANNEL_GAIN_BOUNDS } from '../domain/channel-gain';
+import { formatHfdChannelDelayValue } from '../domain/channel-delay';
+import {
+  resolveChannelDelayProfiles,
+  type ChannelDelayProfiles,
+  type ChannelDelayRuntime,
+} from '../domain/channel-delay-profile';
 import { supportsHfdGraphQ } from '../domain/manual-graph-q';
 import {
   captureManualFilterDrag,
@@ -2203,6 +2209,138 @@ export default function Studio() {
   const hardwareGainAvailable =
     getHardwareGainContext({ slot: w.slot, presetIndex: w.preset, channelIndex: w.channel })
       ?.available === true;
+  const globalDelayInput = useRef<HTMLDivElement>(null);
+  const globalDelayOperation = useRef<NumericFocusOperation | undefined>(undefined);
+  const getDelayRuntime = (slot: Slot): ChannelDelayRuntime => {
+    const connection = liveRef.current[slot];
+    return connection
+      ? { kind: 'connected', core: connection.identity.core, sessionKey: connection.connectionId }
+      : { kind: 'offline' };
+  };
+  const delayViewKey = (
+    location: Omit<HardwareGainEditorLocation, 'channelId'>,
+    id: string,
+    profileKey: string,
+  ) =>
+    JSON.stringify([
+      location.slot,
+      documentEpochs[location.slot],
+      location.presetIndex,
+      id,
+      profileKey,
+    ]);
+  const getDelayContext: NonNullable<ToolAdapter['delayContext']> = (location) => {
+    const current = useWorkspace.getState();
+    const project = current.documents[location.slot];
+    const runtime = getDelayRuntime(location.slot);
+    const profiles = resolveChannelDelayProfiles(
+      project,
+      location.presetIndex,
+      location.channelIndex,
+      runtime,
+    );
+    const c = project.presets[location.presetIndex].channels[location.channelIndex];
+    const active =
+      current.documentRevision === w.documentRevision &&
+      current.documents === w.documents &&
+      current.slot === location.slot &&
+      current.preset === location.presetIndex &&
+      current.channel === location.channelIndex &&
+      w.slot === current.slot &&
+      w.preset === current.preset &&
+      w.channel === current.channel &&
+      channel.id === c.id &&
+      Object.is(channel.globalDelayUs, c.globalDelayUs);
+    const field =
+      active &&
+      globalDelayOperation.current?.isCurrent() === true &&
+      globalDelayInput.current?.dataset.delayContext ===
+        delayViewKey(location, c.id, profiles.contextKey)
+        ? globalDelayInput.current.querySelector('input')
+        : undefined;
+    return {
+      runtime,
+      globalText:
+        field?.value ?? formatHfdChannelDelayValue(c.globalDelayUs, { profile: profiles.global }),
+    };
+  };
+  let selectedDelayProfiles: ChannelDelayProfiles | undefined;
+  let delayProfileError: string | undefined;
+  try {
+    selectedDelayProfiles = resolveChannelDelayProfiles(
+      w.documents[w.slot],
+      w.preset,
+      w.channel,
+      getDelayRuntime(w.slot),
+    );
+  } catch (error) {
+    delayProfileError = error instanceof Error ? error.message : String(error);
+  }
+  const beginDelayGesture = (): NumericFocusOperation => {
+    const current = useWorkspace.getState();
+    const slots = current.linkedEdits ? SLOTS : [current.slot];
+    let keys: string[];
+    try {
+      keys = slots.map((slot) => {
+        try {
+          return resolveChannelDelayProfiles(
+            current.documents[slot],
+            current.preset,
+            current.channel,
+            getDelayRuntime(slot),
+          ).contextKey;
+        } catch (error) {
+          throw new Error(
+            `${slot === 'left' ? 'Left' : 'Right'}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+    if (keys[slots.indexOf(current.slot)] !== selectedDelayProfiles?.contextKey)
+      throw new Error('The displayed amplifier delay profile changed');
+    const operation = beginNumericGesture();
+    const isCurrent = () => {
+      if (!operation.isCurrent()) return false;
+      try {
+        const latest = useWorkspace.getState();
+        return slots.every(
+          (slot, i) =>
+            resolveChannelDelayProfiles(
+              latest.documents[slot],
+              latest.preset,
+              latest.channel,
+              getDelayRuntime(slot),
+            ).contextKey === keys[i],
+        );
+      } catch {
+        return false;
+      }
+    };
+    return {
+      isCurrent,
+      run: (action) => {
+        if (!isCurrent()) throw new Error('The amplifier delay context changed');
+        return operation.run(action);
+      },
+      end: (cancel) => operation.end(cancel),
+    };
+  };
+  const beginGlobalDelayGesture = (): NumericFocusOperation => {
+    const operation = beginDelayGesture();
+    const tracked: NumericFocusOperation = {
+      isCurrent: () => operation.isCurrent(),
+      run: (action) => operation.run(action),
+      end: (cancel) => {
+        operation.end(cancel);
+        if (globalDelayOperation.current === tracked) globalDelayOperation.current = undefined;
+      },
+    };
+    globalDelayOperation.current = tracked;
+    return tracked;
+  };
   const editChannel = (
     patch: ChannelEditPatch,
     channelIndex = w.channel,
@@ -2226,6 +2364,19 @@ export default function Studio() {
               getHardwareGainContext({ slot, presetIndex: current.preset, channelIndex }),
             ]),
           ),
+          delayContext:
+            patch.delayUs !== undefined || patch.globalDelayUs !== undefined || patch.delayWheel
+              ? Object.fromEntries(
+                  slots.map((slot) => [
+                    slot,
+                    getDelayContext({
+                      slot,
+                      presetIndex: current.preset,
+                      channelIndex,
+                    }),
+                  ]),
+                )
+              : undefined,
         },
       );
       if (plan.changedSlots.length)
@@ -2665,6 +2816,7 @@ export default function Studio() {
     editByRole: (slots, fn, options) =>
       useWorkspace.getState().editAt(slots, fn, { ...options, independent: true }),
     hardwareGainContext: getHardwareGainContext,
+    delayContext: getDelayContext,
     retainHardwareGainContexts,
     choose: chooseWorkspace,
     undo: () => useWorkspace.getState().undo(),
@@ -3456,30 +3608,100 @@ export default function Studio() {
               </>
             )}
             <Numeric
-              begin={beginNumericGesture}
+              begin={beginDelayGesture}
               end={w.endGesture}
-              disabled={channel.linkedTo !== undefined}
+              disabled={channel.linkedTo !== undefined || !selectedDelayProfiles}
               label="Delay"
-              contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:delay`}
+              contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:delay:${selectedDelayProfiles?.contextKey}`}
+              channelDelay={selectedDelayProfiles?.local}
+              channelDelayRevision={w.documentRevision}
+              getChannelDelayRevision={() => useWorkspace.getState().documentRevision}
               value={channel.delayUs}
               onChange={(delayUs) => editChannel({ delayUs })}
+              onTextCommit={(text) => {
+                const role = editChannel({ delayUs: text });
+                return role ? role.delayResult! : false;
+              }}
+              onChannelDelayWheel={(result, direction) => {
+                const role = editChannel(
+                  { delayWheel: { parameter: 'local', direction, basis: w.slot } },
+                  w.channel,
+                  {
+                    delayWheelSourceEvent: {
+                      slot: w.slot,
+                      channelId: channel.id,
+                      expectedValue: channel.delayUs,
+                      expectedContextKey: selectedDelayProfiles!.contextKey,
+                      result,
+                    },
+                  },
+                );
+                return role !== false;
+              }}
               unit="µs"
               min={0}
-              max={32000}
-              step={10.6666666667}
+              max={
+                selectedDelayProfiles ? Number(selectedDelayProfiles.local.maximumText) : undefined
+              }
+              step={1e6 / w.documents[w.slot].sampleRate}
             />
-            <Numeric
-              begin={beginNumericGesture}
-              end={w.endGesture}
-              label="Global delay · analysis"
-              contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:global-delay`}
-              value={channel.globalDelayUs}
-              onChange={(globalDelayUs) => editChannel({ globalDelayUs })}
-              unit="µs"
-              min={0}
-              max={74666}
-              step={10.6666666667}
-            />
+            <div
+              ref={globalDelayInput}
+              data-delay-context={
+                selectedDelayProfiles &&
+                delayViewKey(
+                  { slot: w.slot, presetIndex: w.preset, channelIndex: w.channel },
+                  channel.id,
+                  selectedDelayProfiles.contextKey,
+                )
+              }
+            >
+              <Numeric
+                begin={beginGlobalDelayGesture}
+                end={w.endGesture}
+                disabled={!selectedDelayProfiles}
+                label="Global delay · analysis"
+                contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:global-delay:${selectedDelayProfiles?.contextKey}`}
+                channelDelay={selectedDelayProfiles?.global}
+                channelDelayRevision={w.documentRevision}
+                getChannelDelayRevision={() => useWorkspace.getState().documentRevision}
+                value={channel.globalDelayUs}
+                onChange={(globalDelayUs) => editChannel({ globalDelayUs })}
+                onTextCommit={(text) => {
+                  const role = editChannel({ globalDelayUs: text });
+                  return role ? role.delayResult! : false;
+                }}
+                onChannelDelayWheel={(result, direction) => {
+                  const role = editChannel(
+                    { delayWheel: { parameter: 'global', direction, basis: w.slot } },
+                    w.channel,
+                    {
+                      delayWheelSourceEvent: {
+                        slot: w.slot,
+                        channelId: channel.id,
+                        expectedValue: channel.globalDelayUs,
+                        expectedContextKey: selectedDelayProfiles!.contextKey,
+                        result,
+                      },
+                    },
+                  );
+                  return role !== false;
+                }}
+                unit="µs"
+                min={0}
+                max={
+                  selectedDelayProfiles
+                    ? Number(selectedDelayProfiles.global.maximumText)
+                    : undefined
+                }
+                step={1e6 / w.documents[w.slot].sampleRate}
+              />
+            </div>
+            {delayProfileError && (
+              <p className="hint" role="status">
+                {delayProfileError}
+              </p>
+            )}
             <div className="parameter-hint">
               {((channel.delayUs + channel.globalDelayUs) * 0.343).toFixed(1)} mm ·{' '}
               {Math.round((channel.delayUs + channel.globalDelayUs) * 0.09375)} samples

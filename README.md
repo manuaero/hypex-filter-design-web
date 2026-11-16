@@ -10,6 +10,16 @@ _Filter editor with a persistent parameter inspector._
 
 This is an independent project. Software implementation and simulation coverage do not establish complete HFD compatibility or qualify every hardware operation. Current live protocol support targets FA503 / DSP3-213 core 5.1. Other device families, macOS USB behavior and simultaneous operation of two physical amplifiers remain unqualified.
 
+## V54 channel delay
+
+Delay and Global delay now share HFD's microsecond Text callback between the inspector and MCP, including sample rounding, saved maxima and same-value notifications. A local callback also copies processing to immediate linked followers; this can change their gain, inversion and mute. Each role uses its own trusted runtime profile and Global field Text. Both final proposals validate before one undoable workspace edit, with no amplifier command.
+
+A fresh offline FA503 profile uses 19,200 µs; a currently identified modern core uses 32,000 µs. Global delay uses the channel's saved limit. Runtime identity, bounds and continuous wheel state cannot be supplied through MCP arguments. Current field-operation and document fences prevent retired Global drafts from entering a later command. See [the delay contract](docs/HFD-CHANNEL-DELAY.md) and [V54 evidence](docs/VERIFICATION.md#v54-channel-delay).
+
+The complete private run passed **3,847 tests in 241 files**: 3,739 canonical assertions plus 108 retained diagnostics. TypeScript and private Next/Worker packaging passed with unchanged tested source. Actual Chrome and the production local MCP implementation support **23 accepted checks across 30 observations**; two premature asynchronous counter expectations remain recorded. Both complete originals and selection were restored and survived a normal reload. These results do not qualify every command, remote Site pairing or physical two-amplifier operation.
+
+Thirteen offline native Saves qualify the named numeric and linked-copy cases. Re-entering 0 at 0 updated the stored limit; editing a source from 16 to 21 copied a conflicting immediate follower without opening its graph. Broader native File Open delay normalization, new physical uploads and complete HFD compatibility remain unqualified. Bridge configuration was excluded from testing.
+
 ## V53 linked channels and frequency display
 
 Explicit linked-channel Graph opening now copies its immediate source into only the selected role/channel through one UI/MCP operation. The destination retains local additional gain, labels, measurements and slot identities. Filter selection and graph options do not repeat the copy; cold Graph initialization keeps a separate visit lifetime. Native XML Open resolves links in the original saved preset and prepares auto-Graph changes before replacement or receipt storage. Hydration, Undo and receipt replay stay passive.

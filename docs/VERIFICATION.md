@@ -2,6 +2,28 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V54 channel delay
+
+The [shared delay contract](HFD-CHANNEL-DELAY.md) separates native source precision rules, offline GUI/file evidence, software tests and actual browser observations.
+
+Thirteen completed offline HFD Saves establish the named Text, wheel, bounds, Global fanout, same-Text and immediate linked-copy cases. C re-entered literal 0 at current 0 and changed only local MaxDelay from 19 to 19200. D entered source 16, stored 21, and copied local Delay/MaxDelay plus gain, inversion and mute into an immediate linked follower without opening its Graph. Baseline load/save effects are recorded separately. Already-equal BQ/cache inputs do not independently establish cache transfer.
+
+HFD was reopened on a preserved restore copy without Save and closed normally. The metadata-only exclusive HID handle was released normally, with an open/close probe and zero explicit transfers. Original/restore project bytes, Settings outside recent projects, and empty ASIO selections were preserved. These are GUI/file observations, not a USB bus trace or a new amplifier-state proof.
+
+The complete private run passed **3,847/3,847 assertions in 241 files**, with zero skips: 3,739 canonical assertions in 238 files plus 108 retained diagnostics in three files. Nonincremental TypeScript passed. All 455 checked inputs, 23 current owner rows and four documentation pins remained exact. Private Next and Worker packaging then passed from the same source.
+
+Actual Chrome used a source-bound build of Studio with independent synthetic projects, ordinary UI controls, the real Agent access form and the production local MCP server. **23 accepted checks and 30 compact DOM observations** cover passive focus, same-value input, deferred edits, immediate followers, role-specific Global fanout, upper rounding, independent Left edits, invalid-Right atomic refusal, wheel magnitude, current/retired Global drafts, invalid Text, Escape, Undo and normal reload. The MCP transcript has **26 HTTP requests: 22 application calls, one tools/list and three protocol calls**. Four application refusals were expected; 18 calls succeeded. Discovery returned 91 source-matching tools.
+
+Two preliminary checks inspected asynchronous socket-open/close counters too early. They remain recorded; a later open check and final unpaired/reload checks passed. The first single wheel input's acknowledgement timed out, so its resulting 0-to-11 state was inspected without retry. A separate larger wheel event acknowledged and produced the same project hashes. Browser selection rendered an obsolete Global draft back to 17; the narrower before-render race is established separately by actual-Studio component failing/passing reproductions.
+
+Both complete original project hashes and initial selection were restored through normal controls and Undo, then retained after a normal IndexedDB reload. History was empty, storage ready/saved, and the bridge disconnected. The owned tab and both loopback servers were closed. The user development server was preserved. Real device/audio/file/network capabilities were denied by the fixture; no physical action follows from these checks.
+
+The shared planner validates each role before publication and performs native copy/cache settlement before direct Global Text fanout. An admitted unnotified wheel avoids full-project snapshots: a synthetic 2,000,000-sample benchmark measured a planner median of about 304 ms before and 0.5 ms after. The notified path retains its full proposal/fence cost. This is a Node benchmark, not a browser latency result.
+
+The previously pending Chrome manual Save As was completed on November 16, 2026. The delivered PDF is byte-exact to the bundled HFD Manual V3: 2,159,767 bytes, SHA256 d330afbfd5502aff3d3a305144a0b82e2c371b068bc542e9a77ef5fb76989db6. This qualifies that manual PDF delivery. It does not qualify project JSON/ZIP downloads or reconstruct the original initiating click, origin or time.
+
+Connected/session-replacement browser behavior, broader native Open delay normalization, authenticated production pairing, macOS USB, two physical amplifiers and full HFD parity remain distinct qualification work. Public export validation is separate from the private run and browser evidence above. No bridge configuration was applied.
+
 ## V53 linked Graph, cache and frequency display
 
 Screenshot-driven native HFD Open/Graph/Save comparisons extend the earlier

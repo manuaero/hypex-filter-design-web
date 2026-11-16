@@ -127,6 +127,7 @@ function processing(channel: Channel) {
     muted: channel.muted,
     delayUs: channel.delayUs,
     globalDelayUs: channel.globalDelayUs,
+    hfdDelay: channel.hfdDelay,
     filters: channel.filters,
     fir: channel.fir,
     coefficientCache: channel.coefficientCache,
@@ -182,6 +183,10 @@ export function copyNativeLinkedChannel(
     fir: structuredClone(source.fir),
     coefficientCache: result.coefficientCache,
   };
+  // Both native Delay objects copy their MaxDelay alongside their value.
+  // Absent legacy metadata remains unknown rather than retaining a target bound.
+  if (source.hfdDelay !== undefined) proposal.hfdDelay = structuredClone(source.hfdDelay);
+  else delete proposal.hfdDelay;
   const targetRawFirst =
     target.coefficientCache === 'effective'
       ? validNativeCacheWitness(target)?.native
@@ -196,6 +201,7 @@ export function copyNativeLinkedChannel(
         muted: target.muted,
         delayUs: target.delayUs,
         globalDelayUs: target.globalDelayUs,
+        hfdDelay: target.hfdDelay,
         fir: target.fir,
       },
       {
@@ -204,6 +210,7 @@ export function copyNativeLinkedChannel(
         muted: proposal.muted,
         delayUs: proposal.delayUs,
         globalDelayUs: proposal.globalDelayUs,
+        hfdDelay: proposal.hfdDelay,
         fir: proposal.fir,
       },
     ) &&
@@ -231,6 +238,8 @@ export function copyNativeLinkedChannel(
       coefficientCache: proposal.coefficientCache,
       hfdDirectCacheWitness: proposal.hfdDirectCacheWitness,
     });
+    if (proposal.hfdDelay !== undefined) target.hfdDelay = proposal.hfdDelay;
+    else delete target.hfdDelay;
   }
   const records = admitted.get(project) ?? new Map<string, Admission>();
   records.set(`${presetIndex}:${channelIndex}`, {

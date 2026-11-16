@@ -20,6 +20,7 @@ import {
 } from '../domain/editing';
 import { copyPresetBetween } from '../domain/preset-copy';
 import { planChannelEdit, applyChannelEdit } from '../domain/channel-editing';
+import type { ChannelDelayRuntime } from '../domain/channel-delay-profile';
 import {
   editPresetFir,
   applyNativeFirAction,
@@ -202,6 +203,10 @@ export interface ToolAdapter {
   hardwareGainContext?: (
     location: Omit<HardwareGainEditorLocation, 'channelId'>,
   ) => { available: boolean; gainText?: string } | undefined;
+  /** Current session and visible Global Text; never accepted from command JSON. */
+  delayContext?: (
+    location: Omit<HardwareGainEditorLocation, 'channelId'>,
+  ) => { runtime?: ChannelDelayRuntime; globalText?: string } | undefined;
   /** Called only after a fully admitted intent commits (including canonical no-op). */
   retainHardwareGainContexts?: (locations: readonly HardwareGainEditorLocation[]) => void;
   choose: (
@@ -515,14 +520,21 @@ const channelPatch = z
         basis: z.enum(['each', 'left', 'right']).optional(),
       })
       .strict(),
+    delayWheel: z
+      .object({
+        parameter: z.enum(['local', 'global']),
+        direction: z.enum(['up', 'down']),
+        basis: z.enum(['each', 'left', 'right']).optional(),
+      })
+      .strict(),
     includeInSum: z.boolean(),
     name: z.string(),
     outputName: z.string(),
     gain: z.union([finite, z.string()]),
     invert: z.boolean(),
     muted: z.boolean(),
-    delayUs: finite.min(0).max(32000),
-    globalDelayUs: finite.min(0).max(74666.6666667),
+    delayUs: z.union([finite, z.string()]),
+    globalDelayUs: z.union([finite, z.string()]),
   })
   .partial()
   .strict()
@@ -531,7 +543,15 @@ const channelPatch = z
   })
   .refine((patch) => !Object.hasOwn(patch, 'gainWheel') || Object.keys(patch).length === 1, {
     message: 'gainWheel is a separate native wheel intent; supply it alone',
-  });
+  })
+  .refine(
+    (patch) =>
+      !['delayUs', 'globalDelayUs', 'delayWheel'].some((key) => Object.hasOwn(patch, key)) ||
+      Object.keys(patch).length === 1,
+    {
+      message: 'A delay callback is a separate intent; supply one delay value or delayWheel alone',
+    },
+  );
 export const controlsSchema = z
   .object({
     mute: z.boolean(),
@@ -1791,7 +1811,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   fusion_filter_delete:
     'Delete a crossover biquad using native HFD semantics: retain its slot identity, Enabled state and latent frequency/Q/gain/direction parameters, replace its response with Unity and make the slot available for Add. This is an undoable design edit without amplifier I/O; broader Reset remains separate.',
   fusion_channel_set:
-    'Edit offline channel gain, polarity, mute, delay and labels atomically. Gain accepts a finite number or original raw Text, normalizes to two decimals in the native FA503 -125..24dB profile, and applies each role’s own AdditionalGain ceiling. A sole patch.gainWheel {direction:up|down,basis?:each|left|right} performs one sign-only0.1dB fresh-field event; Both defaults to each independently. Fixed source basis mirrors only a changed canonical result, through each destination’s own ceiling. Results report per-role Text and canonical value; continuous human wheel state remains local to the field. Canonical no-ops add no history. A sole patch.hardwareGain boolean invokes the conditional Hardware gain compensation callback: Off sets AdditionalGain0; On sets10 and caps Gain14dB. Trusted retained editor contexts can re-enable after Off; fresh availability requires a nonzero offset. These are undoable design edits, without amplifier I/O; live master-volume bounds remain separate.',
+    'Edit offline channel gain, polarity, mute, delay and labels atomically. Gain accepts a finite number or original raw Text, normalizes to two decimals in the native FA503 -125..24dB profile, and applies each role’s own AdditionalGain ceiling. A sole patch.gainWheel {direction:up|down,basis?:each|left|right} performs one sign-only0.1dB fresh-field event; Both defaults to each independently. Fixed source basis mirrors only a changed canonical result, through each destination’s own ceiling. Results report per-role Text and canonical value; continuous human wheel state remains local to the field. A sole delayUs or globalDelayUs accepts finite numbers or original raw Text through the native sample-quantized delay callback. Local bounds use the current trusted core runtime (fresh offline FA50319200us); Global uses that role’s saved maximum. Local notification also copies complete processing and both delay maxima to immediate linked followers, then fans that role’s current Global field Text to its three channels; Global callback only fans Global delay. Same-value notified edits can therefore create one undoable change. A sole patch.delayWheel {parameter:local|global,direction:up|down,basis?:each|left|right} sends one sign-only fresh-field event. Fixed-source canonical no-change does not mirror to the other role, but source notification effects still run. Bounds, runtime identity and wheel state cannot be supplied by callers. Value-only no-ops add no history. A sole patch.hardwareGain boolean invokes the conditional Hardware gain compensation callback: Off sets AdditionalGain0; On sets10 and caps Gain14dB. Trusted retained editor contexts can re-enable after Off; fresh availability requires a nonzero offset. These are undoable design edits, without amplifier I/O; live master-volume bounds remain separate.',
   fusion_copy: 'Copy a channel or preset between roles while retaining independent documents.',
   fusion_history: 'Undo or redo a design edit.',
   fusion_eq_default:
@@ -2496,7 +2516,7 @@ export function createToolExecutor(adapter: ToolAdapter) {
           const slots = roles(p.target),
             presetIndex = p.preset - 1,
             channelIndex = p.channel - 1;
-          const { gainWheel, ...ordinaryPatch } = p.patch;
+          const { gainWheel, delayWheel, ...ordinaryPatch } = p.patch;
           const plan = planChannelEdit(
             state.documents,
             slots,
@@ -2505,7 +2525,14 @@ export function createToolExecutor(adapter: ToolAdapter) {
               channelIndex,
               patch: gainWheel
                 ? { gainWheel: { ...gainWheel, direction: gainWheel.direction === 'up' ? 1 : -1 } }
-                : ordinaryPatch,
+                : delayWheel
+                  ? {
+                      delayWheel: {
+                        ...delayWheel,
+                        direction: delayWheel.direction === 'up' ? 1 : -1,
+                      },
+                    }
+                  : ordinaryPatch,
             },
             state.documentRevision,
             {
@@ -2515,6 +2542,15 @@ export function createToolExecutor(adapter: ToolAdapter) {
                   adapter.hardwareGainContext?.({ slot, presetIndex, channelIndex }),
                 ]),
               ),
+              delayContext:
+                delayWheel || p.patch.delayUs !== undefined || p.patch.globalDelayUs !== undefined
+                  ? Object.fromEntries(
+                      slots.map((slot) => [
+                        slot,
+                        adapter.delayContext?.({ slot, presetIndex, channelIndex }),
+                      ]),
+                    )
+                  : undefined,
             },
           );
           if (plan.changedSlots.length)
@@ -2551,6 +2587,20 @@ export function createToolExecutor(adapter: ToolAdapter) {
                 slot: role.slot,
                 changed: role.changed,
                 gain: role.gainResult ?? role.gainWheelResult,
+              })),
+            };
+          if (
+            p.patch.delayUs !== undefined ||
+            p.patch.globalDelayUs !== undefined ||
+            p.patch.delayWheel !== undefined
+          )
+            return {
+              ok: true,
+              changed: plan.changedSlots.length > 0,
+              roles: plan.roles.map((role) => ({
+                slot: role.slot,
+                changed: role.changed,
+                delay: role.delayResult ?? role.delayWheelResult,
               })),
             };
           if (!plan.changedSlots.length) return { ok: true, changed: false };

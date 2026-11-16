@@ -155,6 +155,9 @@ export interface Channel {
   muted: boolean;
   delayUs: number;
   globalDelayUs: number;
+  /** Native Delay.MaxDelay Doubles, retained independently of runtime field
+   * bounds and values. Legacy snapshots may omit either field. */
+  hfdDelay?: { localMaximum?: number; globalMaximum?: number };
   filters: Filter[];
   fir: Fir;
   includeInSum?: boolean;

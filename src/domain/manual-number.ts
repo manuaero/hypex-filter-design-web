@@ -105,8 +105,8 @@ function parse(text: string, label: string) {
   value = scale(value, decimalExponent, label);
   return { n: match[1] === '-' ? -value.n : value.n, d: value.d };
 }
-function fixed(value: Ratio, places: ManualNumberPlaces) {
-  if (value.n === 0n) return `0.${'0'.repeat(places)}`;
+function fixed(value: Ratio, places: ManualNumberPlaces | 0) {
+  if (value.n === 0n) return places === 0 ? '0' : `0.${'0'.repeat(places)}`;
   // 431e27..431e96: approximate decimal exponent, Extended scale,
   // FRNDINT, optional /10 and FBSTP. 431eb2 carries discarded digit>=5.
   let digits = Math.floor((exponent(value) * 0x4d10) / 65536) + 1;
@@ -126,7 +126,8 @@ function fixed(value: Ratio, places: ManualNumberPlaces) {
         : nearest(sign * mantissa, pow10(-decimalExponent), false),
     absolute = rounded < 0n ? -rounded : rounded,
     decimalScale = pow10(places);
-  return `${rounded < 0n ? '-' : ''}${absolute / decimalScale}.${String(absolute % decimalScale).padStart(places, '0')}`;
+  const whole = `${rounded < 0n ? '-' : ''}${absolute / decimalScale}`;
+  return places === 0 ? whole : `${whole}.${String(absolute % decimalScale).padStart(places, '0')}`;
 }
 
 function numberBounds(
@@ -297,6 +298,202 @@ function storeSingle(value: Ratio): number {
       shift >= 0 ? value.d : value.d * pow2(-shift),
     );
   return Math.fround(Number(mantissa) * 2 ** -shift);
+}
+
+export interface ManualChannelDelayOptions {
+  sampleRate: number;
+  /** Exact native MaximumValueString, parsed into an Extended bound. */
+  maximumText: string;
+}
+
+/** ba6e08 then FSTP qword at c641d9/c643ed. Current Global Text is
+ * propagated directly; this getter does not clamp or sample-quantize. */
+export function readManualChannelDelayText(text: string): number {
+  const value = storeDouble(parse(text, 'Delay'));
+  if (!Number.isFinite(value)) throw new Error('Delay Text cannot be stored as finite Double');
+  return value;
+}
+
+/** 4322c4 -> 431730/43185a: native general precision15, from a Double.
+ * Keep its initial18-digit x87 stage before decimal carry; direct binary64
+ * toPrecision(15) can round the other way. ASCII decimal separator only. */
+export function formatManualChannelDelayMaximum(value: number): string {
+  if (!Number.isFinite(value) || value < 0 || value >= 1e17)
+    throw new Error('Delay maximum must be finite, nonnegative and below1e17');
+  if (value === 0) return '0';
+  const ratio = double(value);
+  let digits = Math.floor((exponent(ratio) * 0x4d10) / 65536) + 1;
+  const scaled = scale(ratio, 18 - digits);
+  let mantissa = nearest(scaled.n, scaled.d);
+  if (mantissa >= pow10(18)) {
+    const divided = extended({ n: mantissa, d: 10n });
+    mantissa = nearest(divided.n, divided.d);
+    digits++;
+  }
+  // 431ead..ed7: discarded decimal digit>=5 carries, then trailing zeros
+  // are removed. This carry is distinct from the first nearest-even FRNDINT.
+  let significant = nearest(mantissa, 1000n, false);
+  if (significant >= pow10(15)) {
+    significant /= 10n;
+    digits++;
+  }
+  const text = significant.toString().replace(/0+$/, '');
+  // D is the decimal-point position. General format uses fixed notation for
+  // -3<=D<=15; otherwise uppercaseE, no positive sign or exponent padding.
+  if (digits < -3 || digits > 15)
+    return `${text[0]}${text.length > 1 ? `.${text.slice(1)}` : ''}E${digits - 1}`;
+  if (digits <= 0) return `0.${'0'.repeat(-digits)}${text}`;
+  if (text.length <= digits) return text + '0'.repeat(digits - text.length);
+  return `${text.slice(0, digits)}.${text.slice(digits)}`;
+}
+
+export interface ManualChannelDelayResult extends ManualNumberResult {
+  maximumValue: number;
+}
+declare const delayWheelBrand: unique symbol;
+export interface ManualChannelDelayWheelState {
+  readonly [delayWheelBrand]: true;
+}
+export interface ManualChannelDelayWheelResult extends ManualNumberResult {
+  changed: boolean;
+  notified: boolean;
+  maximumValue?: number;
+  state: ManualChannelDelayWheelState;
+}
+interface DelayContext {
+  sampleRate: Ratio;
+  maximum: Ratio;
+  maximumValue: number;
+}
+function delayContext({ sampleRate, maximumText }: ManualChannelDelayOptions): DelayContext {
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0 || sampleRate >= 1e17)
+    throw new Error('Delay requires a finite positive sample rate');
+  const maximum = parse(maximumText, 'Delay maximum'),
+    maximumValue = storeDouble(maximum);
+  if (!Number.isFinite(maximumValue) || maximum.n < 0n || maximumValue >= 1e17)
+    throw new Error('Delay requires a finite nonnegative maximum');
+  return { sampleRate: double(sampleRate), maximum, maximumValue };
+}
+const delayMillion: Ratio = { n: 1000000n, d: 1n };
+const multiplyExtended = (a: Ratio, b: Ratio) => extended({ n: a.n * b.n, d: a.d * b.d });
+const divideExtended = (a: Ratio, b: Ratio) => extended({ n: a.n * b.d, d: a.d * b.n });
+const roundExtendedInteger = (value: Ratio): Ratio => ({ n: nearest(value.n, value.d), d: 1n });
+function boundDelay(value: Ratio, maximum: Ratio): Ratio {
+  // ba6ecc: minimum is tested first; zero is allowed on both Delay fields.
+  return value.n < 0n ? { n: 0n, d: 1n } : compare(value, maximum) > 0n ? maximum : value;
+}
+function delayCallback(text: string, context: DelayContext) {
+  // c64990 first normalizes current Text through bounded fixed0 SetValue.
+  const normalized = parse(fixed(boundDelay(parse(text, 'Delay'), context.maximum), 0), 'Delay');
+  // c63e93..eb3/c63fcd..fed: Extended arithmetic and nearest-even RoundTo0,
+  // followed by the explicit qword sample-count store. No Single stage.
+  const samples = double(
+    storeDouble(
+      roundExtendedInteger(
+        divideExtended(multiplyExtended(normalized, context.sampleRate), delayMillion),
+      ),
+    ),
+  );
+  const microseconds = roundExtendedInteger(
+    divideExtended(multiplyExtended(samples, delayMillion), context.sampleRate),
+  );
+  // The second bounded setter can format a fractional maximum upward. The
+  // explicit final Text getter is authoritative; there is no later clamp.
+  const internal = boundDelay(microseconds, context.maximum),
+    formatted = fixed(internal, 0);
+  return { text: formatted, value: storeDouble(parse(formatted, 'Delay')), internal };
+}
+
+/** c64990 -> c63e60/c63fa4 -> c73220: explicit callback publication.
+ * Delay and MaxDelay are independent qword stores (a8d924 and a8d970). */
+export function normalizeManualChannelDelayText(
+  text: string,
+  options: ManualChannelDelayOptions,
+): ManualChannelDelayResult {
+  const context = delayContext(options),
+    result = delayCallback(text, context);
+  return { text: result.text, value: result.value, maximumValue: context.maximumValue };
+}
+
+/** c6084a/c6085a -> c69500: passive Single arguments, bounded fixed0 display.
+ * This does not run the sample callback or publish a canonical value. */
+export function formatManualChannelDelayValue(
+  value: number,
+  options: ManualChannelDelayOptions,
+): string {
+  const context = delayContext(options);
+  if (!Number.isFinite(value) || Math.abs(value) >= 1e17) return '';
+  return fixed(boundDelay(double(storeSingle(double(value))), context.maximum), 0);
+}
+
+const delayWheelMemory = new WeakMap<
+  ManualChannelDelayWheelState,
+  {
+    internal: Ratio;
+    text: string;
+    value: number;
+    sampleRate: number;
+    maximumText: string;
+  }
+>();
+
+/** c64228: one signed Double(Extended(1e6/Fs)) AddValue event. Only a
+ * changed formatted Text notifies the callback; no unconditional getter. */
+export function adjustManualChannelDelayWheel(
+  value: number,
+  direction: -1 | 1,
+  options: ManualChannelDelayOptions & {
+    displayedText?: string;
+    state?: ManualChannelDelayWheelState;
+  },
+): ManualChannelDelayWheelResult {
+  const context = delayContext(options);
+  if (!Number.isFinite(value) || Math.abs(value) >= 1e17 || (direction !== -1 && direction !== 1))
+    throw new Error('Invalid delay wheel value or direction');
+  const previous = options.state === undefined ? undefined : delayWheelMemory.get(options.state);
+  if (
+    options.state !== undefined &&
+    (!previous ||
+      !Object.is(previous.value, value) ||
+      !Object.is(previous.sampleRate, options.sampleRate) ||
+      previous.maximumText !== options.maximumText)
+  )
+    throw new Error('Delay wheel state does not match the field value or profile context');
+  const before =
+    options.displayedText ?? previous?.text ?? formatManualChannelDelayValue(value, options);
+  if (previous && before !== previous.text)
+    throw new Error('Delay wheel state does not match displayed Text');
+  const parsed = parse(before, 'Delay');
+  if (!Number.isFinite(storeDouble(parsed)))
+    throw new Error('Delay Text cannot be stored as Double');
+  const step = storeDouble(divideExtended(delayMillion, context.sampleRate));
+  if (!Number.isFinite(step)) throw new Error('Delay wheel step cannot be stored as Double');
+  let internal = boundDelay(addExtended(parsed, double(direction * step)), context.maximum),
+    text = fixed(internal, 0),
+    model = value;
+  const notified = text !== before;
+  if (notified) {
+    const callback = delayCallback(text, context);
+    internal = callback.internal;
+    text = callback.text;
+    model = callback.value;
+  }
+  const state = Object.freeze({}) as ManualChannelDelayWheelState;
+  delayWheelMemory.set(state, {
+    internal,
+    text,
+    value: model,
+    sampleRate: options.sampleRate,
+    maximumText: options.maximumText,
+  });
+  return {
+    text,
+    value: model,
+    changed: !Object.is(model, value),
+    notified,
+    ...(notified ? { maximumValue: context.maximumValue } : {}),
+    state,
+  };
 }
 
 /** Internal graph drag setter/getter. The graph suppresses OnChange and then
