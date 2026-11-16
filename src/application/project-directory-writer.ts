@@ -2,6 +2,7 @@ import type { Slot, Project } from '../domain/model';
 import type { ExecutionPrincipal } from './execution-context';
 import type { TransferBlobFile } from './file-transfers';
 import type { ProjectFile } from '../domain/project-io';
+import type { NativeOrdinarySaveAttempt } from './native-save-attempt';
 
 export interface WritableProjectFileHandle {
   readonly kind: 'file';
@@ -35,6 +36,11 @@ export interface DirectorySaveBinding {
 export interface DirectoryExportTicket {
   resolve(): Promise<{ project: Project; files: readonly ProjectFile[] }>;
   assertCurrent(): void;
+  /** Trusted page-local folder Save authority, never tool arguments or persisted data. */
+  readonly nativeOrdinarySave?: {
+    readonly presetIndex: number;
+    createAttempt(principal: ExecutionPrincipal): NativeOrdinarySaveAttempt;
+  };
   /** Release only implicit capture stages owned by this ticket. */
   dispose?(): void;
 }
@@ -82,6 +88,8 @@ export interface DirectorySaveProposal {
   error?: string;
 }
 export interface DirectorySaveReceipt extends DirectorySaveProposal {
+  /** Page-local historical post-state outcome; never authority for replay. */
+  nativeSavePostState?: 'applied' | 'unchanged' | 'unavailable' | 'unconfirmed';
   /** Every listed outcome was verified at completion. Replay is historical; no whole-folder absence or atomicity guarantee. */
   verified: boolean;
   replayed: boolean;
@@ -310,6 +318,24 @@ export function createProjectDirectoryWriter(
     string,
     { owner: string; review: DirectoryArchiveReview; consumed: boolean }
   >();
+  // Only live prepared tickets can admit a post-state. Durable journals, receipt
+  // replay and hydration never reconstruct this authority.
+  const ordinarySaves = new Map<string, NativeOrdinarySaveAttempt>();
+  const ordinarySaveOutcomes = new Map<string, DirectorySaveReceipt['nativeSavePostState']>();
+  const pruneOrdinarySaves = () => {
+    for (const [id, attempt] of ordinarySaves) {
+      if (!data.saves.some((save) => save.id === id)) {
+        attempt.notReturned();
+        ordinarySaves.delete(id);
+      }
+    }
+    for (const id of ordinarySaveOutcomes.keys())
+      if (
+        !data.saves.some((save) => save.id === id) &&
+        !data.archives.some((save) => save.receipt.id === id)
+      )
+        ordinarySaveOutcomes.delete(id);
+  };
   const changed = (save: DirectoryWriterJournal) => {
     try {
       return options.getRevision() !== save.expectedRevision;
@@ -475,6 +501,7 @@ export function createProjectDirectoryWriter(
           if (saved) await verifyBlobs(saved, index);
         }
         data = confirmed;
+        pruneOrdinarySaves();
         publish({ phase: 'ready', error: null });
       } catch (error) {
         if (error instanceof DirectorySaveError && error.code !== 'persistence') throw error;
@@ -511,7 +538,15 @@ export function createProjectDirectoryWriter(
     return item;
   };
   const archivedReceipt = (save: DirectoryArchivedSave): DirectorySaveReceipt =>
-    freeze(structuredClone({ ...save.receipt, replayed: true }));
+    freeze(
+      structuredClone({
+        ...save.receipt,
+        replayed: true,
+        ...(ordinarySaveOutcomes.has(save.receipt.id)
+          ? { nativeSavePostState: ordinarySaveOutcomes.get(save.receipt.id) }
+          : {}),
+      }),
+    );
   const archiveUnavailable = (save: DirectoryArchivedSave): never => {
     throw new DirectorySaveError(
       'archived-unavailable',
@@ -545,6 +580,9 @@ export function createProjectDirectoryWriter(
       ...proposal(save),
       verified: terminal(save.phase),
       replayed,
+      ...(ordinarySaveOutcomes.has(save.id)
+        ? { nativeSavePostState: ordinarySaveOutcomes.get(save.id) }
+        : {}),
       atomic: false,
       introduced: save.files
         .filter(
@@ -611,6 +649,53 @@ export function createProjectDirectoryWriter(
       );
     }
   };
+  const settleOrdinarySave = async (
+    result: DirectorySaveReceipt,
+    p: ExecutionPrincipal,
+  ): Promise<DirectorySaveReceipt> => {
+    const attempt = ordinarySaves.get(result.id);
+    if (!attempt) return result;
+    const outcome = (state: DirectorySaveReceipt['nativeSavePostState']) => {
+      const save = data.saves.find((save) => save.id === result.id);
+      return freeze({
+        ...result,
+        ...(save ? { workspaceChanged: changed(save) } : {}),
+        nativeSavePostState: state,
+      });
+    };
+    if (result.phase !== 'complete') {
+      attempt.notReturned();
+      ordinarySaves.delete(result.id);
+      return result;
+    }
+    try {
+      if (!result.replayed) {
+        const post = await attempt.returned(p, true);
+        ordinarySaveOutcomes.set(result.id, post.changed ? 'applied' : 'unchanged');
+      } else if (attempt.getSnapshot().phase === 'published') await attempt.retryPersistence();
+      // An ordinary historical receipt cannot start a post-state, including
+      // after Undo. Only an already published persistence failure may retry.
+      else return result;
+    } catch (failure) {
+      if (attempt.getSnapshot().phase === 'published') {
+        ordinarySaveOutcomes.set(result.id, 'applied');
+        throw new DirectorySaveError(
+          'persistence',
+          'Files saved; the workspace post-state is awaiting durable storage. Retry workspace persistence or this completed receipt; files will not be written again.',
+          outcome('applied'),
+        );
+      }
+      ordinarySaves.delete(result.id);
+      ordinarySaveOutcomes.set(result.id, 'unconfirmed');
+      throw new DirectorySaveError(
+        'stale-workspace',
+        `Files saved; the captured workspace post-state was not confirmed. ${failure instanceof Error ? failure.message : 'The Save context is no longer current.'} Inspect the current design before preparing a new Save.`,
+        outcome('unconfirmed'),
+      );
+    }
+    ordinarySaves.delete(result.id);
+    return outcome(ordinarySaveOutcomes.get(result.id));
+  };
   const perform = async (
     id: string,
     p: ExecutionPrincipal,
@@ -621,6 +706,7 @@ export function createProjectDirectoryWriter(
     await ready(true);
     // Historical terminal replay must use fresh journal metadata, not this tab's cache.
     data = await read(true);
+    pruneOrdinarySaves();
     const historical = archived(id, p);
     if (historical) {
       if (recovering) return archiveUnavailable(historical);
@@ -629,7 +715,11 @@ export function createProjectDirectoryWriter(
     data = await read();
     let save = owned(id, p);
     if (resuming && save.phase === 'recovering') recovering = true;
-    if (!recovering && save.phase === 'complete') return receipt(save, true);
+    if (recovering) {
+      ordinarySaves.get(id)?.notReturned();
+      ordinarySaves.delete(id);
+    }
+    if (!recovering && save.phase === 'complete') return settleOrdinarySave(receipt(save, true), p);
     if (recovering && ['recovered', 'recovered-with-new-files'].includes(save.phase))
       return receipt(save, true);
     if (!recovering && resuming && save.phase.startsWith('recovered')) return receipt(save, true);
@@ -647,208 +737,338 @@ export function createProjectDirectoryWriter(
       );
     active.add(id);
     publish();
+    const ordinaryAttempt = recovering ? undefined : ordinarySaves.get(id);
+    let ordinaryStarted = false;
+    const beforeOrdinaryWrite = () => {
+      if (!recovering && ordinaryAttempt) {
+        try {
+          ordinaryAttempt.beforeWrite(p);
+          ordinaryStarted = true;
+        } catch (failure) {
+          throw new DirectorySaveError(
+            'stale-workspace',
+            failure instanceof Error ? failure.message : 'The captured Save context changed',
+            proposal(save),
+          );
+        }
+      }
+    };
     let enteredLock = false,
       claimedHere = false;
-    try {
-      return await lock(
-        `fusion-studio-project-write:${save.rootId}:${directoryNameKey(save.folderName)}`,
-        async () => {
-          enteredLock = true;
-          // The same-origin app Web Lock excludes this app’s cooperating writers;
-          // external HFD/native processes are not locked. A prior
-          // page's persisted claim may be recovered only after acquiring this lock.
-          const latest = await read();
-          data = latest;
-          const archivedDuringLock = archived(id, p);
-          if (archivedDuringLock) {
-            if (recovering) return archiveUnavailable(archivedDuringLock);
-            return archivedReceipt(archivedDuringLock);
-          }
-          save = owned(id, p);
-          if (resuming && save.phase === 'recovering') recovering = true;
-          if (recovering && ['recovered', 'recovered-with-new-files'].includes(save.phase))
-            return receipt(save, true);
-          if (!recovering && resuming && save.phase.startsWith('recovered'))
-            return receipt(save, true);
-          if (!recovering && save.phase.startsWith('recovered'))
-            throw new DirectorySaveError(
-              'invalid-request',
-              'Prepare a new save after recovery',
-              proposal(save),
-            );
-          await verifyBlobs(save);
-          if (!recovering && save.phase === 'complete') return receipt(save, true);
-          if (!recovering && save.phase === 'prepared' && changed(save))
-            throw new DirectorySaveError(
-              'stale-workspace',
-              'The design changed after review. Prepare a new save for the current revision.',
-              proposal(save),
-            );
-          if (!recovering && save.phase !== 'prepared' && !resuming)
-            throw new DirectorySaveError(
-              'invalid-request',
-              'Resume this exact save with Retry, or recover its originals',
-              proposal(save),
-            );
-          if (
-            !recovering &&
-            save.mode === 'save-as' &&
-            save.folderExisted &&
-            !save.overwriteConfirmed &&
-            !allowOverwrite
-          )
-            throw new DirectorySaveError(
-              'conflict',
-              'Review this existing destination and explicitly allow replacement before committing',
-              proposal(save),
-            );
-          const competing = data.saves.find(
-            (s) =>
-              s.id !== id &&
-              s.rootId === save.rootId &&
-              directoryNameKey(s.folderName) === directoryNameKey(save.folderName) &&
-              ['writing', 'partial', 'recovering'].includes(s.phase),
-          );
-          if (competing)
-            throw new DirectorySaveError(
-              'conflict',
-              'This folder has an unfinished save. Retry or recover that original operation first.',
-              proposal(save),
-            );
-          const root = await rootFor(save);
-          let folder = await findChildDirectory(root.handle, save.folderName);
-          if (save.folderHandle && folder && !(await save.folderHandle.isSameEntry(folder)))
-            throw new DirectorySaveError(
-              'conflict',
-              'The reviewed project folder was replaced',
-              proposal(save),
-            );
-          if (!recovering && save.phase === 'prepared' && folder && !save.folderExisted)
-            throw new DirectorySaveError(
-              'conflict',
-              'A folder appeared after preparation. Review the destination again.',
-              proposal(save),
-            );
-          if (!recovering && save.folderExisted && !folder)
-            throw new DirectorySaveError(
-              'conflict',
-              'The reviewed project folder is missing',
-              proposal(save),
-            );
-          if (
-            !recovering &&
-            save.phase !== 'prepared' &&
-            !save.folderExisted &&
-            !save.folderHandle &&
-            folder
-          )
-            throw new DirectorySaveError(
-              'conflict',
-              'Folder creation was not durably bound to this save. Recover the unused review, then prepare a fresh Save As.',
-              proposal(save),
-            );
-          validateBaseline(save, await currentFiles(folder, save), recovering);
-          if (recovering && !folder && save.files.every((file) => file.before === null)) {
-            await persist((next) => {
-              const journal = next.saves.find((item) => item.id === id)!;
-              journal.files.forEach((file) => {
-                file.recovery = 'not-created';
-              });
-              journal.phase = 'recovered';
-              journal.claim = undefined;
-              journal.error = undefined;
-            }, id);
-            return receipt(owned(id, p), false);
-          }
-          const claim = newId(),
-            phase: DirectorySavePhase = recovering ? 'recovering' : 'writing';
-          await persist((next) => {
-            const s = next.saves.find((s) => s.id === id)!;
-            s.phase = phase;
-            s.error = undefined;
-            s.claim = { id: claim, until: now() + 60_000 };
-            if (allowOverwrite) s.overwriteConfirmed = true;
-          }, id);
-          claimedHere = true;
-          save = owned(id, p);
-          if (!folder) {
-            // Originals and desired bytes are already durable before even creating a folder.
-            await rootFor(save);
-            const appeared = await findChildDirectory(root.handle, save.folderName);
-            if (appeared && !resuming && !recovering)
-              throw new DirectorySaveError(
-                'conflict',
-                'The destination appeared during save preparation',
-                proposal(save),
-              );
-            folder =
-              appeared ?? (await root.handle.getDirectoryHandle(save.folderName, { create: true }));
-            await persist((next) => {
-              next.saves.find((s) => s.id === id)!.folderHandle = folder;
-            }, id);
-            save = owned(id, p);
-          }
-          const indexes = save.files
-            .map((f, i) => ({ f, i }))
-            .sort((a, b) => order(a.f) - order(b.f));
-          for (const { i } of indexes) {
-            save = owned(id, p);
-            const f = save.files[i];
-            await rootFor(save);
-            const actualFolder = await findChildDirectory(root.handle, save.folderName);
-            if (!actualFolder || !(await folder.isSameEntry(actualFolder)))
-              throw new DirectorySaveError(
-                'conflict',
-                'The destination folder changed while saving',
-                proposal(save),
-              );
-            if (order(f) > 0) {
-              const dependencies = await currentFiles(actualFolder, save);
-              for (const dependency of save.files.filter((item) => order(item) < order(f))) {
-                const observed = dependencies.get(directoryNameKey(dependency.path));
-                if (recovering && dependency.before === null) {
-                  if (observed && !same(observed, dependency.bytes, dependency.sha256))
-                    throw new DirectorySaveError(
-                      'conflict',
-                      'A retained resource changed before project metadata recovery',
-                      proposal(save),
-                    );
-                } else if (
-                  !same(
-                    observed,
-                    recovering ? dependency.before!.size : dependency.bytes,
-                    recovering ? dependency.beforeSha256 : dependency.sha256,
-                  )
-                )
-                  throw new DirectorySaveError(
-                    'conflict',
-                    'A dependent resource changed before project metadata could be committed',
-                    proposal(save),
-                  );
-              }
+    const writeFiles = async (): Promise<DirectorySaveReceipt> => {
+      try {
+        return await lock(
+          `fusion-studio-project-write:${save.rootId}:${directoryNameKey(save.folderName)}`,
+          async () => {
+            enteredLock = true;
+            // The same-origin app Web Lock excludes this app’s cooperating writers;
+            // external HFD/native processes are not locked. A prior
+            // page's persisted claim may be recovered only after acquiring this lock.
+            const latest = await read();
+            data = latest;
+            const archivedDuringLock = archived(id, p);
+            if (archivedDuringLock) {
+              if (recovering) return archiveUnavailable(archivedDuringLock);
+              return archivedReceipt(archivedDuringLock);
             }
-            const present = await currentFilesForOne(actualFolder, f);
-            if (recovering && f.before === null) {
-              if (present && !same(present, f.bytes, f.sha256))
+            save = owned(id, p);
+            if (resuming && save.phase === 'recovering') recovering = true;
+            if (recovering && ['recovered', 'recovered-with-new-files'].includes(save.phase))
+              return receipt(save, true);
+            if (!recovering && resuming && save.phase.startsWith('recovered'))
+              return receipt(save, true);
+            if (!recovering && save.phase.startsWith('recovered'))
+              throw new DirectorySaveError(
+                'invalid-request',
+                'Prepare a new save after recovery',
+                proposal(save),
+              );
+            await verifyBlobs(save);
+            if (!recovering && save.phase === 'complete') return receipt(save, true);
+            if (!recovering && save.phase === 'prepared' && changed(save))
+              throw new DirectorySaveError(
+                'stale-workspace',
+                'The design changed after review. Prepare a new save for the current revision.',
+                proposal(save),
+              );
+            if (!recovering && save.phase !== 'prepared' && !resuming)
+              throw new DirectorySaveError(
+                'invalid-request',
+                'Resume this exact save with Retry, or recover its originals',
+                proposal(save),
+              );
+            if (
+              !recovering &&
+              save.mode === 'save-as' &&
+              save.folderExisted &&
+              !save.overwriteConfirmed &&
+              !allowOverwrite
+            )
+              throw new DirectorySaveError(
+                'conflict',
+                'Review this existing destination and explicitly allow replacement before committing',
+                proposal(save),
+              );
+            const competing = data.saves.find(
+              (s) =>
+                s.id !== id &&
+                s.rootId === save.rootId &&
+                directoryNameKey(s.folderName) === directoryNameKey(save.folderName) &&
+                ['writing', 'partial', 'recovering'].includes(s.phase),
+            );
+            if (competing)
+              throw new DirectorySaveError(
+                'conflict',
+                'This folder has an unfinished save. Retry or recover that original operation first.',
+                proposal(save),
+              );
+            const root = await rootFor(save);
+            let folder = await findChildDirectory(root.handle, save.folderName);
+            if (save.folderHandle && folder && !(await save.folderHandle.isSameEntry(folder)))
+              throw new DirectorySaveError(
+                'conflict',
+                'The reviewed project folder was replaced',
+                proposal(save),
+              );
+            if (!recovering && save.phase === 'prepared' && folder && !save.folderExisted)
+              throw new DirectorySaveError(
+                'conflict',
+                'A folder appeared after preparation. Review the destination again.',
+                proposal(save),
+              );
+            if (!recovering && save.folderExisted && !folder)
+              throw new DirectorySaveError(
+                'conflict',
+                'The reviewed project folder is missing',
+                proposal(save),
+              );
+            if (
+              !recovering &&
+              save.phase !== 'prepared' &&
+              !save.folderExisted &&
+              !save.folderHandle &&
+              folder
+            )
+              throw new DirectorySaveError(
+                'conflict',
+                'Folder creation was not durably bound to this save. Recover the unused review, then prepare a fresh Save As.',
+                proposal(save),
+              );
+            validateBaseline(save, await currentFiles(folder, save), recovering);
+            if (recovering && !folder && save.files.every((file) => file.before === null)) {
+              await persist((next) => {
+                const journal = next.saves.find((item) => item.id === id)!;
+                journal.files.forEach((file) => {
+                  file.recovery = 'not-created';
+                });
+                journal.phase = 'recovered';
+                journal.claim = undefined;
+                journal.error = undefined;
+              }, id);
+              return receipt(owned(id, p), false);
+            }
+            const claim = newId(),
+              phase: DirectorySavePhase = recovering ? 'recovering' : 'writing';
+            beforeOrdinaryWrite();
+            await persist((next) => {
+              const s = next.saves.find((s) => s.id === id)!;
+              s.phase = phase;
+              s.error = undefined;
+              s.claim = { id: claim, until: now() + 60_000 };
+              if (allowOverwrite) s.overwriteConfirmed = true;
+            }, id);
+            claimedHere = true;
+            save = owned(id, p);
+            if (!folder) {
+              // Originals and desired bytes are already durable before even creating a folder.
+              await rootFor(save);
+              const appeared = await findChildDirectory(root.handle, save.folderName);
+              if (appeared && !resuming && !recovering)
                 throw new DirectorySaveError(
                   'conflict',
-                  'A newly introduced path now contains unreviewed bytes',
+                  'The destination appeared during save preparation',
                   proposal(save),
                 );
+              if (!appeared) beforeOrdinaryWrite();
+              folder =
+                appeared ??
+                (await root.handle.getDirectoryHandle(save.folderName, { create: true }));
+              await persist((next) => {
+                next.saves.find((s) => s.id === id)!.folderHandle = folder;
+              }, id);
+              save = owned(id, p);
+            }
+            const indexes = save.files
+              .map((f, i) => ({ f, i }))
+              .sort((a, b) => order(a.f) - order(b.f));
+            for (const { i } of indexes) {
+              save = owned(id, p);
+              const f = save.files[i];
+              await rootFor(save);
+              const actualFolder = await findChildDirectory(root.handle, save.folderName);
+              if (!actualFolder || !(await folder.isSameEntry(actualFolder)))
+                throw new DirectorySaveError(
+                  'conflict',
+                  'The destination folder changed while saving',
+                  proposal(save),
+                );
+              if (order(f) > 0) {
+                const dependencies = await currentFiles(actualFolder, save);
+                for (const dependency of save.files.filter((item) => order(item) < order(f))) {
+                  const observed = dependencies.get(directoryNameKey(dependency.path));
+                  if (recovering && dependency.before === null) {
+                    if (observed && !same(observed, dependency.bytes, dependency.sha256))
+                      throw new DirectorySaveError(
+                        'conflict',
+                        'A retained resource changed before project metadata recovery',
+                        proposal(save),
+                      );
+                  } else if (
+                    !same(
+                      observed,
+                      recovering ? dependency.before!.size : dependency.bytes,
+                      recovering ? dependency.beforeSha256 : dependency.sha256,
+                    )
+                  )
+                    throw new DirectorySaveError(
+                      'conflict',
+                      'A dependent resource changed before project metadata could be committed',
+                      proposal(save),
+                    );
+                }
+              }
+              const present = await currentFilesForOne(actualFolder, f);
+              if (recovering && f.before === null) {
+                if (present && !same(present, f.bytes, f.sha256))
+                  throw new DirectorySaveError(
+                    'conflict',
+                    'A newly introduced path now contains unreviewed bytes',
+                    proposal(save),
+                  );
+                await persist(
+                  (next) => {
+                    next.saves.find((s) => s.id === id)!.files[i].recovery = present
+                      ? 'retained-new-file'
+                      : 'not-created';
+                  },
+                  id,
+                  i,
+                );
+                continue;
+              }
+              const target = recovering ? f.before! : f.after,
+                targetSha = recovering ? f.beforeSha256! : f.sha256;
+              if (same(present, target.size, targetSha)) {
+                await persist(
+                  (next) => {
+                    const item = next.saves.find((s) => s.id === id)!.files[i];
+                    if (recovering) item.recovery = 'restored';
+                    else item.state = 'verified';
+                  },
+                  id,
+                  i,
+                );
+                continue;
+              }
+              if (
+                present &&
+                !same(present, f.beforeBytes, f.beforeSha256) &&
+                !same(present, f.bytes, f.sha256)
+              )
+                throw new DirectorySaveError(
+                  'conflict',
+                  'Destination bytes changed since the reviewed baseline',
+                  proposal(save),
+                );
+              if (!recovering && f.before && !present)
+                throw new DirectorySaveError(
+                  'conflict',
+                  'An original destination file disappeared',
+                  proposal(save),
+                );
+              // Journal attempting before createFile/createWritable, and verify durable
+              // owned byte copies again before allowing a filesystem mutation.
               await persist(
                 (next) => {
-                  next.saves.find((s) => s.id === id)!.files[i].recovery = present
-                    ? 'retained-new-file'
-                    : 'not-created';
+                  next.saves.find((s) => s.id === id)!.files[i].state = 'attempting';
                 },
                 id,
                 i,
               );
-              continue;
-            }
-            const target = recovering ? f.before! : f.after,
-              targetSha = recovering ? f.beforeSha256! : f.sha256;
-            if (same(present, target.size, targetSha)) {
+              await rootFor(save);
+              const handles = await matchingProjectFiles(actualFolder, [f.path]);
+              let handle = handles.get(directoryNameKey(f.path));
+              if (!handle) {
+                beforeOrdinaryWrite();
+                handle = await actualFolder.getFileHandle(f.path, { create: true });
+              }
+              if (directoryNameKey(handle.name) !== directoryNameKey(f.path))
+                throw new DirectorySaveError(
+                  'conflict',
+                  'The file handle did not match the reviewed filename',
+                  proposal(save),
+                );
+              beforeOrdinaryWrite();
+              const stream = await handle.createWritable({
+                keepExistingData: false,
+                mode: 'exclusive',
+              });
+              let closed = false;
+              try {
+                const whileLocked = await handle.getFile(),
+                  lockedHash = await hash(whileLocked);
+                if (
+                  present
+                    ? whileLocked.size !== present.bytes || lockedHash !== present.sha256
+                    : whileLocked.size !== 0
+                )
+                  throw new DirectorySaveError(
+                    'conflict',
+                    'A file changed while its writer was being opened',
+                    proposal(save),
+                  );
+                beforeOrdinaryWrite();
+                await stream.write(target);
+                const beforeClose = await handle.getFile(),
+                  beforeCloseHash = await hash(beforeClose);
+                if (
+                  present
+                    ? beforeClose.size !== present.bytes || beforeCloseHash !== present.sha256
+                    : beforeClose.size !== 0
+                )
+                  throw new DirectorySaveError(
+                    'conflict',
+                    'An external writer changed this file before commit; the staged write was aborted',
+                    proposal(save),
+                  );
+                const beforeCloseFolder = await findChildDirectory(root.handle, save.folderName);
+                if (!beforeCloseFolder || !(await folder.isSameEntry(beforeCloseFolder)))
+                  throw new DirectorySaveError(
+                    'conflict',
+                    'The folder changed before file commit',
+                    proposal(save),
+                  );
+                beforeOrdinaryWrite();
+                await stream.close();
+                closed = true;
+              } catch (error) {
+                if (!closed) await stream.abort().catch(() => {});
+                throw error;
+              }
+              const afterCloseFolder = await findChildDirectory(root.handle, save.folderName);
+              if (!afterCloseFolder || !(await folder.isSameEntry(afterCloseFolder)))
+                throw new DirectorySaveError(
+                  'conflict',
+                  'The folder changed after file commit',
+                  proposal(save),
+                );
+              const confirmed = await currentFilesForOne(afterCloseFolder, f);
+              if (!same(confirmed, target.size, targetSha))
+                throw new DirectorySaveError(
+                  'partial-write',
+                  'The closed file did not verify; its original recovery bytes remain retained',
+                  proposal(save),
+                );
               await persist(
                 (next) => {
                   const item = next.saves.find((s) => s.id === id)!.files[i];
@@ -858,195 +1078,107 @@ export function createProjectDirectoryWriter(
                 id,
                 i,
               );
-              continue;
             }
-            if (
-              present &&
-              !same(present, f.beforeBytes, f.beforeSha256) &&
-              !same(present, f.bytes, f.sha256)
-            )
+            save = owned(id, p);
+            const finalFolder = await findChildDirectory(root.handle, save.folderName);
+            if (!finalFolder || !(await folder.isSameEntry(finalFolder)))
               throw new DirectorySaveError(
                 'conflict',
-                'Destination bytes changed since the reviewed baseline',
+                'The destination identity changed before final verification',
                 proposal(save),
               );
-            if (!recovering && f.before && !present)
-              throw new DirectorySaveError(
-                'conflict',
-                'An original destination file disappeared',
-                proposal(save),
-              );
-            // Journal attempting before createFile/createWritable, and verify durable
-            // owned byte copies again before allowing a filesystem mutation.
-            await persist(
-              (next) => {
-                next.saves.find((s) => s.id === id)!.files[i].state = 'attempting';
-              },
-              id,
-              i,
-            );
-            await rootFor(save);
-            const handles = await matchingProjectFiles(actualFolder, [f.path]);
-            let handle = handles.get(directoryNameKey(f.path));
-            if (!handle) handle = await actualFolder.getFileHandle(f.path, { create: true });
-            if (directoryNameKey(handle.name) !== directoryNameKey(f.path))
-              throw new DirectorySaveError(
-                'conflict',
-                'The file handle did not match the reviewed filename',
-                proposal(save),
-              );
-            const stream = await handle.createWritable({
-              keepExistingData: false,
-              mode: 'exclusive',
-            });
-            let closed = false;
-            try {
-              const whileLocked = await handle.getFile(),
-                lockedHash = await hash(whileLocked);
-              if (
-                present
-                  ? whileLocked.size !== present.bytes || lockedHash !== present.sha256
-                  : whileLocked.size !== 0
+            const final = await currentFiles(finalFolder, save);
+            for (const f of save.files) {
+              const v = final.get(directoryNameKey(f.path));
+              if (recovering && f.before === null) {
+                if (v && !same(v, f.bytes, f.sha256))
+                  throw new DirectorySaveError(
+                    'conflict',
+                    'A retained introduced file changed during recovery',
+                    proposal(save),
+                  );
+              } else if (
+                !same(
+                  v,
+                  recovering ? f.before!.size : f.bytes,
+                  recovering ? f.beforeSha256 : f.sha256,
+                )
               )
                 throw new DirectorySaveError(
-                  'conflict',
-                  'A file changed while its writer was being opened',
+                  'partial-write',
+                  'Final project bytes did not verify',
                   proposal(save),
                 );
-              await stream.write(target);
-              const beforeClose = await handle.getFile(),
-                beforeCloseHash = await hash(beforeClose);
-              if (
-                present
-                  ? beforeClose.size !== present.bytes || beforeCloseHash !== present.sha256
-                  : beforeClose.size !== 0
-              )
-                throw new DirectorySaveError(
-                  'conflict',
-                  'An external writer changed this file before commit; the staged write was aborted',
-                  proposal(save),
-                );
-              const beforeCloseFolder = await findChildDirectory(root.handle, save.folderName);
-              if (!beforeCloseFolder || !(await folder.isSameEntry(beforeCloseFolder)))
-                throw new DirectorySaveError(
-                  'conflict',
-                  'The folder changed before file commit',
-                  proposal(save),
-                );
-              await stream.close();
-              closed = true;
-            } catch (error) {
-              if (!closed) await stream.abort().catch(() => {});
-              throw error;
             }
-            const afterCloseFolder = await findChildDirectory(root.handle, save.folderName);
-            if (!afterCloseFolder || !(await folder.isSameEntry(afterCloseFolder)))
-              throw new DirectorySaveError(
-                'conflict',
-                'The folder changed after file commit',
-                proposal(save),
-              );
-            const confirmed = await currentFilesForOne(afterCloseFolder, f);
-            if (!same(confirmed, target.size, targetSha))
-              throw new DirectorySaveError(
-                'partial-write',
-                'The closed file did not verify; its original recovery bytes remain retained',
-                proposal(save),
-              );
-            await persist(
-              (next) => {
-                const item = next.saves.find((s) => s.id === id)!.files[i];
-                if (recovering) item.recovery = 'restored';
-                else item.state = 'verified';
-              },
-              id,
-              i,
-            );
-          }
-          save = owned(id, p);
-          const finalFolder = await findChildDirectory(root.handle, save.folderName);
-          if (!finalFolder || !(await folder.isSameEntry(finalFolder)))
-            throw new DirectorySaveError(
-              'conflict',
-              'The destination identity changed before final verification',
-              proposal(save),
-            );
-          const final = await currentFiles(finalFolder, save);
-          for (const f of save.files) {
-            const v = final.get(directoryNameKey(f.path));
-            if (recovering && f.before === null) {
-              if (v && !same(v, f.bytes, f.sha256))
-                throw new DirectorySaveError(
-                  'conflict',
-                  'A retained introduced file changed during recovery',
-                  proposal(save),
-                );
-            } else if (
-              !same(
-                v,
-                recovering ? f.before!.size : f.bytes,
-                recovering ? f.beforeSha256 : f.sha256,
-              )
-            )
-              throw new DirectorySaveError(
-                'partial-write',
-                'Final project bytes did not verify',
-                proposal(save),
-              );
-          }
-          await persist((next) => {
-            const s = next.saves.find((s) => s.id === id)!;
-            s.phase = recovering
-              ? s.files.some((f) => f.recovery === 'retained-new-file')
-                ? 'recovered-with-new-files'
-                : 'recovered'
-              : 'complete';
-            s.claim = undefined;
-            s.error = undefined;
-            if (!recovering)
-              next.associations[s.slot] = {
-                rootId: s.rootId,
-                folderName: s.folderName,
-                projectKey: s.projectKey,
-              };
-          }, id);
-          return receipt(owned(id, p), false);
-        },
-      );
-    } catch (error) {
-      const latest = data.saves.find((s) => s.id === id);
-      if (
-        claimedHere &&
-        latest &&
-        ['writing', 'recovering'].includes(latest.phase) &&
-        !storageBroken
-      ) {
-        try {
-          await persist((next) => {
-            const s = next.saves.find((s) => s.id === id)!;
-            s.phase = recovering ? 'recovering' : 'partial';
-            s.claim = undefined;
-            s.error =
-              'The multi-file operation was interrupted. Retry this exact operation or inspect its retained recovery files.';
-          }, id);
-        } catch {}
-      }
-      if (error instanceof DirectorySaveError)
-        throw new DirectorySaveError(
-          error.code,
-          error.message,
-          latest ? proposal(data.saves.find((s) => s.id === id)!) : undefined,
+            await persist((next) => {
+              const s = next.saves.find((s) => s.id === id)!;
+              s.phase = recovering
+                ? s.files.some((f) => f.recovery === 'retained-new-file')
+                  ? 'recovered-with-new-files'
+                  : 'recovered'
+                : 'complete';
+              s.claim = undefined;
+              s.error = undefined;
+              if (!recovering)
+                next.associations[s.slot] = {
+                  rootId: s.rootId,
+                  folderName: s.folderName,
+                  projectKey: s.projectKey,
+                };
+            }, id);
+            return receipt(owned(id, p), false);
+          },
         );
-      throw new DirectorySaveError(
-        !enteredLock ? 'busy' : !claimedHere ? 'conflict' : 'partial-write',
-        !enteredLock
-          ? 'Another browser writer owns this folder, or exclusive locks are unavailable.'
-          : !claimedHere
-            ? 'The destination is ambiguous, colliding, unreadable or changed. No filesystem mutation was started.'
-            : 'The directory operation was not confirmed. No automatic retry, rollback or deletion was attempted.',
-        latest ? proposal(latest) : undefined,
-      );
+      } catch (error) {
+        if (ordinaryStarted || ordinaryAttempt?.getSnapshot().phase === 'unconfirmed') {
+          ordinaryAttempt?.notReturned();
+          ordinarySaves.delete(id);
+          ordinarySaveOutcomes.set(id, 'unconfirmed');
+        }
+        const latest = data.saves.find((s) => s.id === id);
+        if (
+          claimedHere &&
+          latest &&
+          ['writing', 'recovering'].includes(latest.phase) &&
+          !storageBroken
+        ) {
+          try {
+            await persist((next) => {
+              const s = next.saves.find((s) => s.id === id)!;
+              s.phase = recovering ? 'recovering' : 'partial';
+              s.claim = undefined;
+              s.error =
+                'The multi-file operation was interrupted. Retry this exact operation or inspect its retained recovery files.';
+            }, id);
+          } catch {}
+        }
+        if (error instanceof DirectorySaveError)
+          throw new DirectorySaveError(
+            error.code,
+            error.message,
+            latest ? proposal(data.saves.find((s) => s.id === id)!) : undefined,
+          );
+        throw new DirectorySaveError(
+          !enteredLock ? 'busy' : !claimedHere ? 'conflict' : 'partial-write',
+          !enteredLock
+            ? 'Another browser writer owns this folder, or exclusive locks are unavailable.'
+            : !claimedHere
+              ? 'The destination is ambiguous, colliding, unreadable or changed. No filesystem mutation was started.'
+              : 'The directory operation was not confirmed. No automatic retry, rollback or deletion was attempted.',
+          latest ? proposal(latest) : undefined,
+        );
+      }
+    };
+    try {
+      const result = await writeFiles();
+      // Filesystem completion is durable before the independent workspace
+      // post-state. A post-state failure must not turn complete files partial.
+      return recovering ? result : await settleOrdinarySave(result, p);
     } finally {
+      if (recovering) {
+        ordinarySaves.get(id)?.notReturned();
+        ordinarySaves.delete(id);
+      }
       active.delete(id);
       publish();
     }
@@ -1138,6 +1270,8 @@ export function createProjectDirectoryWriter(
           ? projectSchema.parse(options.getProject(binding.slot))
           : undefined;
       let exportTicket: DirectoryExportTicket | undefined, ticketFailure: unknown;
+      let ordinaryAttempt: NativeOrdinarySaveAttempt | undefined,
+        retainedOrdinaryAttempt = false;
       // Capture the original session synchronously, but preserve zero-I/O replay
       // even when a formerly connected target is now missing or a ticket expired.
       try {
@@ -1225,12 +1359,27 @@ export function createProjectDirectoryWriter(
             'Retry or recover the unfinished save for this folder first',
           );
         if (ticketFailure) throw ticketFailure;
+        const ordinary = exportTicket?.nativeOrdinarySave;
+        if (
+          ordinary &&
+          (!Number.isInteger(ordinary.presetIndex) ||
+            ordinary.presetIndex < 0 ||
+            ordinary.presetIndex > 2 ||
+            typeof ordinary.createAttempt !== 'function')
+        )
+          throw new DirectorySaveError('invalid-request', 'Invalid trusted Save preset context');
         const resolved = exportTicket ? await exportTicket.resolve() : undefined;
+        if (ordinary && !resolved)
+          throw new DirectorySaveError('invalid-request', 'Trusted Save capture returned no files');
         if (resolved) {
           const validated = projectSchema.parse(resolved.project),
-            original = structuredClone(captured);
+            original = projectSchema.parse(
+              ordinary ? { ...captured, hfdSelectedPreset: ordinary.presetIndex + 1 } : captured,
+            );
           delete validated.hfdCloneTemplate;
           delete original.hfdCloneTemplate;
+          // Only this trusted folder-Save ticket may project the runtime preset
+          // into emitted metadata. It grants no other staged-design exception.
           if (JSON.stringify(validated) !== JSON.stringify(original))
             throw new DirectorySaveError(
               'invalid-request',
@@ -1238,6 +1387,7 @@ export function createProjectDirectoryWriter(
             );
         }
         exportTicket?.assertCurrent();
+        ordinaryAttempt = ordinary?.createAttempt(binding.principal);
         const exported = resolved?.files ?? projectFiles(captured);
         if (
           !Array.isArray(exported) ||
@@ -1345,11 +1495,17 @@ export function createProjectDirectoryWriter(
           next.saves = next.saves.filter((s) => !older.some((old) => old.id === s.id));
           next.saves.push(journal);
         }, journal.id);
+        if (ordinaryAttempt && preparedId === journal.id) {
+          ordinarySaves.set(journal.id, ordinaryAttempt);
+          ordinarySaveOutcomes.set(journal.id, 'unavailable');
+          retainedOrdinaryAttempt = true;
+        }
         const savedArchive = archived(preparedId, binding.principal);
         return savedArchive
           ? archivedReceipt(savedArchive)
           : proposal(data.saves.find((s) => s.id === preparedId)!);
       } finally {
+        if (!retainedOrdinaryAttempt) ordinaryAttempt?.notReturned();
         exportTicket?.dispose?.();
       }
     },
@@ -1493,6 +1649,7 @@ export function createProjectDirectoryWriter(
               'Archive review is stale. Read the current terminal record and review it again.',
             );
           const archivedAt = now();
+          const { nativeSavePostState: _postState, ...persistedReceipt } = receipt(save, true);
           const historical: DirectoryArchivedSave = {
             owner: save.owner,
             scope: save.scope,
@@ -1501,7 +1658,7 @@ export function createProjectDirectoryWriter(
             reviewId,
             manifestSha256: pending.review.manifestSha256,
             receipt: {
-              ...receipt(save, true),
+              ...persistedReceipt,
               recoveryAvailable: false,
               archived: true,
               archivedAt,

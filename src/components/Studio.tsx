@@ -121,6 +121,7 @@ import {
   createNativeProjectSaveController,
   type NativeProjectSaveController,
 } from '../application/native-project-save';
+import { applyNativeOrdinarySavePostState } from '../application/native-save-lifecycle';
 import AmplifierConfiguration from './AmplifierConfiguration';
 import DeviceClonePanel from './DeviceClonePanel';
 import { exportNativeCloneProject, nativeCloneProjectFiles } from '../domain/clone-project';
@@ -1198,6 +1199,29 @@ export default function Studio() {
         state: useWorkspace.getState,
         binding: (slot) => liveRef.current[slot],
         operate,
+        ordinarySave: {
+          currentPresetIndex: () => useWorkspace.getState().preset,
+          publish: (plans) => {
+            useWorkspace.getState().editAt(
+              plans.filter((plan) => plan.changed).map((plan) => plan.slot),
+              (project, slot) => {
+                const plan = plans.find((candidate) => candidate.slot === slot);
+                if (!plan) throw new Error('Save post-state role is unavailable');
+                applyNativeOrdinarySavePostState(project, slot, plan);
+              },
+              { synchronizeLinks: false, independent: true },
+            );
+          },
+          persist: async () => {
+            await retryWorkspacePersistence();
+            await flushWorkspacePersistence();
+            const status = getWorkspacePersistenceStatus();
+            if (status.unsaved || status.error)
+              throw new Error(
+                status.error ?? 'The Save post-state has not been saved to this workspace',
+              );
+          },
+        },
       }),
     [],
   );
@@ -5512,7 +5536,7 @@ export default function Studio() {
           onClose={closeProjectSave}
           onSaved={(receipt) =>
             setNotice(
-              `${receipt.slot === 'left' ? 'Left' : 'Right'} project saved and verified in ${receipt.folderName}.${receipt.workspaceChanged ? ' Newer edits still need a folder save.' : ''}`,
+              `${receipt.slot === 'left' ? 'Left' : 'Right'} project saved and verified in ${receipt.folderName}.${receipt.nativeSavePostState === 'applied' && !receipt.replayed ? ' Global delays were updated in the open preset after Save; save again to write those values.' : receipt.nativeSavePostState === 'unconfirmed' || receipt.nativeSavePostState === 'unavailable' ? ' The workspace delay update is unconfirmed; prepare a new Save.' : receipt.workspaceChanged ? ' Newer edits still need a folder save.' : ''}`,
             )
           }
           onDownloadJson={async () => {

@@ -87,6 +87,25 @@ possible preset has uniform Global values, proving the loader stage inert.
 Existing linked-input selection checks still apply. Errors leave the workspace
 unchanged and identify the original native project information that is needed.
 
+## Ordinary folder Save
+
+Ordinary Save has the opposite timing from the loader's initial reconciliation:
+it serializes the current document first, then reconciles Global delay in the
+current preset. The emitted file can therefore contain differing Global values
+while the open document has already copied the first channel's raw value and
+maximum to its other channels. A second Save can write that reconciled state
+without another field edit.
+
+The folder Save workflow captures the current runtime preset explicitly. The
+imported saved-preset hint does not select the post-Save operation. A selected
+Left or Right folder Save affects only that role, even with Mirror enabled.
+Reviewing a Save, downloading JSON or HFD ZIP, and replaying a completed receipt
+do not run this post-Save operation. Its publication is a separate Undoable
+workspace edit, after the actual writer returns.
+
+[Project Save semantics](HFD-PROJECT-SAVE.md) describes the file preimage,
+workspace fences, persistence and the limits of the native evidence.
+
 ## MCP
 
 Use one delay intent per call:
@@ -138,8 +157,15 @@ The differing-value case's first Save also renumbered 15 sink descriptors, inclu
 descriptors; FIR processing data stayed intact. The source establishes the
 internal load/dialog ordering; the GUI files show combined Open and first Save.
 
-General Save lifecycle behavior and alternate selectable delay units remain
-unqualified. In particular, the native serializer's reconciliation call follows
-its serialization invocation; it is not evidence of a pre-Save operation.
-This change does not establish complete HFD parity,
+Four further offline ordinary Saves qualify successful post-serialization
+reconciliation without a Graph or field edit between Saves. A preset with
+differing Global values retained them in the first file and wrote the first
+channel's value and maximum to all three channels in the second. A uniform-value
+control retained differing maxima in both byte-identical outputs. The second
+control Save advanced the file timestamp, independently of its unchanged bytes.
+See [Project Save evidence](HFD-PROJECT-SAVE.md#native-evidence) for the exact
+scope and incidental first-Save descriptor changes.
+
+Alternate selectable delay units, native failed-serializer behavior and runtime
+Save As remain unqualified. These results do not establish complete HFD parity,
 physical two-amplifier acceptance, macOS USB behavior or new amplifier state.

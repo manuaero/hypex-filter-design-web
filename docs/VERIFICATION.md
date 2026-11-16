@@ -2,6 +2,54 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V56 ordinary folder Save
+
+Four offline native HFD File-menu Saves establish the successful ordinary Save
+ordering described in [Project Save semantics](HFD-PROJECT-SAVE.md). With preset 2
+selected and no Graph/field edits, the first file retained differing Global
+values and maxima; the second contained the first channel's values. The equal
+control produced byte-identical files with distinct write timestamps. Source
+analysis places reconciliation after the serializer's normal return, without a
+Boolean-success gate. Failed native GUI saves and runtime Save As remain
+unqualified.
+
+The browser directory writer now carries a page-local, owner-bound attempt
+through the shared UI/MCP path. It validates the original role, revision,
+explicit runtime preset and raw state before writes and publication. Config and
+sidecar retain the same preimage; the post-state changes only current-preset
+Global delay/maxima. One independent edit supports Undo. Complete receipt
+replay, reload, previews and downloads never reconstruct publication authority.
+Partial/unknown writes retain recovery status, while workspace persistence
+failure after publication can retry storage without rewriting files.
+
+Actual Studio component tests exercise Header Save, both independent roles,
+matching Config/sidecar metadata, one publication/Undo, persistence and an
+admitted MCP executor using the same writer. Granted memory filesystem ports
+qualify application behavior, not OS file grants or download delivery. The
+native comparison used metadata-only USB exclusion and zero explicit amplifier
+transfers. No new physical state, upload, macOS USB, two-amplifier or complete
+HFD-parity acceptance is inferred. Bridge configuration was not applied.
+
+The complete private regression run passed **3,953/3,953 assertions in 248 files**:
+3,845 canonical assertions in 245 files and 108 retained diagnostics in three
+files. TypeScript and formatting passed. An initial unrestricted-worker run
+retains one existing two-amplifier simulation timeout among 3,952 passes; its
+isolated 21-test rerun and the complete four-worker rerun passed without changing
+that implementation or raising its timeout.
+
+An isolated actual-browser run recorded seven observations: passive Header Save
+opening/cancel, an explicitly refused real folder grant, actual local MCP
+pairing, two-role Save stage/resolve, checked Right JSON export, release,
+unpairing and normal IndexedDB reload. All 91 tool declarations matched source;
+10 HTTP requests comprised four protocol calls and six application calls.
+Both entire project hashes and full selection remained exact. Reload restored
+ready/saved storage and empty history. The owned tab and both isolated listeners
+were closed. These checks do not qualify actual folder delivery, the post-return
+edit in a real browser filesystem, every declared command, or the still-pending
+broader paired native-import cases.
+
+The V56 public run passed **3,844 checks with one optional installed-PDF skip**, 3,845 total in 245 files. Nonincremental TypeScript and Next/Worker packaging passed. The public inventory contains 479 application/source files plus 13 public documentation/configuration assets, 492 total. Local filter files, device identifiers, private Site identity, vendor executables and private test records are excluded.
+
 ## V55 native Global reconciliation
 
 The [native project-opening contract](HFD-CHANNEL-DELAY.md#native-project-opening) separates raw Global delay reconciliation from the existing manual field callback. Within a preset, equal Global values leave differing or missing maxima untouched. A value mismatch copies the first channel's raw Global value and maximum to all three channels. The source and implementation use raw Doubles, with no Text formatting, sample quantization or profile clamp. A mismatch requires a known finite first maximum; uniform values do not require one.
@@ -16,7 +64,7 @@ The native record retains 35 screenshot hashes and 122 bounded action records. T
 
 The complete private run passed **3,906/3,906 assertions in 245 files**, with zero failures or skips: **3,798 canonical assertions in 242 files** and **108 retained diagnostics in three files**. Nonincremental TypeScript passed. All 460 checked inputs, four owner proofs selecting 10 current files, three documentation pins and both frozen recovery-ledger pins remained exact. The diagnostic observation output also remained byte-exact to its retained earlier proof. Focused tests cover the raw gate, signed-zero handling, finite/missing maxima, stale and invalid all-role refusal, role-specific preparation, Undo and passive receipt replay; their overlapping totals are not added to the full run.
 
-V55 public tests, Next/Worker packaging, actual browser/MCP acceptance and publication are not asserted by this proposal. The public checkout's existing sole optional installed-PDF skip and vendor-file omissions remain unchanged. Conservative admission for legacy native input with missing or unsupported saved-preset metadata is documented in the contract; these native cases do not establish malformed-input behavior. Complete HFD compatibility, general Save lifecycle behavior, authenticated remote pairing, macOS USB and two physical amplifiers remain separate qualification work. No amplifier or bridge configuration was applied.
+V55 public validation subsequently passed 3,797 checks with one optional installed-PDF skip, TypeScript and Next/Worker packaging. Its source was published; broader paired-import browser acceptance remains incomplete. The public checkout's existing sole optional installed-PDF skip and vendor-file omissions remain unchanged. Conservative admission for legacy native input with missing or unsupported saved-preset metadata is documented in the contract; these native cases do not establish malformed-input behavior. Complete HFD compatibility, general Save lifecycle behavior, authenticated remote pairing, macOS USB and two physical amplifiers remain separate qualification work. No amplifier or bridge configuration was applied.
 
 ## V54 channel delay
 
@@ -157,7 +205,6 @@ representation still need an explicit implementation policy; no blanket parser
 normalization is implied. Physical two-device testing, macOS, acoustics, manual
 download delivery and exhaustive HFD parity remain open.
 
-
 ## V51 native File Open checkpoint
 
 The completed private run passed **3,555 / 3,555 tests in 228 files**: 3,447 canonical tests in 225 files plus 108 retained diagnostics in 3 files. The public run passed **3,446 tests**, with the sole optional installed-PDF skip, out of 3,447 tests in 225 files. TypeScript, Next and Worker checks passed on unchanged source. The public manifest contains 449 source files and 13 protected files, 462 files in total.
@@ -178,15 +225,15 @@ No new amplifier or bridge-configuration operation belongs to this update. WebHI
 
 The web implementation and its existing 91-command MCP server now share qualified visible channel graph entry. Only the selected role initializes despite Mirror. Nonzero compensation, independent/linked Gain publication, explicit known unloaded microphone application and saved native selection are separate from passive parsing/hydration. Plans validate before one edit; refusal, no-op, Undo, auxiliary views and palette pre-stage/one-Apply-Undo boundaries are covered without clearing filter caches.
 
-| V50 check | Recorded result |
-| --- | --- |
-| Complete FINAL private run | **3,454 passed / 3,454 total in 220 files**. |
-| Canonical / retained diagnostics | **3,346 passed in 217 files**, plus **108 included ignored diagnostics in 3 files**; no filters, omissions or changed timeouts. |
-| Core / metadata / Studio focus | **72/4, 11/1, 203/5** passed tests/files. Three proof inventories cover nine distinct changed files; focused suites overlap and are not added to full counts. |
-| Retained first full run | 22 failures remain retained: seven palette regressions and 14 ignored duplicates, plus one existing expectation that navigation left all document metadata unchanged. Product history behavior was fixed; the latter test now checks only selected-group metadata and exact Undo. |
-| Native offline observations | V49 retained independent Gain 24 / AdditionalGain 10 before first view, then saved Gain 14. V50 stopped its linked Gain 24 retention test after early normalization, and separately observed view from actual Gain 0 / AdditionalGain 6 to Gain 0 / AdditionalGain 10. |
-| Fresh public checks | **3,345 passed plus the sole optional exact PDF skip: 3,346 total in 217 files**; TypeScript, Next build and Worker packaging passed. |
-| Public source | **439 source files plus 13 protected public files: 452 total**. The existing tool-description and native-selection test changes, plus the scope document, are included in the full manifest alongside the nine owner files. |
+| V50 check                        | Recorded result                                                                                                                                                                                                                                                                   |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Complete FINAL private run       | **3,454 passed / 3,454 total in 220 files**.                                                                                                                                                                                                                                      |
+| Canonical / retained diagnostics | **3,346 passed in 217 files**, plus **108 included ignored diagnostics in 3 files**; no filters, omissions or changed timeouts.                                                                                                                                                   |
+| Core / metadata / Studio focus   | **72/4, 11/1, 203/5** passed tests/files. Three proof inventories cover nine distinct changed files; focused suites overlap and are not added to full counts.                                                                                                                     |
+| Retained first full run          | 22 failures remain retained: seven palette regressions and 14 ignored duplicates, plus one existing expectation that navigation left all document metadata unchanged. Product history behavior was fixed; the latter test now checks only selected-group metadata and exact Undo. |
+| Native offline observations      | V49 retained independent Gain 24 / AdditionalGain 10 before first view, then saved Gain 14. V50 stopped its linked Gain 24 retention test after early normalization, and separately observed view from actual Gain 0 / AdditionalGain 6 to Gain 0 / AdditionalGain 10.            |
+| Fresh public checks              | **3,345 passed plus the sole optional exact PDF skip: 3,346 total in 217 files**; TypeScript, Next build and Worker packaging passed.                                                                                                                                             |
+| Public source                    | **439 source files plus 13 protected public files: 452 total**. The existing tool-description and native-selection test changes, plus the scope document, are included in the full manifest alongside the nine owner files.                                                       |
 
 The independent V49 view cleared microphone application and recorded group 2 with the other Gains and all 135 BQ caches exact. V50's early linked route had already copied the source Peak into the target and changed cached Gain 24 to 0; its microphone change did not match the source and remains unisolated. The separately reviewed view retained cached Gain 0, normalized AdditionalGain 6 to 10, cleared microphone application and recorded group 2 with all 135 BQ caches unchanged. These observations do not establish a linked Gain 24 cap, global passive-import normalization, every linked-refresh side effect, genuine Hide/Show or instrumented callback counts. The linked checkbox was visibly checked; its Enabled property/manual toggling were not qualified. HFD closed before metadata-only exclusion release; that is not physical USB absence or a bus trace.
 
@@ -200,15 +247,15 @@ A fresh manual transfer began with an observed size of 2,159,767 bytes; terminal
 
 Ordinary offline channel Gain now uses passive Double-to-Single Text presentation, explicit raw Text/two-decimal Double commits, factory -125..24 dB bounds and sign-only0.1 dB wheel steps. The channel callback publishes its final AdditionalGain-capped value; it remains distinct from the BQ late display guard. Original typed Text reaches both roles before their independent caps. A human source-basis wheel mirrors only a changed canonical result; stateless MCP each-mode computes every role independently. All-target preflight, scoped link propagation, cache no-ops, one Undo and V47 field cancellation authority are covered.
 
-| V48 check | Recorded result |
-| --- | --- |
-| Complete private run | **3,395 passed / 3,395 total in 217 files**. |
-| Canonical product coverage | **3,287 passed in 214 files**; 108 ignored diagnostic assertions in 3 files remain separate. |
-| Core / planner / UI focus | **202/8, 149/9, 144/8** passed tests/files respectively. |
-| Retained reproductions | Original UI RED2 and separate source-predicted foreign-state RED1 remain retained; focused skips are not coverage. The first full run had one obsolete existing test expecting native -125 to be rejected; its raw failure is retained. Root corrected that assertion to accept -125 and reject -125.01, then reran the full suite. |
-| Native offline saves | **13 actual saves: 12 normal work states and one separate conflicting-input load state**. Minimum -125, maximum 24, raw 0.005 to 0.01, signed wheel and 13.95/Add10 to 14.00 were saved. A further positive 360 wheel event at the ceiling left Config bytes unchanged. |
-| Fresh public checks | **3,286 passed plus the sole optional exact PDF skip: 3,287 total in 214 files**. TypeScript, Next build and Worker packaging passed. |
-| Public source | **434 source files plus 13 protected public files: 447 total**; all earlier prose is retained byte for byte. |
+| V48 check                  | Recorded result                                                                                                                                                                                                                                                                                                                     |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Complete private run       | **3,395 passed / 3,395 total in 217 files**.                                                                                                                                                                                                                                                                                        |
+| Canonical product coverage | **3,287 passed in 214 files**; 108 ignored diagnostic assertions in 3 files remain separate.                                                                                                                                                                                                                                        |
+| Core / planner / UI focus  | **202/8, 149/9, 144/8** passed tests/files respectively.                                                                                                                                                                                                                                                                            |
+| Retained reproductions     | Original UI RED2 and separate source-predicted foreign-state RED1 remain retained; focused skips are not coverage. The first full run had one obsolete existing test expecting native -125 to be rejected; its raw failure is retained. Root corrected that assertion to accept -125 and reject -125.01, then reran the full suite. |
+| Native offline saves       | **13 actual saves: 12 normal work states and one separate conflicting-input load state**. Minimum -125, maximum 24, raw 0.005 to 0.01, signed wheel and 13.95/Add10 to 14.00 were saved. A further positive 360 wheel event at the ceiling left Config bytes unchanged.                                                             |
+| Fresh public checks        | **3,286 passed plus the sole optional exact PDF skip: 3,287 total in 214 files**. TypeScript, Next build and Worker packaging passed.                                                                                                                                                                                               |
+| Public source              | **434 source files plus 13 protected public files: 447 total**; all earlier prose is retained byte for byte.                                                                                                                                                                                                                        |
 
 The separate conflicting 24/Add10 input loaded as 14 before its saved observation; no wheel was applied to that conflict, and its software-only transient-state tests are not promoted to native acceptance. The first click-only minimum entry attempt reverted; its unisolated cause and all raw screenshots/actions remain retained alongside the later accepted explicit-selection entry. Native work ran offline under the verified metadata-only exclusive interface handle. No amplifier setting, bridge, audio or firmware action and no fresh physical sector/hash read is claimed. Last single-amplifier physical proof remains dated V35.
 
@@ -220,15 +267,15 @@ Automated Studio components/shared executor coverage is not actual V48 browser, 
 
 A focused managed numeric field now owns its cancellation lease. The default shared-store boundary protects independent edits, including graph writeback outside the usual adapter edit path. A complete proposal must validate before pending local work is committed and the independent edit receives a separate Undo step. Only the current field's scoped synchronous callback continues its own group. Accepted edits survive stale Escape, while refusals and canonical no-ops preserve the local editing group. Stale drafts and wheel state refresh even when the canonical numeric value is unchanged.
 
-| V47 check | Recorded result |
-| --- | --- |
-| Complete private run | **3,314 passed / 3,314 total in 213 files**. |
-| Canonical product coverage | **3,206 passed in 210 files**; 108 ignored diagnostic assertions in 3 files are separate historical diagnostics. |
-| Core focused checks | **135 passed in 7 files**. |
-| UI focused checks | **169 passed in 8 files**; automated components, not browser acceptance. |
+| V47 check                      | Recorded result                                                                                                                                                                                                        |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Complete private run           | **3,314 passed / 3,314 total in 213 files**.                                                                                                                                                                           |
+| Canonical product coverage     | **3,206 passed in 210 files**; 108 ignored diagnostic assertions in 3 files are separate historical diagnostics.                                                                                                       |
+| Core focused checks            | **135 passed in 7 files**.                                                                                                                                                                                             |
+| UI focused checks              | **169 passed in 8 files**; automated components, not browser acceptance.                                                                                                                                               |
 | Retained failure reproductions | Original Studio report: two accepted-command/Escape failures. Separate graph-writeback report: one failure and ten focused skips. Both original reports are retained; those focused skips are not counted as coverage. |
-| Fresh public checks | **3,205 passed plus the sole optional exact PDF skip: 3,206 total in 210 files**. TypeScript, Next production build and Worker packaging passed. |
-| Public source | **428 source files plus 13 protected public files: 441 total**; the entire earlier text below is retained byte for byte. |
+| Fresh public checks            | **3,205 passed plus the sole optional exact PDF skip: 3,206 total in 210 files**. TypeScript, Next production build and Worker packaging passed.                                                                       |
+| Public source                  | **428 source files plus 13 protected public files: 441 total**; the entire earlier text below is retained byte for byte.                                                                                               |
 
 The complete runs used two workers with unchanged timeouts and no test filters/omissions; checked source and generated Next environment bytes remained unchanged. The fresh public build produced **24 assets / 2,016,416 bytes** and a **3,268,739-byte Worker**, SHA-256 `68b26e9d510bb5e7408ffa2d90cf5dbccc2f82374772463d8dc56ac0883ccc18`. The actual compiled client/Worker manual registry remains optional and unbundled; process-free Worker home 200/manual 404 and the five bounded source/build privacy scans passed. These scans are not exhaustive secret detection.
 
@@ -378,9 +425,9 @@ Ordinary output Q1/Q2 and BQ-gain wheels now share the recovered native behavior
 The AdditionalGain ceiling has distinct visible and stored results:
 
 | Native observed field after one positive event | Saved BQ gain | Saved AdditionalGain |
-| --- | ---: | ---: |
-| 14.00 from typed 17.95 | 18.05 | 10 |
-| 14.00 from typed 13.95 | 14.05 | 10 |
+| ---------------------------------------------- | ------------: | -------------------: |
+| 14.00 from typed 17.95                         |         18.05 |                   10 |
+| 14.00 from typed 13.95                         |         14.05 |                   10 |
 
 A once-inhibited native notification changes the visible field without replacing the preceding canonical value. The browser retains that transient field state during continuous wheel events and displays an adjacent **Stored … dB** detail. Analysis, compilation and exports use the saved canonical value. Passive refresh or blur ends the transient state. Commands return Text and value separately and deliberately start from a fresh passive field on every call; they do not share a human field's private state. The default Both basis advances each role independently; an explicit source basis mirrors its changed stored value. All targets validate before one document transaction, and unchanged sources do not overwrite the other role.
 
@@ -390,15 +437,15 @@ The synthetic input changed only AdditionalGain 0→6 in an owned copy. Native r
 
 One native save exposed a one-ULP importer loss: divide/multiply reconstruction changed b1 from −1.92017414830364 to −1.9201741483036399. Base and unresolved classification now retain the original native Doubles directly. The initial failing comparison is retained, and exact-cache regressions cover both the parameter section and custom/raw ambiguity. No tolerance, ambiguity or stability guard was weakened. Native −125 and −124.9 dB Peak caches have a pole exactly at one: imported and regenerated coefficients agree, while both compiler paths correctly refuse them. Scalar Q24 predictions do not establish safe programming data.
 
-| V40 check | Verified result |
-| --- | --- |
-| Complete development-source suite | **2,691 passed / 2,691 total across 185 files**, zero failures/pending, two workers, no omissions or timeout increases. |
-| Frozen test inputs | All **377 source/test/configuration files** and the separately checked `.gitignore` remained unchanged. |
-| Global typecheck / formatting | Passed for the frozen owners' source. |
-| Actual Studio browser acceptance | **29/29 checks passed** in Chrome with genuine tab-scoped wheel input and the shared command console; zero failures or blocked I/O attempts. All 160 bundled product source files remained unchanged. |
-| Shared command registry | **90 commands**; `fusion_filter_adjust` is a stateless design action. |
+| V40 check                                                | Verified result                                                                                                                                                                                                                              |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Complete development-source suite                        | **2,691 passed / 2,691 total across 185 files**, zero failures/pending, two workers, no omissions or timeout increases.                                                                                                                      |
+| Frozen test inputs                                       | All **377 source/test/configuration files** and the separately checked `.gitignore` remained unchanged.                                                                                                                                      |
+| Global typecheck / formatting                            | Passed for the frozen owners' source.                                                                                                                                                                                                        |
+| Actual Studio browser acceptance                         | **29/29 checks passed** in Chrome with genuine tab-scoped wheel input and the shared command console; zero failures or blocked I/O attempts. All 160 bundled product source files remained unchanged.                                        |
+| Shared command registry                                  | **90 commands**; `fusion_filter_adjust` is a stateless design action.                                                                                                                                                                        |
 | Fresh V40 public tests, typecheck and Next/Worker builds | **2,690 passed plus the sole optional-PDF skip: 2,691 total across 185 files**; global typecheck, Next production build and Worker packaging passed. The reviewed export has **385 source files plus 13 protected public files: 398 total**. |
-| V40 publication / physical qualification | Private V40 deployment succeeded with MCP enabled and unchanged owner-only access. No new amplifier programming or physical sector read was performed. |
+| V40 publication / physical qualification                 | Private V40 deployment succeeded with MCP enabled and unchanged owner-only access. No new amplifier programming or physical sector read was performed.                                                                                       |
 
 Fresh V40 public verification completed at **2026-11-15T20:12:45.008Z**, using Node.js v24.22.1. The full suite used two workers, unchanged timeouts and no omissions. The one skip is the optional exact installed-PDF identity test; the public source omits that vendor PDF and its fallback tests ran. The generated Next environment file stayed unchanged.
 
@@ -420,14 +467,14 @@ Direct HP2-to-Peak at Q0.4/gain0 also saved NaN coefficients. The earlier Unity-
 
 The minimum-gain Peak exposed a specific native arithmetic stage: complex construction zeroes the tiny real-pair `1−sqrt(...)` term when its absolute value is at most `1e-12`, before a later large multiplication. The implementation now matches only that proved factor stage, reproducing the native saved coefficients within `1e-18`. No global complex zeroing, imported-cache rewrite or tolerance relaxation was introduced. Both imported and regenerated versions have a pole exactly at one and are correctly refused by the strict compiler guard. Accepted −125 dB metadata is not a claim that this Peak is stable or programmable.
 
-| V39 check | Current result |
-|---|---|
-| Full development-source suite | **2,627 passed / 2,627 total across 183 files**, zero failures/pending, two workers, no omissions or timeout increases. |
-| Frozen source | All **373 source/test/configuration files**, including 17 reviewed changed paths, remained unchanged during the full run. |
-| Global typecheck / formatting | Passed for the owner-frozen source used by the full run. |
-| Actual Studio browser acceptance | **38 accepted checks** across two passes; one obstructed initial assertion is retained separately. Ignored QA fixes changed no production source. |
+| V39 check                                                  | Current result                                                                                                                                                                                                                           |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full development-source suite                              | **2,627 passed / 2,627 total across 183 files**, zero failures/pending, two workers, no omissions or timeout increases.                                                                                                                  |
+| Frozen source                                              | All **373 source/test/configuration files**, including 17 reviewed changed paths, remained unchanged during the full run.                                                                                                                |
+| Global typecheck / formatting                              | Passed for the owner-frozen source used by the full run.                                                                                                                                                                                 |
+| Actual Studio browser acceptance                           | **38 accepted checks** across two passes; one obstructed initial assertion is retained separately. Ignored QA fixes changed no production source.                                                                                        |
 | Fresh public tests, typecheck and production/Worker builds | **2,626 passed plus the sole optional-PDF skip: 2,627 total across 183 files**; global typecheck, Next production build and Worker packaging passed. The reviewed export has **381 source files plus 13 public docs/assets: 394 files**. |
-| Amplifier programming / acoustics | Not established by this software checkpoint. |
+| Amplifier programming / acoustics                          | Not established by this software checkpoint.                                                                                                                                                                                             |
 
 The registry remains **89 commands**. The initial browser report retains test-disclosure, locator and tab-binding issues. One final assertion initially ran after a mouse click obstructed by the ignored QA status panel, with no result or project/history change. The observed command then succeeded with keyboard Space, the same assertion passed, and Undo restored both projects. This is 38 accepted checks plus one retained unsuccessful attempt, not 39 initially passing assertions. Harness corrections changed no production source. These checks exercise the actual UI/shared command layer; they do not prove MCP transport or browser download delivery.
 

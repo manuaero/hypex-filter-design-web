@@ -8,6 +8,10 @@ import { z } from 'zod';
 import { projectSchema } from '../domain/files';
 import { projectFiles } from '../domain/project-io';
 import { nativeCloneProjectFiles } from '../domain/clone-project';
+import { exportNativeCloneProject } from '../domain/clone-project';
+import { exportHfd } from '../domain/files';
+import { createNativeOrdinarySaveAttempt } from './native-save-attempt';
+import type { NativeOrdinarySavePostPlan } from './native-save-lifecycle';
 import { captureNativeSaveTemplate } from '../hardware/native-save-capture';
 import { parseExecutionPrincipal } from './execution-context';
 import { MAX_UI_TEXT_CHARACTERS, MAX_UI_TOTAL_BYTES } from './file-budget';
@@ -60,6 +64,12 @@ export interface NativeProjectSaveControllerOptions {
   id?: () => string;
   /** Optional lower-only budgets, also useful for constrained hosts and tests. */
   limits?: { characters?: number; bytes?: number };
+  /** Trusted runtime selection and workspace ports, used only by folder Save. */
+  ordinarySave?: {
+    currentPresetIndex(slot: Slot): number;
+    publish(plans: readonly NativeOrdinarySavePostPlan[]): void;
+    persist(): Promise<void>;
+  };
 }
 export interface NativeProjectSaveController {
   getSnapshot(): NativeProjectSaveSnapshot;
@@ -122,6 +132,8 @@ interface CapturedRole {
   source: 'connected' | 'design';
   original: Project;
   project: Project;
+  presetIndex?: number;
+  folderArtifact?: { project: Project; files: readonly ProjectFile[] };
   binding?: { session: NativeProjectSaveSession; identity: NativeProjectSaveIdentity };
 }
 interface Capture {
@@ -146,8 +158,8 @@ async function reserve<T>(
   return next(0);
 }
 
-/** Detached save artifacts only. This service never publishes workspace metadata,
- * changes a design EQ, writes a device, or owns a filesystem capability. */
+/** Detached artifacts remain passive. Folder tickets additionally carry a
+ * page-local ordinary-Save capability, admitted by the actual directory writer. */
 export function createNativeProjectSaveController(
   options: NativeProjectSaveControllerOptions,
 ): NativeProjectSaveController {
@@ -259,11 +271,21 @@ export function createNativeProjectSaveController(
       const original = state.documents[slot];
       projectSchema.parse(original); // Validate without changing legacy JSON key order/absence.
       const project = structuredClone(original),
-        current = input.mode === 'auto' ? options.binding(slot) : undefined;
+        current = input.mode === 'auto' ? options.binding(slot) : undefined,
+        presetIndex = options.ordinarySave?.currentPresetIndex(slot);
+      if (
+        options.ordinarySave &&
+        (typeof presetIndex !== 'number' ||
+          !Number.isInteger(presetIndex) ||
+          presetIndex < 0 ||
+          presetIndex > 2)
+      )
+        throw new NativeProjectSaveError('Save requires an explicit current preset');
       return {
         slot,
         original,
         project,
+        ...(presetIndex === undefined ? {} : { presetIndex }),
         source: current ? 'connected' : 'design',
         ...(current
           ? {
@@ -490,10 +512,102 @@ export function createNativeProjectSaveController(
           'Save capture does not match the fixed role, revision or design',
         );
       }
+      const ports = options.ordinarySave,
+        original = role.original,
+        presetIndex = role.presetIndex,
+        owner = entry.owner,
+        attemptContext =
+          presetIndex === undefined
+            ? undefined
+            : Object.freeze({
+                slot: role.slot,
+                project: original,
+                presetIndex,
+                expectedRevision: entry.summary.expectedRevision,
+              });
+      const nativeOrdinarySave =
+        ports && presetIndex !== undefined
+          ? Object.freeze({
+              presetIndex,
+              createAttempt: (rawPrincipal: DirectorySaveBinding['principal']) => {
+                if (disposed)
+                  throw new NativeProjectSaveError('Native project capture is disposed');
+                const principal = parseExecutionPrincipal(rawPrincipal);
+                if (principal.owner !== owner)
+                  throw new NativeProjectSaveError('Folder Save belongs to another workspace');
+                return createNativeOrdinarySaveAttempt(
+                  { principal, contexts: [attemptContext!] },
+                  {
+                    state: () => {
+                      if (disposed)
+                        throw new NativeProjectSaveError('Native project capture is disposed');
+                      return options.state();
+                    },
+                    currentPresetIndex: ports.currentPresetIndex,
+                    publish: ports.publish,
+                    persist: ports.persist,
+                  },
+                );
+              },
+            })
+          : undefined;
       return {
+        ...(nativeOrdinarySave ? { nativeOrdinarySave } : {}),
         async resolve() {
           const artifact = await resolve(id, context),
             saved = artifact.roles.find((role) => role.slot === binding.slot)!;
+          if (nativeOrdinarySave) {
+            if (!role.folderArtifact) {
+              const projected = {
+                  ...saved.project,
+                  hfdSelectedPreset: nativeOrdinarySave.presetIndex + 1,
+                },
+                config = {
+                  path: 'Config.xml',
+                  content:
+                    saved.source === 'connected'
+                      ? exportNativeCloneProject(projected)
+                      : exportHfd(projected),
+                },
+                nativeFiles = [
+                  config,
+                  ...saved.files.filter(
+                    (file) => file.path !== 'Config.xml' && file.path !== 'FusionProject.json',
+                  ),
+                ],
+                browser = {
+                  path: 'FusionProject.json',
+                  content: JSON.stringify(
+                    {
+                      format: 'fusion-studio-hfd-folder',
+                      version: 2,
+                      nativeFiles,
+                      project: projected,
+                    },
+                    null,
+                    2,
+                  ),
+                },
+                cost = [config, browser].reduce(
+                  (sum, file) => {
+                    const size = textCost(file.content);
+                    return {
+                      characters: sum.characters + size.characters,
+                      bytes: sum.bytes + size.bytes,
+                    };
+                  },
+                  { characters: 0, bytes: 0 },
+                );
+              checkBudget(cost);
+              entry.characters += cost.characters;
+              entry.bytes += cost.bytes;
+              role.folderArtifact = freeze({
+                project: projected,
+                files: [config, browser, ...nativeFiles.slice(1)],
+              });
+            }
+            return role.folderArtifact;
+          }
           return { project: saved.project, files: saved.files };
         },
         assertCurrent() {

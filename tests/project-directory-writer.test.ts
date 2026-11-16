@@ -25,6 +25,8 @@ import { projectSchema } from '../src/domain/files';
 import { nativeCloneFixture } from './fixtures/native-clone';
 import { nativeCloneProjectFiles } from '../src/domain/clone-project';
 import { createNativeProjectSaveController } from '../src/application/native-project-save';
+import { createNativeOrdinarySaveAttempt } from '../src/application/native-save-attempt';
+import { applyNativeOrdinarySavePostState } from '../src/application/native-save-lifecycle';
 
 beforeAll(() => {
   globalThis.Blob = NodeBlob as unknown as typeof Blob;
@@ -306,6 +308,293 @@ function setup() {
     }),
   };
 }
+const workspaceActor = {
+  owner: 'workspace:11111111-1111-4111-8111-111111111111',
+  scope: 'ui:folder-save',
+};
+function ordinarySaveSetup() {
+  const f = setup();
+  f.documents.left.hfdSelectedPreset = 1;
+  f.documents.left.presets[1].channels.forEach((channel, index) => {
+    channel.globalDelayUs = [101, 113, 127][index];
+    channel.hfdDelay = { globalMaximum: [71001, 71003, 71007][index] };
+  });
+  let selected = 1,
+    disposed = 0,
+    failPersistence = false;
+  const publish = vi.fn((plans: Parameters<typeof applyNativeOrdinarySavePostState>[2][]) => {
+    for (const plan of plans) {
+      const next = structuredClone(f.documents[plan.slot]);
+      applyNativeOrdinarySavePostState(next, plan.slot, plan);
+      f.documents[plan.slot] = next;
+    }
+    f.bump();
+  });
+  const persist = vi.fn(async () => {
+    if (failPersistence) throw new Error('Injected workspace persistence failure');
+  });
+  const capture: NonNullable<ProjectDirectoryWriterOptions['captureExport']> = (binding) => {
+    const original = f.documents[binding.slot],
+      expectedRevision = f.revision,
+      presetIndex = selected,
+      projected = { ...structuredClone(original), hfdSelectedPreset: presetIndex + 1 };
+    return {
+      resolve: async () => ({ project: projected, files: projectFiles(projected) }),
+      assertCurrent: () => {},
+      nativeOrdinarySave: {
+        presetIndex,
+        createAttempt: (principal) =>
+          createNativeOrdinarySaveAttempt(
+            {
+              principal,
+              contexts: [{ slot: binding.slot, project: original, presetIndex, expectedRevision }],
+            },
+            {
+              state: () => ({ documents: f.documents, documentRevision: f.revision }),
+              currentPresetIndex: () => selected,
+              publish,
+              persist,
+            },
+          ),
+      },
+      dispose: () => {
+        disposed++;
+      },
+    };
+  };
+  return {
+    ...f,
+    base: f,
+    capture,
+    publish,
+    persist,
+    select: (value: number) => {
+      selected = value;
+    },
+    failPersistence: (value: boolean) => {
+      failPersistence = value;
+    },
+    get disposed() {
+      return disposed;
+    },
+    binding: (requestId: string) => ({ ...f.binding(requestId), principal: workspaceActor }),
+  };
+}
+async function preparedOrdinarySave(f: ReturnType<typeof ordinarySaveSetup>) {
+  const writer = f.create(f.capture);
+  await writer.hydrate();
+  const rootId = await writer.registerDirectory(f.root),
+    proposal = await writer.prepare({
+      ...f.binding('ordinary-first'),
+      mode: 'save-as',
+      rootId,
+      folderName: 'Ordinary',
+    });
+  return { writer, rootId, proposal };
+}
+
+it('keeps folder preparation passive, writes the selected-preset preimage, then publishes once after verified completion', async () => {
+  const f = ordinarySaveSetup(),
+    before = structuredClone(f.documents),
+    revision = f.base.revision,
+    { writer, proposal } = await preparedOrdinarySave(f);
+  expect(f.documents).toEqual(before);
+  expect(f.publish).not.toHaveBeenCalled();
+  expect(f.env.events).toEqual([]);
+  expect(f.disposed).toBe(1);
+  const result = await writer.commit(proposal.id, workspaceActor);
+  expect(result).toMatchObject({
+    verified: true,
+    replayed: false,
+    nativeSavePostState: 'applied',
+    workspaceChanged: true,
+  });
+  const folder = f.root.children.get('Ordinary') as FakeDirectory,
+    config = folder.children.get('Config.xml') as FakeFile,
+    saved = importProjectFolder(
+      [...folder.children.values()]
+        .filter((file): file is FakeFile => file.kind === 'file')
+        .map((file) => ({ path: file.name, content: new TextDecoder().decode(file.data) })),
+    );
+  expect(config.data.length).toBeGreaterThan(0);
+  expect(saved.hfdSelectedPreset).toBe(2);
+  expect(saved.presets[1].channels.map((channel) => channel.globalDelayUs)).toEqual([
+    101, 113, 127,
+  ]);
+  expect(f.documents.left.presets[1].channels.map((channel) => channel.globalDelayUs)).toEqual([
+    101, 101, 101,
+  ]);
+  expect(
+    f.documents.left.presets[1].channels.map((channel) => channel.hfdDelay?.globalMaximum),
+  ).toEqual([71001, 71001, 71001]);
+  expect(f.documents.left.hfdSelectedPreset).toBe(1);
+  expect(f.documents.right).toEqual(before.right);
+  expect(f.base.revision).toBe(revision + 1);
+  expect(f.publish).toHaveBeenCalledTimes(1);
+  expect(f.persist).toHaveBeenCalledTimes(1);
+  const events = f.env.events.length;
+  f.documents.left = structuredClone(before.left); // Simulate a later independent Undo.
+  f.base.bump();
+  expect((await writer.commit(proposal.id, workspaceActor)).replayed).toBe(true);
+  expect(f.env.events).toHaveLength(events);
+  expect(f.publish).toHaveBeenCalledTimes(1);
+  expect(f.documents.left).toEqual(before.left);
+});
+
+it('consumes a thrown file outcome without treating a partial retry as normal Boolean false or a fresh post-state', async () => {
+  const f = ordinarySaveSetup(),
+    before = structuredClone(f.documents),
+    { writer, proposal } = await preparedOrdinarySave(f);
+  f.env.closeThenThrow = 'Granted/Ordinary/Config.xml';
+  await expect(writer.commit(proposal.id, workspaceActor)).rejects.toMatchObject({
+    code: 'partial-write',
+  });
+  expect(f.documents).toEqual(before);
+  expect(f.publish).not.toHaveBeenCalled();
+  expect(f.persist).not.toHaveBeenCalled();
+  const retried = await writer.retry(proposal.id, workspaceActor);
+  expect(retried).toMatchObject({
+    phase: 'complete',
+    verified: true,
+    nativeSavePostState: 'unconfirmed',
+  });
+  expect(f.documents).toEqual(before);
+  expect(f.publish).not.toHaveBeenCalled();
+});
+
+it('refences the runtime preset before committing a staged stream and aborts after an intervening selection', async () => {
+  const f = ordinarySaveSetup(),
+    before = structuredClone(f.documents),
+    { writer, proposal } = await preparedOrdinarySave(f);
+  f.env.afterStagedWrite = () => f.select(2);
+  await expect(writer.commit(proposal.id, workspaceActor)).rejects.toMatchObject({
+    code: 'stale-workspace',
+  });
+  expect(f.env.events.some((event) => event.kind === 'abort')).toBe(true);
+  expect(f.env.events.some((event) => event.kind === 'close')).toBe(false);
+  expect(f.documents).toEqual(before);
+  expect(f.publish).not.toHaveBeenCalled();
+});
+
+it('keeps a complete file journal when the post-return context is stale and makes later receipt replay passive', async () => {
+  const f = ordinarySaveSetup(),
+    before = structuredClone(f.documents),
+    { writer, proposal } = await preparedOrdinarySave(f);
+  f.store.state.beforeWrite = (next) => {
+    if (next.saves.some((save) => save.phase === 'complete')) f.select(2);
+  };
+  await expect(writer.commit(proposal.id, workspaceActor)).rejects.toMatchObject({
+    code: 'stale-workspace',
+    result: { phase: 'complete', verified: true, nativeSavePostState: 'unconfirmed' },
+  });
+  expect(f.store.value!.saves[0].phase).toBe('complete');
+  expect(f.documents).toEqual(before);
+  const events = f.env.events.length;
+  f.select(1);
+  expect((await writer.commit(proposal.id, workspaceActor)).replayed).toBe(true);
+  expect(f.env.events).toHaveLength(events);
+  expect(f.publish).not.toHaveBeenCalled();
+});
+
+it('retries only workspace persistence after publication and never reconstructs a posthook from hydrated receipts', async () => {
+  const f = ordinarySaveSetup(),
+    { writer, proposal } = await preparedOrdinarySave(f);
+  f.failPersistence(true);
+  await expect(writer.commit(proposal.id, workspaceActor)).rejects.toMatchObject({
+    code: 'persistence',
+    result: { phase: 'complete', verified: true, nativeSavePostState: 'applied' },
+  });
+  expect(f.store.value!.saves[0].phase).toBe('complete');
+  expect(f.publish).toHaveBeenCalledTimes(1);
+  const events = f.env.events.length;
+  f.failPersistence(false);
+  expect((await writer.retry(proposal.id, workspaceActor)).replayed).toBe(true);
+  expect(f.persist).toHaveBeenCalledTimes(2);
+  expect(f.publish).toHaveBeenCalledTimes(1);
+  expect(f.env.events).toHaveLength(events);
+  const reloaded = f.create(f.capture);
+  await reloaded.hydrate();
+  const replay = await reloaded.commit(proposal.id, workspaceActor);
+  expect(replay).toMatchObject({ verified: true, replayed: true });
+  expect(replay.nativeSavePostState).toBeUndefined();
+  expect(f.persist).toHaveBeenCalledTimes(2);
+  expect(f.publish).toHaveBeenCalledTimes(1);
+  expect(f.env.events).toHaveLength(events);
+});
+
+it('admits only the trusted preset metadata projection and rejects a coupled design mutation before writing', async () => {
+  const f = ordinarySaveSetup();
+  const writer = f.create((binding, project) => {
+    const ticket = f.capture(binding, project);
+    return {
+      ...ticket,
+      resolve: async () => {
+        const result = await ticket.resolve();
+        result.project.presets[1].channels[0].gain += 1;
+        return result;
+      },
+    };
+  });
+  await writer.hydrate();
+  const rootId = await writer.registerDirectory(f.root);
+  await expect(
+    writer.prepare({
+      ...f.binding('invalid-projection'),
+      mode: 'save-as',
+      rootId,
+      folderName: 'Invalid',
+    }),
+  ).rejects.toMatchObject({ code: 'invalid-request' });
+  expect(f.env.events).toEqual([]);
+  expect(f.publish).not.toHaveBeenCalled();
+});
+
+it('projects a trusted runtime preset for legacy projects with no selected-preset hint', async () => {
+  const f = ordinarySaveSetup();
+  delete f.documents.left.hfdSelectedPreset;
+  const { writer, proposal } = await preparedOrdinarySave(f);
+  expect(f.env.events).toEqual([]);
+  expect(f.documents.left.hfdSelectedPreset).toBeUndefined();
+  const result = await writer.commit(proposal.id, workspaceActor);
+  expect(result.nativeSavePostState).toBe('applied');
+  expect(f.documents.left.hfdSelectedPreset).toBeUndefined();
+});
+
+it('consumes a verified no-op without inventing workspace history or changing unequal maxima', async () => {
+  const f = ordinarySaveSetup();
+  f.documents.left.presets[1].channels.forEach((channel) => {
+    channel.globalDelayUs = 101;
+  });
+  const before = structuredClone(f.documents),
+    revision = f.base.revision,
+    { writer, proposal } = await preparedOrdinarySave(f);
+  const result = await writer.commit(proposal.id, workspaceActor);
+  expect(result).toMatchObject({ verified: true, nativeSavePostState: 'unchanged' });
+  expect(result.workspaceChanged).toBe(false);
+  expect(f.documents).toEqual(before);
+  expect(f.base.revision).toBe(revision);
+  expect(f.publish).not.toHaveBeenCalled();
+  expect(f.persist).not.toHaveBeenCalled();
+});
+
+it('does not persist page-local post-state outcomes as archive authority', async () => {
+  const f = ordinarySaveSetup(),
+    { writer, proposal } = await preparedOrdinarySave(f);
+  await writer.commit(proposal.id, workspaceActor);
+  const review = await writer.reviewArchive(proposal.id, workspaceActor),
+    archived = await writer.archive(review.id, workspaceActor, {
+      confirm: true,
+      removeLocalRecovery: true,
+    });
+  expect(archived).toMatchObject({ archived: true, nativeSavePostState: 'applied' });
+  expect(f.store.value!.archives[0].receipt.nativeSavePostState).toBeUndefined();
+  const reloaded = f.create(f.capture);
+  await reloaded.hydrate();
+  const replay = await reloaded.commit(proposal.id, workspaceActor);
+  expect(replay).toMatchObject({ archived: true, replayed: true });
+  expect(replay.nativeSavePostState).toBeUndefined();
+  expect(f.publish).toHaveBeenCalledTimes(1);
+});
 async function initialize(f: ReturnType<typeof setup>) {
   const writer = f.create();
   await writer.hydrate();

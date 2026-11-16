@@ -763,6 +763,19 @@ export default function ProjectSaveDialog({
                     : 'All project files verified.'}
                 </p>
               )}
+              {!receipt?.replayed && receipt?.nativeSavePostState === 'applied' && (
+                <p role="status">
+                  The open preset's Global delays were reconciled after the files were saved. Close
+                  this dialog and Save again to write those updated values.
+                </p>
+              )}
+              {receipt &&
+                ['unavailable', 'unconfirmed'].includes(receipt.nativeSavePostState ?? '') && (
+                  <p role="status">
+                    Files were verified without a confirmed workspace delay update. Close this
+                    dialog and prepare a new Save for the current design.
+                  </p>
+                )}
               {receipt?.phase === 'recovered' && (
                 <p role="status">Original file bytes restored and verified.</p>
               )}

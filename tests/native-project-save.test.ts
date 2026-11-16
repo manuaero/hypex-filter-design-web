@@ -10,6 +10,7 @@ import { PanelSession } from '../src/hardware/session';
 import { SimulatedPanel } from '../src/hardware/simulator';
 import { importProjectFolder, projectFiles } from '../src/domain/project-io';
 import { importHfd } from '../src/domain/files';
+import { applyNativeOrdinarySavePostState } from '../src/application/native-save-lifecycle';
 
 const actor = { owner: 'workspace:11111111-1111-4111-8111-111111111111', scope: 'ui:save' },
   agent = { ...actor, scope: 'paired:site:synthetic' },
@@ -393,4 +394,164 @@ it('enforces UTF-8 bytes independently of characters and refuses attempts to rai
       limits: { characters: 80e6 + 1 },
     }),
   ).toThrow(/Invalid/);
+});
+
+it.each(['design', 'auto'] as const)(
+  'projects the captured runtime preset only for %s folder tickets while generic exports remain passive',
+  async (mode) => {
+    const documents = { left: newProject('Save projection'), right: newProject('Other role') },
+      connected = device('SIM-SAVE-PROJECTION', 765),
+      publish = vi.fn(),
+      persist = vi.fn(async () => {});
+    documents.left.hfdSelectedPreset = 1;
+    documents.left.presets[1].channels.forEach((channel, index) => {
+      channel.globalDelayUs = [101, 113, 127][index];
+      channel.hfdDelay = { globalMaximum: 71001 + index, localMaximum: 19200 };
+    });
+    const before = structuredClone(documents),
+      controller = createNativeProjectSaveController({
+        state: () => ({ documents, documentRevision: 0 }),
+        binding: () => connected,
+        ordinarySave: { currentPresetIndex: () => 1, publish, persist },
+      }),
+      staged = controller.stage({ target: 'left', expectedRevision: 0, mode }, actor),
+      artifact = await controller.resolve(staged.id, actor),
+      ticket = controller.ticket(
+        {
+          slot: 'left',
+          expectedRevision: 0,
+          requestId: 'folder-projection',
+          principal: actor,
+          exportId: staged.id,
+          metadata: mode,
+        },
+        before.left,
+      ),
+      folder = await ticket.resolve();
+    expect(ticket.nativeOrdinarySave?.presetIndex).toBe(1);
+    expect(folder.project).toEqual({ ...artifact.roles[0].project, hfdSelectedPreset: 2 });
+    expect(importHfd(folder.files[0].content, 'Saved folder').hfdSelectedPreset).toBe(2);
+    const sidecar = JSON.parse(folder.files[1].content);
+    expect(sidecar.project).toEqual(folder.project);
+    expect(sidecar.nativeFiles[0].content).toBe(folder.files[0].content);
+    expect(folder.project.presets[1].channels.map((channel) => channel.globalDelayUs)).toEqual([
+      101, 113, 127,
+    ]);
+    expect(artifact.roles[0].project.hfdSelectedPreset).toBe(1);
+    expect(await controller.resolve(staged.id, agent)).toBe(artifact);
+    expect(await ticket.resolve()).toBe(folder);
+    expect(documents).toEqual(before);
+    expect(publish).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
+    if (mode === 'auto') {
+      expect(folder.project.hfdCloneTemplate?.eqBanks[0][0].frequency).toBe(765);
+      expect(setters(connected.panel)).toEqual([]);
+    }
+  },
+);
+
+it('an implicit folder ticket retains its admitted original context after releasing detached artifacts', async () => {
+  const documents = { left: newProject('Implicit Save'), right: newProject('Other') };
+  documents.left.presets[1].channels.forEach((channel, index) => {
+    channel.globalDelayUs = [101, 113, 127][index];
+    channel.hfdDelay = { globalMaximum: 71001 + index, localMaximum: 19200 };
+  });
+  const publish = vi.fn((plans) => {
+      const proposal = structuredClone(documents.left);
+      applyNativeOrdinarySavePostState(proposal, 'left', plans[0]);
+      documents.left = proposal;
+    }),
+    persist = vi.fn(async () => {}),
+    controller = createNativeProjectSaveController({
+      state: () => ({ documents, documentRevision: 0 }),
+      binding: () => undefined,
+      ordinarySave: { currentPresetIndex: () => 1, publish, persist },
+    }),
+    ticket = controller.ticket(
+      { slot: 'left', expectedRevision: 0, requestId: 'implicit-save', principal: actor },
+      documents.left,
+    );
+  await ticket.resolve();
+  const attempt = ticket.nativeOrdinarySave!.createAttempt(actor);
+  ticket.dispose?.();
+  expect(controller.getSnapshot().captures).toEqual([]);
+  attempt.beforeWrite(agent);
+  await expect(attempt.returned(agent, true)).resolves.toMatchObject({
+    changed: true,
+    published: true,
+    durable: true,
+  });
+  expect(documents.left.presets[1].channels.map((channel) => channel.globalDelayUs)).toEqual([
+    101, 101, 101,
+  ]);
+  expect(publish).toHaveBeenCalledTimes(1);
+  expect(persist).toHaveBeenCalledTimes(1);
+});
+
+it('runtime preset navigation invalidates a folder attempt without invalidating its detached download', async () => {
+  const documents = { left: newProject('Navigation'), right: newProject('Other') };
+  let presetIndex = 1;
+  const publish = vi.fn(),
+    controller = createNativeProjectSaveController({
+      state: () => ({ documents, documentRevision: 0 }),
+      binding: () => undefined,
+      ordinarySave: { currentPresetIndex: () => presetIndex, publish, persist: async () => {} },
+    }),
+    staged = controller.stage({ target: 'left', expectedRevision: 0, mode: 'design' }, actor),
+    ticket = controller.ticket(
+      {
+        slot: 'left',
+        expectedRevision: 0,
+        requestId: 'navigation',
+        principal: actor,
+        exportId: staged.id,
+      },
+      documents.left,
+    ),
+    download = await controller.resolve(staged.id, actor);
+  presetIndex = 2;
+  expect(() => ticket.nativeOrdinarySave!.createAttempt(actor)).toThrow(/preset|changed|stale/i);
+  expect(await controller.resolve(staged.id, actor)).toBe(download);
+  expect(publish).not.toHaveBeenCalled();
+});
+
+it('controller disposal revokes folder admission and already admitted writer fences, independently of ticket disposal', async () => {
+  const documents = { left: newProject('Disposed Save'), right: newProject('Other') },
+    publish = vi.fn(),
+    controller = createNativeProjectSaveController({
+      state: () => ({ documents, documentRevision: 0 }),
+      binding: () => undefined,
+      ordinarySave: { currentPresetIndex: () => 1, publish, persist: async () => {} },
+    }),
+    ticket = controller.ticket(
+      { slot: 'left', expectedRevision: 0, requestId: 'dispose-save', principal: actor },
+      documents.left,
+    );
+  await ticket.resolve();
+  expect(() => ticket.nativeOrdinarySave!.createAttempt(foreign)).toThrow(/another workspace/);
+  const attempt = ticket.nativeOrdinarySave!.createAttempt(actor);
+  ticket.dispose?.();
+  attempt.beforeWrite(actor);
+  controller.dispose();
+  expect(() => ticket.nativeOrdinarySave!.createAttempt(actor)).toThrow(/disposed/);
+  await expect(attempt.returned(actor, true)).rejects.toThrow(/disposed/);
+  expect(attempt.getSnapshot().phase).toBe('unconfirmed');
+  expect(publish).not.toHaveBeenCalled();
+});
+
+it('rejects an absent runtime selection when ordinary folder Save ports are installed', () => {
+  const documents = { left: newProject('Invalid selection'), right: newProject('Other') },
+    controller = createNativeProjectSaveController({
+      state: () => ({ documents, documentRevision: 0 }),
+      binding: () => undefined,
+      ordinarySave: {
+        currentPresetIndex: () => undefined as unknown as number,
+        publish: vi.fn(),
+        persist: async () => {},
+      },
+    });
+  expect(() =>
+    controller.stage({ target: 'left', expectedRevision: 0, mode: 'design' }, actor),
+  ).toThrow(/current preset/);
+  expect(controller.getSnapshot().captures).toEqual([]);
 });

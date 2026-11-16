@@ -1883,6 +1883,8 @@ TOOL_DESCRIPTIONS.fusion_project_directory = TOOL_DESCRIPTIONS.fusion_project_di
   'never prompts for filesystem permissions or calls the amplifier.',
   'never prompts for filesystem permissions. New Prepare requests default to read-only capture of fresh native settings and three EQ banks for an initially connected target. metadata:design explicitly saves the design without reading hardware; exportId reuses an owned frozen Save artifact. Captures bind the initial session/identity and fail on replacement or stale design. Prepared-request replay, Commit, Retry and Recover use retained files and never recapture the amplifier.',
 );
+TOOL_DESCRIPTIONS.fusion_project_directory +=
+  ' Folder Save records the trusted current UI preset in Config.xml and its matching sidecar, retaining the captured delay values. Only after a fresh verified writer completes does it reconcile that role current-preset Global delays as one independent Undo step; Mirror does not extend the target. nativeSavePostState reports the page-local outcome. Downloads and Prepare are passive. Stale or partial/unknown attempts do not fabricate a normal return; a completed receipt never reapplies the workspace effect after Undo or reload. A workspace persistence retry does not rewrite files. Files can therefore precede the reconciled open design; prepare a new Save to write its newer values.';
 TOOL_DESCRIPTIONS.fusion_file_export +=
   ' The explicit native-project-save workflow resolves an owned Save artifact by id and slot; it may perform its first read-only settings/EQ capture. All ordinary project export workflows remain document snapshots without hardware calls.';
 TOOL_DESCRIPTIONS.fusion_configuration_backups =
