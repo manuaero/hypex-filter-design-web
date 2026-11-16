@@ -19,6 +19,7 @@ import {
   applyManualFilterWheel,
 } from '../domain/editing';
 import { copyPresetBetween } from '../domain/preset-copy';
+import { planChannelEdit, applyChannelEdit } from '../domain/channel-editing';
 import {
   editPresetFir,
   applyNativeFirAction,
@@ -181,6 +182,12 @@ export interface DocumentState {
   rememberedHfdCalibration?: HfdProjectCalibration;
   documentRevision?: number;
 }
+export interface HardwareGainEditorLocation {
+  slot: Slot;
+  presetIndex: number;
+  channelIndex: number;
+  channelId: string;
+}
 export interface ToolAdapter {
   state: () => DocumentState;
   edit: (slots: Slot[], fn: (p: Project) => void, options?: { synchronizeLinks?: boolean }) => void;
@@ -189,6 +196,12 @@ export interface ToolAdapter {
     fn: (project: Project, slot: Slot) => void,
     options?: { synchronizeLinks?: boolean },
   ) => void;
+  /** Trusted retained native view context; command JSON cannot supply eligibility. */
+  hardwareGainContext?: (
+    location: Omit<HardwareGainEditorLocation, 'channelId'>,
+  ) => { available: boolean; gainText?: string } | undefined;
+  /** Called only after a fully admitted intent commits (including canonical no-op). */
+  retainHardwareGainContexts?: (locations: readonly HardwareGainEditorLocation[]) => void;
   choose: (
     patch: Partial<
       Omit<DocumentState, 'documents' | 'rememberedHfdCalibration' | 'documentRevision'>
@@ -491,6 +504,7 @@ const eqFilterPatch = z
   .strict();
 const channelPatch = z
   .object({
+    hardwareGain: z.boolean(),
     includeInSum: z.boolean(),
     name: z.string(),
     outputName: z.string(),
@@ -501,7 +515,10 @@ const channelPatch = z
     globalDelayUs: finite.min(0).max(74666.6666667),
   })
   .partial()
-  .strict();
+  .strict()
+  .refine((patch) => !Object.hasOwn(patch, 'hardwareGain') || Object.keys(patch).length === 1, {
+    message: 'hardwareGain is a separate native callback intent; supply it alone',
+  });
 export const controlsSchema = z
   .object({
     mute: z.boolean(),
@@ -1759,7 +1776,8 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   fusion_filter_reset: 'Reset a biquad to a bypassed unity section.',
   fusion_filter_delete:
     'Delete a crossover biquad using native HFD semantics: retain its slot identity, Enabled state and latent frequency/Q/gain/direction parameters, replace its response with Unity and make the slot available for Add. This is an undoable design edit without amplifier I/O; broader Reset remains separate.',
-  fusion_channel_set: 'Edit channel gain, polarity, mute, delay and labels.',
+  fusion_channel_set:
+    'Edit channel gain, polarity, mute, delay and labels with atomic all-target admission and no history for canonical no-ops. A sole patch.hardwareGain boolean invokes the conditional native Hardware gain compensation callback, preserving filter caches: Off sets the selected AdditionalGain to0, On sets it to10 and caps coupled channel Gain at14dB. No arbitrary AdditionalGain scalar or hardware command is exposed. Trusted retained editor contexts can re-enable after Off; otherwise fresh availability requires an existing nonzero imported offset. Each explicit callback normalizes current Gain Text and the selected project hint, even if checked state already matches. Both uses independent role contexts and one Undo.',
   fusion_copy: 'Copy a channel or preset between roles while retaining independent documents.',
   fusion_history: 'Undo or redo a design edit.',
   fusion_eq_default:
@@ -1963,22 +1981,12 @@ export function createToolExecutor(adapter: ToolAdapter) {
           'fusion_filter_move',
           'fusion_filter_reset',
           'fusion_filter_delete',
-          'fusion_channel_set',
         ].includes(key)
       ) {
         for (const role of roles(a.target as 'left' | 'right' | 'both')) {
           const pr = state.documents[role].presets[Number(a.preset) - 1],
-            ch = Number(a.channel) - 1,
-            patch = (a.patch ?? {}) as Record<string, unknown>;
-          const sharedEdit =
-            key !== 'fusion_channel_set' ||
-            Object.keys(patch).some(
-              (k) =>
-                !['name', 'outputName', 'globalDelayUs', 'additionalGain', 'includeInSum'].includes(
-                  k,
-                ),
-            );
-          if (sharedEdit && rootChannel(pr, ch) !== ch)
+            ch = Number(a.channel) - 1;
+          if (rootChannel(pr, ch) !== ch)
             throw new Error(
               `Channel ${ch + 1} is linked; edit master channel ${rootChannel(pr, ch) + 1} or unlink it first`,
             );
@@ -2418,12 +2426,52 @@ export function createToolExecutor(adapter: ToolAdapter) {
         }
         case 'fusion_channel_set': {
           const p = schemas.fusion_channel_set.parse(a);
-          adapter.edit(roles(p.target), (doc) => {
-            const pr = doc.presets[p.preset - 1];
-            Object.assign(pr.channels[p.channel - 1], p.patch);
-            if (p.patch.globalDelayUs !== undefined)
-              pr.channels.forEach((c) => (c.globalDelayUs = p.patch.globalDelayUs!));
-          });
+          if (!adapter.editByRole)
+            throw new Error('Explicit-role channel editing is unavailable in this client');
+          const slots = roles(p.target),
+            presetIndex = p.preset - 1,
+            channelIndex = p.channel - 1;
+          const plan = planChannelEdit(
+            state.documents,
+            slots,
+            { presetIndex, channelIndex, patch: p.patch },
+            state.documentRevision,
+            {
+              hardwareGainContext: Object.fromEntries(
+                slots.map((slot) => [
+                  slot,
+                  adapter.hardwareGainContext?.({ slot, presetIndex, channelIndex }),
+                ]),
+              ),
+            },
+          );
+          if (plan.changedSlots.length)
+            adapter.editByRole(
+              plan.changedSlots,
+              (project, slot) => applyChannelEdit(project, slot, plan),
+              { synchronizeLinks: plan.synchronizeLinks },
+            );
+          if (p.patch.hardwareGain !== undefined) {
+            adapter.retainHardwareGainContexts?.(
+              plan.roles.map((role) => ({
+                slot: role.slot,
+                presetIndex,
+                channelIndex,
+                channelId: role.context[channelIndex].id,
+              })),
+            );
+            return {
+              ok: true,
+              changed: plan.changedSlots.length > 0,
+              roles: plan.roles.map((role) => ({
+                slot: role.slot,
+                changed: role.changed,
+                value: role.value,
+                hardwareGain: role.hardwareGain!.result,
+              })),
+            };
+          }
+          if (!plan.changedSlots.length) return { ok: true, changed: false };
           break;
         }
         case 'fusion_copy': {

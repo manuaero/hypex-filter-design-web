@@ -9,6 +9,12 @@ import NoisePanel from './NoisePanel';
 import { createNoiseController } from '../application/noise-control';
 import { type EqBank, editInputEqBand } from '../domain/equalizer';
 import { planSelectedFirPlacement } from '../domain/fir-state';
+import {
+  planChannelEdit,
+  applyChannelEdit,
+  type ChannelEditPatch,
+} from '../domain/channel-editing';
+import { hardwareGainPresentation } from '../domain/hardware-gain';
 import { supportsHfdGraphQ } from '../domain/manual-graph-q';
 import {
   captureManualFilterDrag,
@@ -212,7 +218,12 @@ import {
 } from '../domain/hfd-microphone';
 import AgentAccess from './AgentAccess';
 import HelpAbout from './HelpAbout';
-import { createToolExecutor, type ToolAdapter, type ToolName } from '../application/tools';
+import {
+  createToolExecutor,
+  type ToolAdapter,
+  type ToolName,
+  type HardwareGainEditorLocation,
+} from '../application/tools';
 import { createFileTransfers } from '../application/file-transfers';
 import { readFileText } from '../application/file-budget';
 import { settings } from '../hardware/codec';
@@ -237,6 +248,8 @@ type Live = {
   connectionId: string;
 };
 const fmt = (v: number) => (v >= 1000 ? `${+(v / 1000).toFixed(2)}k` : `${+v.toFixed(2)}`);
+// Passive compensation field display only; the retained canonical Double is untouched.
+const formatHardwareGain = (gain: number) => hardwareGainPresentation({ gain }).gainText;
 function Toggle({
   checked,
   onChange,
@@ -406,6 +419,10 @@ export default function Studio() {
     [paletteDraft, setPaletteDraft] = useState<Filter>(() => newFilter('peak')),
     [paletteFailure, setPaletteFailure] = useState('');
   const paletteEnabledExplicit = useRef(false);
+  // Native channel graph windows retain checkbox eligibility after Off. This
+  // trusted presentation state is per view, never imported/caller-authored data.
+  const retainedHardwareGainViews = useRef(new Map<string, HardwareGainEditorLocation>());
+  const hardwareGainInput = useRef<HTMLDivElement>(null);
   const saveDialogRef = useRef<SaveDialogCapture | undefined>(undefined);
   const [audioAccess, setAudioAccess] = useState<{
     controller: CaptureController;
@@ -785,6 +802,8 @@ export default function Studio() {
     return result;
   };
   function projectViewsReplaced(slots: readonly Slot[]) {
+    for (const [key, view] of retainedHardwareGainViews.current)
+      if (slots.includes(view.slot)) retainedHardwareGainViews.current.delete(key);
     setDocumentEpochs((previous) => ({
       left: previous.left + Number(slots.includes('left')),
       right: previous.right + Number(slots.includes('right')),
@@ -1849,22 +1868,111 @@ export default function Studio() {
       );
     });
   }
-  const editChannel = (patch: Partial<Channel>) => {
+  const hardwareGainViewKey = (location: Omit<HardwareGainEditorLocation, 'channelId'>) =>
+    `${location.slot}:${documentEpochs[location.slot]}:${location.presetIndex}:${location.channelIndex}`;
+  const getHardwareGainContext: NonNullable<ToolAdapter['hardwareGainContext']> = (location) => {
+    const current = useWorkspace.getState();
     if (
-      channel.linkedTo !== undefined &&
-      Object.keys(patch).some(
-        (k) => !['name', 'outputName', 'globalDelayUs', 'includeInSum'].includes(k),
+      !SLOTS.includes(location.slot) ||
+      ![location.presetIndex, location.channelIndex].every(
+        (index) => Number.isInteger(index) && index >= 0 && index < 3,
       )
-    ) {
-      setError('Edit the linked master channel, or unlink this channel.');
-      return;
+    )
+      return undefined;
+    const c =
+      current.documents[location.slot].presets[location.presetIndex].channels[
+        location.channelIndex
+      ];
+    let presentation;
+    try {
+      presentation = hardwareGainPresentation(c);
+    } catch {
+      return undefined;
     }
-    w.edit((p) => {
-      const pr = p.presets[w.preset];
-      Object.assign(pr.channels[w.channel], patch);
-      if (patch.globalDelayUs !== undefined)
-        pr.channels.forEach((c) => (c.globalDelayUs = patch.globalDelayUs!));
+    const retained = retainedHardwareGainViews.current.get(hardwareGainViewKey(location));
+    if (retained?.channelId !== c.id && !presentation.available) return undefined;
+    const active =
+      current.slot === location.slot &&
+      current.preset === location.presetIndex &&
+      current.channel === location.channelIndex &&
+      w.slot === current.slot &&
+      w.preset === current.preset &&
+      w.channel === current.channel &&
+      channel.id === c.id &&
+      Object.is(channel.gain, c.gain) &&
+      Object.is(channel.additionalGain, c.additionalGain);
+    const expectedField = `${location.slot}:${documentEpochs[location.slot]}:${location.presetIndex}:${c.id}`;
+    const field =
+      active && hardwareGainInput.current?.dataset.channelGainContext === expectedField
+        ? hardwareGainInput.current.querySelector('input')
+        : undefined;
+    return { available: true, gainText: field?.value ?? presentation.gainText };
+  };
+  const retainHardwareGainContexts: NonNullable<ToolAdapter['retainHardwareGainContexts']> = (
+    locations,
+  ) => {
+    const current = useWorkspace.getState();
+    const keys = locations.map((location) => {
+      if (
+        !SLOTS.includes(location.slot) ||
+        ![location.presetIndex, location.channelIndex].every(
+          (index) => Number.isInteger(index) && index >= 0 && index < 3,
+        ) ||
+        current.documents[location.slot].presets[location.presetIndex].channels[
+          location.channelIndex
+        ].id !== location.channelId
+      )
+        throw new Error('The hardware gain editor context changed');
+      return hardwareGainViewKey(location);
     });
+    if (new Set(keys).size !== keys.length)
+      throw new Error('Duplicate hardware gain editor context');
+    // Validate the entire admitted intent before retaining any role's view.
+    locations.forEach((location, index) =>
+      retainedHardwareGainViews.current.set(keys[index], { ...location }),
+    );
+  };
+  const hardwareGainAvailable =
+    getHardwareGainContext({ slot: w.slot, presetIndex: w.preset, channelIndex: w.channel })
+      ?.available === true;
+  const editChannel = (patch: ChannelEditPatch, channelIndex = w.channel) => {
+    try {
+      const current = useWorkspace.getState();
+      if (current.slot !== w.slot || current.preset !== w.preset || current.channel !== w.channel)
+        throw new Error('The selected channel changed before this edit');
+      const slots: Slot[] = current.linkedEdits ? ['left', 'right'] : [current.slot];
+      const plan = planChannelEdit(
+        current.documents,
+        slots,
+        { presetIndex: current.preset, channelIndex, patch },
+        current.documentRevision,
+        {
+          hardwareGainContext: Object.fromEntries(
+            slots.map((slot) => [
+              slot,
+              getHardwareGainContext({ slot, presetIndex: current.preset, channelIndex }),
+            ]),
+          ),
+        },
+      );
+      if (plan.changedSlots.length)
+        current.editAt(
+          plan.changedSlots,
+          (project, slot) => applyChannelEdit(project, slot, plan),
+          { synchronizeLinks: plan.synchronizeLinks },
+        );
+      if (patch.hardwareGain !== undefined)
+        retainHardwareGainContexts(
+          plan.roles.map((role) => ({
+            slot: role.slot,
+            presetIndex: current.preset,
+            channelIndex,
+            channelId: role.context[channelIndex].id,
+          })),
+        );
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    }
   };
   const editFilter = (
     patch: ManualFilterPatch,
@@ -2235,6 +2343,8 @@ export default function Studio() {
     state: () => useWorkspace.getState(),
     edit: (slots, fn, options) => useWorkspace.getState().editAt(slots, fn, options),
     editByRole: (slots, fn, options) => useWorkspace.getState().editAt(slots, fn, options),
+    hardwareGainContext: getHardwareGainContext,
+    retainHardwareGainContexts,
     choose: chooseWorkspace,
     undo: () => useWorkspace.getState().undo(),
     redo: () => useWorkspace.getState().redo(),
@@ -2927,19 +3037,41 @@ export default function Studio() {
               Channel name
               <input value={channel.name} onChange={(e) => editChannel({ name: e.target.value })} />
             </label>
-            <Numeric
-              contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:gain`}
-              begin={w.beginGesture}
-              end={w.endGesture}
-              disabled={channel.linkedTo !== undefined}
-              label="Gain"
-              value={channel.gain}
-              onChange={(gain) => editChannel({ gain })}
-              unit="dB"
-              min={-96}
-              max={18}
-              step={0.1}
-            />
+            <div
+              ref={hardwareGainInput}
+              data-channel-gain-context={`${w.slot}:${documentEpochs[w.slot]}:${w.preset}:${channel.id}`}
+            >
+              <Numeric
+                contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:gain:${hardwareGainAvailable ? 'compensation' : 'ordinary'}`}
+                formatValue={hardwareGainAvailable ? formatHardwareGain : undefined}
+                begin={w.beginGesture}
+                end={w.endGesture}
+                disabled={channel.linkedTo !== undefined}
+                label="Gain"
+                value={channel.gain}
+                onChange={(gain) => editChannel({ gain })}
+                unit="dB"
+                min={-96}
+                max={18}
+                step={0.1}
+              />
+            </div>
+            {hardwareGainAvailable && (
+              <>
+                <label className="toggle-label">
+                  <input
+                    aria-label="Hardware gain compensation"
+                    type="checkbox"
+                    disabled={channel.linkedTo !== undefined}
+                    checked={(channel.additionalGain ?? 0) !== 0}
+                    onChange={(event) => editChannel({ hardwareGain: event.target.checked })}
+                  />
+                  <span className="switch" />
+                  Hardware gain compensation
+                </label>
+                <p className="hint">Design compensation only · amplifier settings stay separate.</p>
+              </>
+            )}
             <Numeric
               begin={w.beginGesture}
               end={w.endGesture}
@@ -3271,10 +3403,7 @@ export default function Studio() {
                                   type="checkbox"
                                   checked={c.includeInSum !== false}
                                   onChange={(e) =>
-                                    w.edit((p) => {
-                                      p.presets[w.preset].channels[i].includeInSum =
-                                        e.target.checked;
-                                    })
+                                    editChannel({ includeInSum: e.target.checked }, i)
                                   }
                                 />
                                 <i style={{ background: COLORS[i] }} />
@@ -3351,11 +3480,7 @@ export default function Studio() {
                           );
                         })
                       }
-                      onOutputName={(channel, name) =>
-                        w.edit((p) => {
-                          p.presets[w.preset].channels[channel].outputName = name;
-                        })
-                      }
+                      onOutputName={(channel, name) => editChannel({ outputName: name }, channel)}
                       onNavigate={setTab}
                     />
                   ) : (

@@ -165,6 +165,9 @@ export interface Project {
   sampleRate: 93750;
   presets: Preset[];
   sourceXml?: string;
+  /** Native document hint; explicit channel compensation edits set it locally.
+   * It is not a measurement of physical amplifier attenuation. */
+  hfdGainLowered?: boolean;
   hfdCalibration?: HfdProjectCalibration;
   /** Physical settings/EQ captured by HFD, independent of editable designs. */
   hfdCloneTemplate?: NativeCloneTemplate;

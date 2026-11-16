@@ -85,6 +85,11 @@ async function setup() {
   const adapter: ToolAdapter = {
     state: () => state,
     edit,
+    editByRole: (slots, change) => {
+      const documents = structuredClone(state.documents);
+      slots.forEach((slot) => change(documents[slot], slot));
+      state = { ...state, documents };
+    },
     choose: (patch) => {
       state = { ...state, ...patch };
     },

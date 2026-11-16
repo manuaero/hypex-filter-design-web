@@ -145,6 +145,7 @@ async function setup() {
   const adapter: ToolAdapter = {
     state: () => workspace.store.getState(),
     edit: (slots, apply) => workspace.store.getState().editAt(slots, apply),
+    editByRole: (slots, apply, options) => workspace.store.getState().editAt(slots, apply, options),
     choose: (patch) => workspace.store.getState().choose(patch),
     undo: () => workspace.store.getState().undo(),
     redo: () => workspace.store.getState().redo(),

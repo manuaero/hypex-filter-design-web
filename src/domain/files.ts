@@ -277,6 +277,7 @@ export const projectSchema = z
     model: z.literal('FA503'),
     sampleRate: z.literal(93750),
     sourceXml: z.string().max(20e6).optional(),
+    hfdGainLowered: z.boolean().optional(),
     hfdCalibration: hfdCalibrationSchema.optional(),
     hfdCloneTemplate: nativeCloneTemplateSchema.optional(),
     warnings: z.array(z.string()),
@@ -467,6 +468,12 @@ export function importHfd(xml: string, name: string): Project {
     throw new Error('Expected an FA503 project at 93,750 Hz');
   const project = newProject(name);
   project.sourceXml = xml;
+  const gainLowered = device.getAttribute('gainlowered');
+  if (gainLowered !== null) {
+    if (gainLowered !== 'true' && gainLowered !== 'false')
+      throw new Error('Invalid native gainlowered flag');
+    project.hfdGainLowered = gainLowered === 'true';
+  }
   const cloneTemplate = parseNativeCloneInfo(xml);
   if (cloneTemplate) project.hfdCloneTemplate = cloneTemplate;
   project.warnings = [
@@ -734,6 +741,10 @@ export function importHfd(xml: string, name: string): Project {
 export function exportHfd(project: Project): string {
   const doc = xmlDocument(project.sourceXml ?? HFD_TEMPLATE),
     device = doc.querySelector('device')!;
+  // Explicit compensation edits own this native hint. Legacy JSON without the
+  // typed field retains its source attribute; no OR/normalization of channels.
+  if (project.hfdGainLowered !== undefined)
+    device.setAttribute('gainlowered', String(z.boolean().parse(project.hfdGainLowered)));
   doc.documentElement.setAttribute('fusion-studio-coefficient-cache', 'base');
   const set = (node: Element, name: string, value: unknown) => {
     let field = node.querySelector(`:scope > ${name}`);

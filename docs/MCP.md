@@ -4,6 +4,30 @@ Agents use the same controllers and validation as the human interface. Normal us
 
 The current registry contains **91 commands**, including stateless native parameter-wheel adjustments, shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
 
+## V46 conditional hardware gain and atomic channel edits
+
+The existing `fusion_channel_set` command accepts a sole `patch.hardwareGain` boolean. It adds no command; the registry remains **91 commands**. This is a crossover-project design callback, with no USB operation or arbitrary AdditionalGain scalar.
+
+```json
+{
+  "name": "fusion_channel_set",
+  "arguments": {
+    "target": "both",
+    "preset": 1,
+    "channel": 1,
+    "patch": { "hardwareGain": false }
+  }
+}
+```
+
+Off sets the selected channel's compensation to 0 dB. On sets it to 10 dB and commits coupled Gain through the recovered factory callback; Gain 18 dB becomes 14 dB. Explicit same-checked requests still run the callback, so imported compensation 6 can normalize to 10 and a conflicting document hint can be corrected. Passive import does not perform that normalization. The typed `hfdGainLowered` hint reflects the selected callback, not an OR over every channel and not measured amplifier state.
+
+Eligibility comes from trusted editor context, never JSON flags. A fresh channel must already have finite nonzero compensation. An admitted existing view stays available after Off, across normal gain edits, Save and channel navigation; project replacement/reopening clears that view context. Thus the same human/agent context can turn it back On. Every requested role must admit the action, including the existing independent-root guard. A headless adapter without retained trusted context can use only fresh eligibility.
+
+All channel edits now preflight every selected role before one explicit-role transaction. Metadata-only changes preserve dirty imported followers; actual processing changes synchronize only the selected preset/root group in each changed role. Canonical no-ops preserve cache/provenance and create no Undo entry. Ordinary scalar bounds and authoring behavior remain unchanged. The separate compensation callback has source-qualified Single passive display and two-decimal Double publication; broader native ordinary Gain typing/wheel/custom-preference behavior remains unqualified.
+
+Eleven paired Node integration checks passed against the actual owned loopback HTTP/WebSocket server and a Node fixture WS client using the production workspace authority/store/shared executor. They cover both-role edits/Undo, compensation Off/On, strict refusal, linked-peer admission and revocation. They do not qualify the production AgentAccess client, actual Studio/browser, Site authentication, remote-client execution, amplifier or download behavior. A dated connected-session catalog listed all 91 source names but did not advertise the newer hardware-gain and graph-drag argument declarations; the cause is unestablished, so name equality does not establish argument-schema parity. See [hardware gain details](HARDWARE-GAIN-v46.md).
+
 ## V45 ordinary graph position edits
 
 `fusion_filter_adjust` adds strict `surface: "graph-drag"` arguments without adding a command; the registry remains **91 commands**. Supply one-based `target`, `preset`, `channel`, `index`, absolute `frequency` (0.001–50,000 Hz), and finite `originAxisY`/`axisY`. Extra field-wheel arguments, raw coefficients, a source basis or a serialized gesture token are refused.
