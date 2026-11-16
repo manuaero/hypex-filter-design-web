@@ -1,11 +1,7 @@
 import { type Project } from './model';
+import { parseProjectOpen, type DecodedProjectOpen } from './project-open';
 import { downloadBrowserBlob } from './browser-download';
-import {
-  parseProject,
-  exportHfd,
-  projectSchema,
-  UNRESOLVED_HFD_CALIBRATION_WARNING,
-} from './files';
+import { exportHfd, projectSchema, UNRESOLVED_HFD_CALIBRATION_WARNING } from './files';
 import { parseImpulse } from './measurement';
 import { recomputeHfdMeasurement, reconcileProjectHfdCalibration } from './hfd-measurement';
 import { parseHfdCalibration } from './hfd-calibration';
@@ -142,7 +138,11 @@ function restoreSidecar(
   return restored;
 }
 
-export function importProjectFolder(files: ProjectFile[], name = 'Imported HFD folder') {
+/** Report the input actually consumed, after the existing sidecar validation/fallback. */
+export function importProjectFolderOpen(
+  files: ProjectFile[],
+  name = 'Imported HFD folder',
+): DecodedProjectOpen {
   if (files.length > 2000 || files.reduce((n, f) => n + f.content.length, 0) > 80e6)
     throw new Error('Project folder exceeds import limits');
   const configs = files.filter(
@@ -152,10 +152,11 @@ export function importProjectFolder(files: ProjectFile[], name = 'Imported HFD f
     throw new Error('Choose one project folder containing a single Config.xml');
   const config = configs[0],
     base = config.path.replace(/[^\\/]+$/, ''),
-    project = parseProject(config.content, name),
+    decoded = parseProjectOpen(config.content, name),
+    project = decoded.project,
     doc = new DOMParser().parseFromString(config.content, 'application/xml');
   const restored = restoreSidecar(files, base, project);
-  if (restored) return restored;
+  if (restored) return { project: restored, format: 'browser-snapshot' };
   const find = (filename: string) =>
     files.find((f) => normalized(f.path) === normalized(base + filename)) ??
     files.find(
@@ -207,7 +208,11 @@ export function importProjectFolder(files: ProjectFile[], name = 'Imported HFD f
       if (!project.hfdCalibration) recomputeHfdMeasurement(channel);
     }
   if (project.hfdCalibration) reconcileProjectHfdCalibration(project);
-  return project;
+  return { project, format: decoded.format };
+}
+/** Passive compatibility API: importing never executes native FileOpen effects. */
+export function importProjectFolder(files: ProjectFile[], name = 'Imported HFD folder'): Project {
+  return importProjectFolderOpen(files, name).project;
 }
 export function projectFiles(project: Project): ProjectFile[] {
   const files: ProjectFile[] = [{ path: 'Config.xml', content: exportHfd(project) }];

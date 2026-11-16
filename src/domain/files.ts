@@ -29,6 +29,7 @@ import { assertProjectLinks } from './links';
 import { nativeCloneTemplateSchema, parseNativeCloneInfo } from './clone-template';
 const number = z.number().finite();
 const hfdSelectedGroupIdSchema = number.int().min(HFD_INDEX_MIN).max(HFD_INDEX_MAX);
+const hfdSelectedPresetSchema = number.int().min(HFD_INDEX_MIN).max(HFD_INDEX_MAX);
 const coefficients = z.object({ b0: number, b1: number, b2: number, f1: number, f2: number });
 const hfdGraphOptions = z.strictObject({
   showMeasuredResponse: z.boolean(),
@@ -280,6 +281,7 @@ export const projectSchema = z
     sourceXml: z.string().max(20e6).optional(),
     hfdGainLowered: z.boolean().optional(),
     hfdSelectedGroupId: hfdSelectedGroupIdSchema.optional(),
+    hfdSelectedPreset: hfdSelectedPresetSchema.optional(),
     hfdCalibration: hfdCalibrationSchema.optional(),
     hfdCloneTemplate: nativeCloneTemplateSchema.optional(),
     warnings: z.array(z.string()),
@@ -425,6 +427,15 @@ function nativeSelectedGroupId(node: Element): number | undefined {
   if (!parsed.success) throw new Error('Invalid HFD selectedgroupid');
   return parsed.data;
 }
+function nativeSelectedPreset(device: Element): number | undefined {
+  const attribute = device.getAttribute('selectedpreset');
+  if (attribute === null) return undefined;
+  const value = attribute.trim();
+  if (!value || !/^[+-]?\d+$/.test(value)) throw new Error('Invalid HFD selectedpreset');
+  const parsed = hfdSelectedPresetSchema.safeParse(Number(value));
+  if (!parsed.success) throw new Error('Invalid HFD selectedpreset');
+  return parsed.data;
+}
 function nativeGraphFlag(node: Element, name: string): boolean | undefined {
   const fields = node.querySelectorAll(`:scope > ${name}`);
   if (fields.length > 1) throw new Error(`Duplicate HFD ${name}`);
@@ -483,6 +494,9 @@ export function importHfd(xml: string, name: string): Project {
   const selectedGroupId = nativeSelectedGroupId(doc.documentElement);
   if (selectedGroupId === undefined) delete project.hfdSelectedGroupId;
   else project.hfdSelectedGroupId = selectedGroupId;
+  const selectedPreset = nativeSelectedPreset(device);
+  if (selectedPreset === undefined) delete project.hfdSelectedPreset;
+  else project.hfdSelectedPreset = selectedPreset;
   const gainLowered = device.getAttribute('gainlowered');
   if (gainLowered !== null) {
     if (gainLowered !== 'true' && gainLowered !== 'false')
@@ -760,6 +774,11 @@ export function exportHfd(project: Project): string {
   // typed field retains its source attribute; no OR/normalization of channels.
   if (project.hfdGainLowered !== undefined)
     device.setAttribute('gainlowered', String(z.boolean().parse(project.hfdGainLowered)));
+  if (project.hfdSelectedPreset !== undefined)
+    device.setAttribute(
+      'selectedpreset',
+      String(hfdSelectedPresetSchema.parse(project.hfdSelectedPreset)),
+    );
   doc.documentElement.setAttribute('fusion-studio-coefficient-cache', 'base');
   const set = (node: Element, name: string, value: unknown) => {
     let field = node.querySelector(`:scope > ${name}`);

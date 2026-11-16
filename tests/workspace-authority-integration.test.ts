@@ -272,9 +272,9 @@ it.each(['human-to-site', 'local-to-human'] as const)(
           lookupFileCommit: (...args) => store.store.getState().lookupFileCommit(...args),
           commitFileImport: (...args) => {
             const change = args[4];
-            args[4] = (project) => {
+            args[4] = (project, slot) => {
               applied();
-              change(project);
+              change(project, slot);
             };
             return store.store.getState().commitFileImport(...args);
           },

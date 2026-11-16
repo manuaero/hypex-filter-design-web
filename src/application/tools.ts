@@ -26,7 +26,9 @@ import {
   selectNativeFirPlacement,
   applyReadFir,
 } from '../domain/fir-editing';
-import { importProjectFolder, projectFiles } from '../domain/project-io';
+import { importProjectFolderOpen, projectFiles } from '../domain/project-io';
+import { parseProjectOpen } from '../domain/project-open';
+import type { ProjectReplacementIntent } from './native-project-open';
 import { linkChannel, rootChannel, assertProjectLinks } from '../domain/links';
 import { readFir, uploadFirPair, restoreFir } from '../hardware/fir';
 import { planFirActivation } from '../domain/fir-state';
@@ -52,7 +54,6 @@ import {
   HFD_INDEX_MAX,
 } from '../domain/model';
 import {
-  parseProject,
   projectSchema,
   parseFir,
   parseMeasurement,
@@ -209,8 +210,10 @@ export interface ToolAdapter {
   ) => void;
   undo: () => void;
   redo: () => void;
+  /** Pure trusted final-data preparation before any authoritative replacement. */
+  prepareProjectOpen?: (project: Project, slot: Slot, intent: ProjectReplacementIntent) => Project;
   /** Explicit whole-project replacement invalidates saved view projections, even with identical IDs. */
-  documentsReplaced?: (slots: readonly Slot[]) => void;
+  documentsReplaced?: (slots: readonly Slot[], intent?: ProjectReplacementIntent) => void;
   /** Presentation refresh after an actual Load/Clear; indexes are zero-based. */
   measurementsReplaced?: (
     slots: readonly Slot[],
@@ -1911,6 +1914,47 @@ const replaceDocument = (target: Project, incoming: Project) => {
   for (const key of Object.keys(target)) Reflect.deleteProperty(target, key);
   Object.assign(target, structuredClone(incoming));
 };
+/** Prepare every role before publication; native open must never persist a raw
+ * intermediate or flatten different runtime-preset outcomes into one project. */
+function replaceOpenedProject(
+  adapter: ToolAdapter,
+  slots: Slot[],
+  incoming: Project,
+  intent: ProjectReplacementIntent,
+) {
+  if (!adapter.prepareProjectOpen) {
+    adapter.edit(slots, (project) => replaceDocument(project, incoming), {
+      synchronizeLinks: false,
+    });
+  } else {
+    if (slots.length > 1 && !adapter.editByRole)
+      throw new Error('Explicit-role project opening is unavailable in this client');
+    const finals = new Map(
+      slots.map((slot) => [
+        slot,
+        projectSchema.parse(
+          adapter.prepareProjectOpen!(structuredClone(incoming), slot, { ...intent }),
+        ),
+      ]),
+    );
+    if (adapter.editByRole)
+      adapter.editByRole(
+        slots,
+        (project, slot) => {
+          const final = finals.get(slot);
+          if (!final) throw new Error('Project opening belongs to another role');
+          replaceDocument(project, final);
+        },
+        { synchronizeLinks: false },
+      );
+    else
+      adapter.edit(slots, (project) => replaceDocument(project, finals.get(slots[0])!), {
+        synchronizeLinks: false,
+      });
+  }
+  // Final canonical data is already published. This hook owns visits and UI only.
+  adapter.documentsReplaced?.(slots, intent);
+}
 /** Bound the manifest before the hosted MCP response JSON-escapes it again. */
 function transferPage(status: FileTransferStatus, offset = 0, limit = 100) {
   const { files, lastError, ...rest } = status;
@@ -2134,7 +2178,7 @@ export function createToolExecutor(adapter: ToolAdapter) {
           adapter.edit(roles(p.target), (project) =>
             replaceDocument(project, inheritProjectMicrophone(newProject(p.name), project)),
           );
-          adapter.documentsReplaced?.(roles(p.target));
+          adapter.documentsReplaced?.(roles(p.target), { kind: 'new-project' });
           break;
         }
         case 'fusion_rename': {
@@ -2147,20 +2191,30 @@ export function createToolExecutor(adapter: ToolAdapter) {
         }
         case 'fusion_project_import': {
           const p = schemas.fusion_project_import.parse(a),
-            project = parseProject(p.content, p.name);
-          adapter.edit(roles(p.target), (doc) => replaceDocument(doc, project), {
-            synchronizeLinks: false,
-          });
-          adapter.documentsReplaced?.(roles(p.target));
+            decoded = parseProjectOpen(p.content, p.name),
+            project = decoded.project;
+          replaceOpenedProject(
+            adapter,
+            roles(p.target),
+            project,
+            decoded.format === 'hfd-native'
+              ? { kind: 'native-file-open', route: 'dialog' }
+              : { kind: 'snapshot' },
+          );
           break;
         }
         case 'fusion_project_import_folder': {
           const p = schemas.fusion_project_import_folder.parse(a),
-            project = importProjectFolder(p.files, p.name);
-          adapter.edit(roles(p.target), (d) => replaceDocument(d, project), {
-            synchronizeLinks: false,
-          });
-          adapter.documentsReplaced?.(roles(p.target));
+            decoded = importProjectFolderOpen(p.files, p.name),
+            project = decoded.project;
+          replaceOpenedProject(
+            adapter,
+            roles(p.target),
+            project,
+            decoded.format === 'hfd-native'
+              ? { kind: 'native-file-open', route: 'dialog' }
+              : { kind: 'snapshot' },
+          );
           adapter.message(project.warnings.at(-1) ?? 'HFD folder imported.');
           return { ok: true, warnings: project.warnings };
         }
@@ -2227,7 +2281,7 @@ export function createToolExecutor(adapter: ToolAdapter) {
           adapter.edit(roles(p.target), (d) => replaceDocument(d, r.project), {
             synchronizeLinks: false,
           });
-          adapter.documentsReplaced?.(roles(p.target));
+          adapter.documentsReplaced?.(roles(p.target), { kind: 'snapshot' });
           break;
         }
         case 'fusion_library_remove': {

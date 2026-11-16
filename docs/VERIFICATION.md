@@ -2,6 +2,22 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V51 native File Open checkpoint
+
+The completed private run passed **3,555 / 3,555 tests in 228 files**: 3,447 canonical tests in 225 files plus 108 retained diagnostics in 3 files. The public run passed **3,446 tests**, with the sole optional installed-PDF skip, out of 3,447 tests in 225 files. TypeScript, Next and Worker checks passed on unchanged source. The public manifest contains 449 source files and 13 protected files, 462 files in total.
+
+The current-source browser check was **interrupted before pairing or native-import verification** by a Chrome CDP/JavaScript-dialog interruption. Only **1 passive initial full-project/selection check** was accepted; overall success is false. No import, history or paired app RPC command ran. Final baseline verification, restoration and normal reload were not accepted. A separate local transcript contains 4 protocol-only requests (discovery, initialize, initialized and tools/list); those are not paired application execution. Older V48/V50 browser records below remain dated evidence and do not qualify V51 Native Open.
+
+The source-bound V51 software revision was published successfully with MCP enabled as hosting saved version 50. The software revision and hosting version number are distinct. This is not paired remote MCP or physical-device acceptance.
+
+The controlled offline native work produced **three actual Saves and two distinct saved byte sequences**. Two group-2 inputs requesting saved preset 3 instead opened P1CH2 and produced byte-identical outputs: Gain 24 became 14 with AdditionalGain 10 retained; current-preset microphone flags became `[true,false,true]`, while presets 2 and 3 retained false flags. A separate unknown-group 777 input opened no Graph, retained cached Gain 24/AdditionalGain 10 and group 777, saved preset 1, and produced P1 flags `[true,true,true]`. The unknown case's Gain is a saved-node observation, not a Numeric value seen in a Graph. All 135 BQ/cache records remained exact. Fifteen sink-local IDs changed by 568; their runtime cause and harmlessness remain unproved.
+
+Static method metadata corrected an earlier working Save/SaveAs attribution: outer `miOpenClick` calls inner `OpenFile`, then conditionally binds the current preset's microphone groups. The admission byte is the Load microphone correction menu item's Enabled property, not Graph mode. Existing selected-Graph refresh can clear its flag when the project explicitly records an unloaded microphone. Inner FormShow/menu paths do not directly execute that outer loop. No executed callback counts or universal Recent/MRU behavior are inferred. Historical receipts remain unchanged.
+
+The shared model prepares every role before replacement/persistence and commits matching visit/view state afterward without a second model write. Native linked-load copying is still not reproduced: earlier linked Gain/BQ copying does not establish every copied field or authorize clearing cache ambiguity. Software tests, including synthetic panel-session coverage, do not establish physical connected-preset behavior. The offline observations do not qualify every Open origin or saved group.
+
+No new amplifier or bridge-configuration operation belongs to this update. WebHID behavior on macOS, paired production MCP/USB execution, physical firmware recovery and simultaneous operation of two real amplifiers remain unqualified. Earlier physical measurements remain dated evidence; no new physical verification is claimed.
+
 ## V50 channel graph-entry checkpoint
 
 The web implementation and its existing 91-command MCP server now share qualified visible channel graph entry. Only the selected role initializes despite Mirror. Nonzero compensation, independent/linked Gain publication, explicit known unloaded microphone application and saved native selection are separate from passive parsing/hydration. Plans validate before one edit; refusal, no-op, Undo, auxiliary views and palette pre-stage/one-Apply-Undo boundaries are covered without clearing filter caches.

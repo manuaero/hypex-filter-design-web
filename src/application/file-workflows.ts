@@ -1,15 +1,9 @@
 import { z } from 'zod';
 import { newProject, type Project, type Slot, type Measurement } from '../domain/model';
 import { editPresetFir } from '../domain/fir-editing';
+import { parseFir, parseMeasurement, exportHfd, projectSchema } from '../domain/files';
 import {
-  parseProject,
-  parseFir,
-  parseMeasurement,
-  exportHfd,
-  projectSchema,
-} from '../domain/files';
-import {
-  importProjectFolder,
+  importProjectFolderOpen,
   projectFiles,
   zipFiles,
   type ProjectFile,
@@ -31,6 +25,8 @@ import {
   type TransferJson,
 } from './file-transfers';
 import { assertFileByteBudget, readFileText, MAX_UI_TEXT_CHARACTERS } from './file-budget';
+import { parseProjectOpen, type DecodedProjectOpen } from '../domain/project-open';
+import type { ProjectReplacementIntent } from './native-project-open';
 
 const target = z.enum(['left', 'right', 'both']);
 const slot = z.enum(['left', 'right']);
@@ -98,6 +94,8 @@ export type ImportWorkflow = z.infer<typeof ImportWorkflowSchema>;
 export type ExportWorkflow = z.infer<typeof ExportWorkflowSchema>;
 export interface PreparedFileImport {
   slots: Slot[];
+  /** Trusted byte-derived replacement intent, never supplied by workflow JSON. */
+  readonly projectOpen?: ProjectReplacementIntent;
   /** Full replacements retain source channel state exactly; ordinary edits use normal links. */
   synchronizeLinks?: boolean;
   /** Atomically validates one detached proposal; the caller commits all roles together. */
@@ -199,11 +197,14 @@ export async function prepareFileImport(
     slots,
   };
   if (workflow.workflow === 'project' || workflow.workflow === 'folder') {
-    let project: Project;
+    let decoded: DecodedProjectOpen;
     if (workflow.workflow === 'project')
-      project = parseProject(await textFile(files[0], MAX_UI_TEXT_CHARACTERS, 'Project'), filename);
+      decoded = parseProjectOpen(
+        await textFile(files[0], MAX_UI_TEXT_CHARACTERS, 'Project'),
+        filename,
+      );
     else {
-      const decoded = [];
+      const folder = [];
       let characters = 0;
       for (const file of files) {
         const content = await textFile(
@@ -214,17 +215,25 @@ export async function prepareFileImport(
         );
         characters += content.length;
         if (characters > 80e6) throw new Error('Project folder exceeds import limits');
-        decoded.push({ path: file.path, content });
+        folder.push({ path: file.path, content });
       }
-      project = importProjectFolder(decoded, filename);
+      decoded = importProjectFolderOpen(folder, filename);
     }
-    const frozen = structuredClone(project);
+    const project = decoded.project,
+      projectOpen: ProjectReplacementIntent = Object.freeze(
+        decoded.format === 'hfd-native'
+          ? { kind: 'native-file-open', route: 'dialog' }
+          : { kind: 'snapshot' },
+      ),
+      frozen = structuredClone(project);
     return {
       slots,
+      projectOpen,
       synchronizeLinks: false,
       apply: atomic((target) => replaceProject(target, frozen), { synchronizeLinks: false }),
       result: {
         ...result,
+        projectOpen,
         warnings: project.warnings.slice(0, 10).map((warning) => warning.slice(0, 512)),
         warningCount: project.warnings.length,
         omittedWarningCount: Math.max(0, project.warnings.length - 10),

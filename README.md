@@ -10,6 +10,12 @@ _Filter editor with a persistent parameter inspector._
 
 This is an independent project. Software implementation and simulation coverage do not establish complete HFD compatibility or qualify every hardware operation. Current live protocol support targets FA503 / DSP3-213 core 5.1. Other device families, macOS USB behavior and simultaneous operation of two physical amplifiers remain unqualified.
 
+## V51 native File Open
+
+Native XML and native-only folder Open now share UI/MCP preparation before replacement or durable storage. Offline Open chooses preset 1 and the saved channel group; unknown groups retain their metadata and open no arbitrary Graph. Each requested role prepares independently, all targets validate before one replacement transaction, and one Undo restores that transaction. JSON, validated browser sidecars and library snapshots do not acquire native-open intent from saved XML. Parsing, hydration and receipt replay stay passive; ordinary visible Graph entry remains separate.
+
+Three actual offline native Saves produced two distinct outputs. This is bounded File Open evidence: linked-load copying and cache interpretation remain unresolved, and no broad link normalization was added. See the [shared preparation contract](docs/ARCHITECTURE.md#v51-native-file-open-preparation) and [V51 evidence and limits](docs/VERIFICATION.md#v51-native-file-open-checkpoint).
+
 ## Start locally
 
 Use Node.js 22.13 or newer and pnpm 11.25.0. Development has used Node.js 24.

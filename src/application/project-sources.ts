@@ -1,6 +1,7 @@
 import type { Project, Slot } from '../domain/model';
 import type { ExecutionPrincipal } from './execution-context';
 import type { TransferJson } from './file-transfers';
+import type { ProjectReplacementIntent } from './native-project-open';
 
 /** Browser capabilities kept locally in IndexedDB; never serialize these to tool output. */
 export interface ProjectFileHandle {
@@ -82,6 +83,8 @@ export interface ProjectOpenCommitMetadata {
   target: Slot | 'both';
   expectedRevision: number;
   requestId: string;
+  /** Fresh trusted parse outcome. Durable receipt replay never reapplies it. */
+  projectOpen?: ProjectReplacementIntent;
 }
 export interface ProjectOpenReceipt {
   commitId: string;
@@ -144,7 +147,7 @@ import {
   hasProjectReadPermission,
   isProjectDirectoryHandle,
   listDirectoryProjects,
-  readDirectoryProject,
+  readDirectoryProjectOpen,
 } from './directory-project-source';
 
 export type ProjectSourcesErrorCode =
@@ -236,9 +239,37 @@ const sameMetadata = (value: unknown, expected: ProjectOpenCommitMetadata) => {
     !value ||
     typeof value !== 'object' ||
     Array.isArray(value) ||
-    Object.keys(value).length !== 5
+    ![5, 6].includes(Object.keys(value).length) ||
+    Object.keys(value).some(
+      (key) =>
+        ![
+          'workflow',
+          'sourceId',
+          'target',
+          'expectedRevision',
+          'requestId',
+          'projectOpen',
+        ].includes(key),
+    )
   )
     return false;
+  if ('projectOpen' in value) {
+    const intent = (value as { projectOpen: unknown }).projectOpen;
+    if (!intent || typeof intent !== 'object' || Array.isArray(intent) || !('kind' in intent))
+      return false;
+    if (intent.kind === 'native-file-open') {
+      if (
+        Object.keys(intent).length !== 2 ||
+        !('route' in intent) ||
+        (intent.route !== 'dialog' && intent.route !== 'inner')
+      )
+        return false;
+    } else if (
+      (intent.kind !== 'snapshot' && intent.kind !== 'new-project') ||
+      Object.keys(intent).length !== 1
+    )
+      return false;
+  }
   return Object.entries(expected).every(
     ([key, item]) => Object.hasOwn(value, key) && (value as Record<string, unknown>)[key] === item,
   );
@@ -259,7 +290,18 @@ function receiptFor(
       'invalid-request',
       'Request ID belongs to a different open operation or its durable receipt is invalid',
     );
-  return structuredClone(value);
+  // Keep the historical public receipt identity stable. projectOpen is trusted
+  // fresh-commit metadata, never an instruction recovered from a receipt.
+  return {
+    ...structuredClone(value),
+    result: {
+      workflow: metadata.workflow,
+      sourceId: metadata.sourceId,
+      target: metadata.target,
+      expectedRevision: metadata.expectedRevision,
+      requestId: metadata.requestId,
+    },
+  };
 }
 function cloneEnvelope(value: ProjectSourcesEnvelope): ProjectSourcesEnvelope {
   return {
@@ -316,6 +358,7 @@ export function createProjectSources(options: ProjectSourcesOptions): ProjectSou
       metadata: ProjectOpenCommitMetadata;
       commitId: string;
       project?: Project;
+      projectOpen?: ProjectReplacementIntent;
       receipt?: ProjectOpenReceipt;
       rootId?: string;
       epoch?: number;
@@ -508,7 +551,10 @@ export function createProjectSources(options: ProjectSourcesOptions): ProjectSou
     if (!stored)
       throw new ProjectSourcesError('missing-source', 'The local project source was not found');
     const source = structuredClone(stored.source);
-    let rootId: string | undefined, epoch: number | undefined, project: Project;
+    let rootId: string | undefined,
+      epoch: number | undefined,
+      project: Project,
+      projectOpen: ProjectReplacementIntent = { kind: 'snapshot' };
     try {
       if (source.kind === 'directory-project') {
         rootId = source.rootId;
@@ -520,7 +566,12 @@ export function createProjectSources(options: ProjectSourcesOptions): ProjectSou
             'A human must select or reauthorize this project database folder. No permission prompt was opened.',
           );
         try {
-          project = await readDirectoryProject(root.handle, source.folderName);
+          const decoded = await readDirectoryProjectOpen(root.handle, source.folderName);
+          project = decoded.project;
+          projectOpen =
+            decoded.format === 'hfd-native'
+              ? { kind: 'native-file-open', route: 'inner' }
+              : { kind: 'snapshot' };
         } catch (error) {
           if (!(await hasProjectReadPermission(root.handle)))
             throw new ProjectSourcesError(
@@ -567,7 +618,16 @@ export function createProjectSources(options: ProjectSourcesOptions): ProjectSou
           );
         }
       }
-      tokens.set(token, { sourceId, binding, metadata, commitId, project, rootId, epoch });
+      tokens.set(token, {
+        sourceId,
+        binding,
+        metadata,
+        commitId,
+        project,
+        rootId,
+        epoch,
+        projectOpen: Object.freeze(projectOpen),
+      });
       return token;
     } catch (error) {
       const recent = await touch(sourceId);
@@ -615,7 +675,7 @@ export function createProjectSources(options: ProjectSourcesOptions): ProjectSou
             );
           validateRoot(prepared.rootId, prepared.epoch!);
         }
-        if (!prepared.project)
+        if (!prepared.project || !prepared.projectOpen)
           throw new ProjectSourcesError(
             'persistence',
             'The durable open receipt is no longer available; no document was reapplied',
@@ -625,7 +685,7 @@ export function createProjectSources(options: ProjectSourcesOptions): ProjectSou
             prepared.binding,
             structuredClone(prepared.project),
             prepared.commitId,
-            { ...prepared.metadata },
+            { ...prepared.metadata, projectOpen: { ...prepared.projectOpen } },
           );
           receipt = receiptFor(result, prepared.commitId, prepared.metadata);
         } catch (error) {

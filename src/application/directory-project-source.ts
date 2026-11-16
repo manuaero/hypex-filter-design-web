@@ -1,4 +1,5 @@
-import { importProjectFolder, type ProjectFile } from '../domain/project-io';
+import { importProjectFolderOpen, type ProjectFile } from '../domain/project-io';
+import type { DecodedProjectOpen } from '../domain/project-open';
 import { projectSchema } from '../domain/files';
 import {
   assertFileByteBudget,
@@ -85,7 +86,10 @@ export async function listDirectoryProjects(
 }
 
 /** Reads a fresh snapshot only from descendants of this granted project folder. */
-export async function readDirectoryProject(root: ProjectDirectoryHandle, folderName: string) {
+export async function readDirectoryProjectOpen(
+  root: ProjectDirectoryHandle,
+  folderName: string,
+): Promise<DecodedProjectOpen> {
   assertDirectoryEntryName(folderName);
   const folder = await root.getDirectoryHandle(folderName);
   const files: { path: string; file: File }[] = [];
@@ -123,7 +127,12 @@ export async function readDirectoryProject(root: ProjectDirectoryHandle, folderN
     remaining -= content.length;
     text.push({ path, content });
   }
-  return projectSchema.parse(importProjectFolder(text, folderName));
+  const decoded = importProjectFolderOpen(text, folderName);
+  return { project: projectSchema.parse(decoded.project), format: decoded.format };
+}
+/** Legacy typed readers retain their passive Project-returning contract. */
+export async function readDirectoryProject(root: ProjectDirectoryHandle, folderName: string) {
+  return (await readDirectoryProjectOpen(root, folderName)).project;
 }
 
 export type ProjectDirectoryPicker = (options: {

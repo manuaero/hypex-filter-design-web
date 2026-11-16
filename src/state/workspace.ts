@@ -71,7 +71,7 @@ interface Workspace extends PersistedWorkspace {
     principal: ExecutionPrincipal,
     expectedRevision: number,
     slots: Slot[],
-    apply: (project: Project) => void,
+    apply: (project: Project, slot: Slot) => void,
     result: TransferJson,
     remember?: (documents: Documents) => HfdProjectCalibration | undefined,
     options?: { synchronizeLinks?: boolean },
@@ -453,7 +453,7 @@ export function createWorkspaceStore(
         throw new Error('File import receipt exceeds 64 KiB');
       const documents = structuredClone(s.documents);
       for (const slot of new Set(slots)) {
-        apply(documents[slot]);
+        apply(documents[slot], slot);
         if (options?.synchronizeLinks !== false)
           synchronizeLinks(documents[slot], s.documents[slot]);
         reconcileProjectHfdCalibration(documents[slot], s.documents[slot]);

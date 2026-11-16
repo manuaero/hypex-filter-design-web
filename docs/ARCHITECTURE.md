@@ -12,6 +12,18 @@ flowchart LR
   Sessions --> HID[WebHID transport]
 ```
 
+## V51 native File Open preparation
+
+Native Open is an explicit application workflow, distinct from parsing and workspace hydration. Trusted decoding supplies internal `ProjectReplacementIntent`: `native-file-open` with `dialog` or `inner`, or snapshot/new-project semantics. A project's embedded `sourceXml` cannot grant that intent. Native XML and native-only uploaded folders use `dialog`; fresh native saved-directory reads use `inner`. Browser recent-source policy does not assert a proved native MRU callback identity.
+
+`application/native-project-open.ts` accepts each role's runtime preset from the trusted caller: offline preset 1, or a validated cached preset of its assigned panel session. It never chooses runtime selection from XML or Clone metadata and performs no USB read. Optional native `hfdSelectedPreset` is separate from Clone settings; Open writes the chosen preset while retaining `hfdSelectedGroupId`. Group -1 selects the first channel, groups 1..3 map directly, and absent/unmapped values produce no Graph selection.
+
+The `dialog` plan rebinds microphone application across the chosen preset, independently of microphone Loaded. The selected cold Graph owns its final flag: false only for explicit project calibration `loaded:false`, otherwise true after dialog bind/refresh. The `inner` route omits the post-open loop and keeps ordinary known-unloaded constructor clearing. Shared constructor logic normalizes admitted compensation and independent Gain while retaining the linked Gain-store guard. Automatic Open does not rewrite the saved group as an explicit channel-navigation action would.
+
+Preparation stages document metadata, cold constructor fields, selected measured-response availability and reconciled native measurement caches on a detached proposal. Every requested role validates before one authoritative replacement and any durable receipt; failed preparation leaves all targets unchanged. The post-hook accepts only the matching generation/revision/final data and claims visits/views without another model edit. Undo and replay restore data without rerunning Native Open. Snapshot replacement remains separate and retains ordinary visible-Graph behavior.
+
+No broad link synchronization is performed. Imported filters, identities, provenance and cache interpretation remain intact; the observed native linked-load source-copy scope remains an explicit gap. Sink-ID regeneration is also neither reproduced nor declared harmless. This service adds no amplifier or bridge-configuration operation.
+
 ## Stack
 
 Versions are pinned in `package.json` and `pnpm-lock.yaml`.

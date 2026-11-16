@@ -171,6 +171,9 @@ export interface Project {
   /** Saved native group ID, including -1 and unsupported signed32 IDs.
    * Metadata alone does not choose a browser channel or refresh processing. */
   hfdSelectedGroupId?: number;
+  /** Saved native preset ID, including unsupported signed32 IDs.
+   * Passive metadata does not select a browser preset or apply FileOpen effects. */
+  hfdSelectedPreset?: number;
   hfdCalibration?: HfdProjectCalibration;
   /** Physical settings/EQ captured by HFD, independent of editable designs. */
   hfdCloneTemplate?: NativeCloneTemplate;
@@ -200,6 +203,7 @@ export function newProject(name = 'Untitled crossover'): Project {
     model: 'FA503',
     sampleRate: FS,
     hfdSelectedGroupId: -1,
+    hfdSelectedPreset: 1,
     warnings: [],
     presets: Array.from({ length: 3 }, (_, p) => ({
       name: `Preset ${p + 1}`,

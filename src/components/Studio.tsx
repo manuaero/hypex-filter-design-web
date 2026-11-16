@@ -65,6 +65,12 @@ import {
   type GraphViewPlan,
 } from '../application/graph-view';
 import { createNativeGraphEntryController } from '../application/native-graph-entry';
+import {
+  prepareNativeProjectOpen,
+  type ProjectReplacementIntent,
+  type NativeProjectOpenRoute,
+} from '../application/native-project-open';
+import { parseProjectOpen } from '../domain/project-open';
 import ProjectLibrary from './ProjectLibrary';
 import SourceBrowser from './SourceBrowser';
 import ProjectSaveDialog from './ProjectSaveDialog';
@@ -194,7 +200,7 @@ import {
 import { projectFiles, zipFiles, downloadBytes } from '../domain/project-io';
 import { FILTER_NAMES, design, effectiveSections, encodeChannel } from '../domain/dsp';
 import {
-  parseProject,
+  projectSchema,
   download,
   exportHfd,
   parseFir,
@@ -252,6 +258,24 @@ type Live = {
   connectionId: string;
 };
 const fmt = (v: number) => (v >= 1000 ? `${+(v / 1000).toFixed(2)}k` : `${+v.toFixed(2)}`);
+function projectReplacementIntent(value: unknown): ProjectReplacementIntent {
+  if (value === undefined) return { kind: 'snapshot' };
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const intent = value as Record<string, unknown>;
+    if (
+      intent.kind === 'native-file-open' &&
+      (intent.route === 'dialog' || intent.route === 'inner') &&
+      Object.keys(intent).every((key) => key === 'kind' || key === 'route')
+    )
+      return { kind: 'native-file-open', route: intent.route };
+    if (
+      (intent.kind === 'snapshot' || intent.kind === 'new-project') &&
+      Object.keys(intent).length === 1
+    )
+      return { kind: intent.kind };
+  }
+  throw new Error('Invalid project replacement intent');
+}
 // Passive compensation field display only; the retained canonical Double is untouched.
 function Toggle({
   checked,
@@ -353,6 +377,9 @@ export default function Studio() {
   const nativeGraphEntries = useMemo(
     () => createNativeGraphEntryController({ current: useWorkspace.getState }),
     [],
+  );
+  const nativeOpenAdmissions = useRef(
+    new Map<Slot, { revision: number; route: NativeProjectOpenRoute; final: string }>(),
   );
   const plotViews = useSyncExternalStore(
     plotController.subscribe,
@@ -468,15 +495,28 @@ export default function Studio() {
     ...args: Parameters<ReturnType<typeof useWorkspace.getState>['commitFileImport']>
   ) {
     let applied = false;
+    const metadata = args[5];
+    const replacement =
+      metadata &&
+      typeof metadata === 'object' &&
+      !Array.isArray(metadata) &&
+      ['project', 'folder', 'source-open'].includes(String(metadata.workflow));
+    const intent = replacement ? projectReplacementIntent(metadata.projectOpen) : undefined;
     const forwarded = [...args] as typeof args;
-    forwarded[4] = (destination) => {
+    forwarded[4] = (destination, slot) => {
+      args[4](destination, slot);
+      if (intent) {
+        const final = prepareOpenedProject(destination, slot, intent);
+        for (const key of Object.keys(destination)) Reflect.deleteProperty(destination, key);
+        Object.assign(destination, final);
+      }
       applied = true;
-      args[4](destination);
     };
+    if (intent?.kind === 'native-file-open') forwarded[7] = { ...args[7], synchronizeLinks: false };
+    // The store publishes synchronously before its persistence await. Claim
+    // visits at that boundary, so an older flush cannot reset a newer view.
+    const saving = useWorkspace.getState().commitFileImport(...forwarded);
     try {
-      return await useWorkspace.getState().commitFileImport(...forwarded);
-    } finally {
-      const metadata = args[5];
       if (
         applied &&
         useWorkspace.getState().fileCommitReceipts?.[args[0]] &&
@@ -485,7 +525,7 @@ export default function Studio() {
         !Array.isArray(metadata) &&
         ['project', 'folder', 'source-open'].includes(String(metadata.workflow))
       )
-        projectViewsReplaced(args[3]);
+        projectViewsReplaced(args[3], intent);
       else if (
         applied &&
         useWorkspace.getState().fileCommitReceipts?.[args[0]] &&
@@ -497,7 +537,11 @@ export default function Studio() {
         typeof metadata.channel === 'number'
       )
         refreshPhaseMeasurements(args[3], metadata.preset - 1, [metadata.channel - 1]);
+    } catch (error) {
+      await saving;
+      throw error;
     }
+    return await saving;
   }
   function openProjectSave() {
     if (saveDialogRef.current) return;
@@ -892,7 +936,55 @@ export default function Studio() {
     }
     return result;
   };
-  function projectViewsReplaced(slots: readonly Slot[]) {
+  function prepareOpenedProject(
+    imported: Project,
+    slot: Slot,
+    intent: ProjectReplacementIntent,
+  ): Project {
+    nativeOpenAdmissions.current.delete(slot);
+    if (intent.kind !== 'native-file-open') return imported;
+    const connection = liveRef.current[slot];
+    // File Open uses HFD's cached runtime preset. Never infer a connected
+    // panel's current preset from project XML, nor issue a USB read here.
+    const panelPreset = connection?.status?.preset;
+    if (
+      connection &&
+      (typeof panelPreset !== 'number' ||
+        !Number.isInteger(panelPreset) ||
+        panelPreset < 1 ||
+        panelPreset > 3)
+    )
+      throw new Error(`${slot}: a valid cached amplifier preset is required before Native Open`);
+    const prepared = prepareNativeProjectOpen(imported, slot, {
+      presetIndex: connection ? panelPreset! - 1 : 0,
+      route: intent.route,
+    });
+    const final = projectSchema.parse(prepared.project) as Project;
+    nativeOpenAdmissions.current.set(slot, {
+      revision: (useWorkspace.getState().documentRevision ?? 0) + 1,
+      route: intent.route,
+      final: JSON.stringify(final),
+    });
+    return final;
+  }
+  function projectViewsReplaced(slots: readonly Slot[], intent?: ProjectReplacementIntent) {
+    const admissions = slots.map((slot) => ({
+      slot,
+      admission: nativeOpenAdmissions.current.get(slot),
+    }));
+    const current = useWorkspace.getState();
+    if (
+      intent?.kind === 'native-file-open' &&
+      admissions.some(
+        ({ slot, admission }) =>
+          !admission ||
+          admission.revision !== current.documentRevision ||
+          admission.route !== intent.route ||
+          admission.final !== JSON.stringify(current.documents[slot]),
+      )
+    )
+      return;
+    for (const slot of slots) nativeOpenAdmissions.current.delete(slot);
     nativeGraphEntries.invalidateRoles(slots);
     for (const slot of slots) projectViewGenerations.current[slot]++;
     for (const [key, view] of retainedHardwareGainViews.current)
@@ -902,7 +994,54 @@ export default function Studio() {
       right: previous.right + Number(slots.includes('right')),
     }));
     nativeImpulseView.invalidate(slots);
-    const current = useWorkspace.getState();
+    if (intent?.kind === 'native-file-open') {
+      const opened = slots.map((slot) => {
+        const project = current.documents[slot],
+          preset = project.hfdSelectedPreset! - 1,
+          group = project.hfdSelectedGroupId,
+          channel =
+            group === -1 ? 0 : group !== undefined && group >= 1 && group <= 3 ? group - 1 : null;
+        if (!Number.isInteger(preset) || preset < 0 || preset > 2)
+          throw new Error('Prepared native preset is invalid');
+        if (channel === null) return { slot, preset, channel };
+        const selection = { slot, preset, channel };
+        const entry = nativeGraphEntries.planNativeFileOpen(
+          { slot, presetIndex: preset, channelIndex: channel },
+          intent.route,
+        );
+        const graph = graphController.selection(graphContext(current, selection), {
+          normalize: true,
+        });
+        // The data transaction already applied every native effect. A view
+        // hook may claim a real visit, but must never make a second edit.
+        if (entry.changed || graph.writeback)
+          throw new Error('Native Open final data was not prepared before publication');
+        graphController.validate(graph);
+        return { ...selection, entry, graph };
+      });
+      for (const item of opened)
+        if (item.channel !== null) {
+          nativeGraphEntries.commit(item.entry, () => {});
+          graphController.commit(item.graph);
+        }
+      const active = opened.find((item) => item.slot === current.slot) ?? opened[0];
+      current.choose(
+        {
+          slot: active.slot,
+          preset: active.preset,
+          ...(active.channel === null ? {} : { channel: active.channel, filter: 0 }),
+        },
+        { independent: true },
+      );
+      setWorkspaceTabOnly('Crossover');
+      setWorkspaceDesignerOnly(active.channel === null ? 'chain' : 'graph');
+      if (active.channel === null)
+        setNotice(
+          'Project opened. Its saved channel has no matching Graph; choose a channel to edit.',
+        );
+      if (modeRef.current === 'Impulse') restoreNativeImpulse();
+      return;
+    }
     refreshPhaseMeasurements(slots, current.preset, [current.channel]);
     if (slots.includes(current.slot) && graphVisible()) {
       // File replacement initializes only the graph actually visible here.
@@ -2528,6 +2667,7 @@ export default function Studio() {
     undo: () => useWorkspace.getState().undo(),
     redo: () => useWorkspace.getState().redo(),
     documentsReplaced: projectViewsReplaced,
+    prepareProjectOpen: prepareOpenedProject,
     measurementsReplaced: refreshPhaseMeasurements,
     connections: () => liveRef.current,
     connect: requestConnection,
@@ -3007,13 +3147,34 @@ export default function Studio() {
           <button
             aria-label="Open project"
             title="Open project"
-            onClick={() =>
+            onClick={() => {
+              const captured = useWorkspace.getState();
               readFile('.xml,.json', (text, name) => {
-                w.replaceAt(w.slot, parseProject(text, name.replace(/\.[^.]+$/, '')));
-                projectViewsReplaced([w.slot]);
-                setNotice('Project imported into ' + w.slot + '. Device settings unchanged.');
-              })
-            }
+                const current = useWorkspace.getState();
+                if (
+                  current.documents !== captured.documents ||
+                  current.documentRevision !== captured.documentRevision ||
+                  current.slot !== captured.slot ||
+                  current.preset !== captured.preset ||
+                  current.channel !== captured.channel ||
+                  current.filter !== captured.filter
+                )
+                  throw new Error(
+                    'The project or selection changed while the file picker was open. Open the file again.',
+                  );
+                const decoded = parseProjectOpen(text, name.replace(/\.[^.]+$/, ''));
+                const intent: ProjectReplacementIntent =
+                  decoded.format === 'hfd-native'
+                    ? { kind: 'native-file-open', route: 'dialog' }
+                    : { kind: 'snapshot' };
+                const final = prepareOpenedProject(decoded.project, captured.slot, intent);
+                current.replaceAt(captured.slot, final, { independent: true });
+                projectViewsReplaced([captured.slot], intent);
+                setNotice(
+                  'Project imported into ' + captured.slot + '. Device settings unchanged.',
+                );
+              });
+            }}
           >
             <FolderOpen size={16} />
           </button>

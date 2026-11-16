@@ -1,6 +1,8 @@
 import type { Project, Slot } from '../domain/model';
 import { assertProjectLinks } from '../domain/links';
 import { normalizeHardwareGainCallback } from '../domain/hardware-gain';
+import { defaultHfdMeasurementOptions } from '../domain/hfd-measurement';
+import type { NativeProjectOpenRoute } from './native-project-open';
 
 export interface NativeGraphEntryRequest {
   slot: Slot;
@@ -13,7 +15,7 @@ export interface NativeGraphEntryPatch {
   gain?: number;
   additionalGain?: number;
   hfdGainLowered?: boolean;
-  applyMicCorrection?: false;
+  applyMicCorrection?: boolean;
   hfdSelectedGroupId?: number;
 }
 export interface NativeGraphEntryPlan {
@@ -33,6 +35,11 @@ export interface NativeGraphEntryWorkspace {
 }
 export interface NativeGraphEntryController {
   plan(request: NativeGraphEntryRequest): NativeGraphEntryPlan;
+  /** Only a newly loaded role generation may receive native file-open effects. */
+  planNativeFileOpen(
+    request: Omit<NativeGraphEntryRequest, 'explicitChannelSelection'>,
+    route: NativeProjectOpenRoute,
+  ): NativeGraphEntryPlan;
   /** The trusted publisher combines this apply function with other view deltas
    * in its one synchronous transaction. It is also called for canonical no-ops. */
   commit(
@@ -101,6 +108,72 @@ function context(project: Project, request: NativeGraphEntryRequest) {
   };
 }
 
+function coldPatch(
+  project: Project,
+  request: NativeGraphEntryRequest,
+  route?: NativeProjectOpenRoute,
+): NativeGraphEntryPatch {
+  const channel = target(project, request),
+    patch: NativeGraphEntryPatch = {};
+  if ((channel.additionalGain ?? 0) !== 0) {
+    const result = normalizeHardwareGainCallback(channel, true);
+    // Native +f8 suppresses Gain storage, not the local offset/hint callback.
+    if (channel.linkedTo === undefined && !Object.is(channel.gain, result.gain))
+      patch.gain = result.gain;
+    if (!Object.is(channel.additionalGain, result.additionalGain))
+      patch.additionalGain = result.additionalGain;
+    if (!Object.is(project.hfdGainLowered, result.hfdGainLowered))
+      patch.hfdGainLowered = result.hfdGainLowered;
+  }
+  if (route === 'dialog') {
+    const finalMic = project.hfdCalibration?.loaded !== false;
+    if (channel.hfdMeasurement?.applyMicCorrection !== finalMic)
+      patch.applyMicCorrection = finalMic;
+  } else if (
+    project.hfdCalibration?.loaded === false &&
+    channel.hfdMeasurement?.applyMicCorrection === true
+  )
+    patch.applyMicCorrection = false;
+  return patch;
+}
+function applyPatch(
+  project: Project,
+  request: NativeGraphEntryRequest,
+  patch: Readonly<NativeGraphEntryPatch>,
+) {
+  const channel = target(project, request);
+  if (patch.gain !== undefined) channel.gain = patch.gain;
+  if (patch.additionalGain !== undefined) channel.additionalGain = patch.additionalGain;
+  if (patch.hfdGainLowered !== undefined) project.hfdGainLowered = patch.hfdGainLowered;
+  if (patch.applyMicCorrection !== undefined)
+    channel.hfdMeasurement = {
+      ...(channel.hfdMeasurement ?? defaultHfdMeasurementOptions()),
+      applyMicCorrection: patch.applyMicCorrection,
+    };
+  if (patch.hfdSelectedGroupId !== undefined) project.hfdSelectedGroupId = patch.hfdSelectedGroupId;
+}
+/** Shared cold constructor operation for a caller-owned detached native import.
+ * It grants no lifetime authority and performs no workspace or I/O operation. */
+export function applyColdNativeFileOpenGraph(
+  project: Project,
+  request: Omit<NativeGraphEntryRequest, 'explicitChannelSelection'>,
+  route: NativeProjectOpenRoute,
+): Readonly<NativeGraphEntryPatch> {
+  assert(
+    request &&
+      (request.slot === 'left' || request.slot === 'right') &&
+      [request.presetIndex, request.channelIndex].every(
+        (n) => Number.isInteger(n) && n >= 0 && n < 3,
+      ) &&
+      Object.keys(request).every((key) => ['slot', 'presetIndex', 'channelIndex'].includes(key)) &&
+      (route === 'dialog' || route === 'inner'),
+    'Invalid cold native file-open graph request',
+  );
+  const patch = Object.freeze(coldPatch(project, request, route));
+  applyPatch(project, request, patch);
+  return patch;
+}
+
 /** Native Graph lifetime is an application context, not a Numeric mount, file
  * parser or status getter. Planning is inert; only an admitted synchronous
  * publication claims a visit. Undo restores model bytes without replaying it. */
@@ -115,6 +188,7 @@ export function createNativeGraphEntryController(options: {
     project: Project;
     before: ReturnType<typeof context>;
     key: string;
+    nativeFileOpen?: boolean;
   };
   const pending = new WeakMap<NativeGraphEntryPlan, Binding>();
   const current = () => {
@@ -142,12 +216,13 @@ export function createNativeGraphEntryController(options: {
         latest.documentRevision === plan.revision &&
         latest.documents === binding.workspace.documents &&
         latest.documents[plan.slot] === binding.project &&
+        (!binding.nativeFileOpen || visits[plan.slot].size === 0) &&
         plan.fresh === !visits[plan.slot].has(binding.key) &&
         same(context(latest.documents[plan.slot], binding.request), binding.before),
       'Native graph entry target changed',
     );
   };
-  return {
+  const controller: NativeGraphEntryController = {
     plan(request) {
       assert(
         request &&
@@ -169,24 +244,7 @@ export function createNativeGraphEntryController(options: {
         key = JSON.stringify([generation, request.presetIndex, request.channelIndex, channel.id]);
       const fresh = !visits[request.slot].has(key),
         patch: NativeGraphEntryPatch = {};
-      if (fresh) {
-        if ((channel.additionalGain ?? 0) !== 0) {
-          const result = normalizeHardwareGainCallback(channel, true);
-          // +f8 suppresses only canonical Gain storage, not the current group's
-          // checkbox compensation/hint callback. Never synchronize links here.
-          if (channel.linkedTo === undefined && !Object.is(channel.gain, result.gain))
-            patch.gain = result.gain;
-          if (!Object.is(channel.additionalGain, result.additionalGain))
-            patch.additionalGain = result.additionalGain;
-          if (!Object.is(project.hfdGainLowered, result.hfdGainLowered))
-            patch.hfdGainLowered = result.hfdGainLowered;
-        }
-        if (
-          project.hfdCalibration?.loaded === false &&
-          channel.hfdMeasurement?.applyMicCorrection === true
-        )
-          patch.applyMicCorrection = false;
-      }
+      if (fresh) Object.assign(patch, coldPatch(project, request));
       if (
         request.explicitChannelSelection &&
         !Object.is(project.hfdSelectedGroupId, request.channelIndex + 1)
@@ -212,6 +270,32 @@ export function createNativeGraphEntryController(options: {
       });
       return plan;
     },
+    planNativeFileOpen(request, route) {
+      assert(
+        request &&
+          (request.slot === 'left' || request.slot === 'right') &&
+          Object.keys(request).every((key) =>
+            ['slot', 'presetIndex', 'channelIndex'].includes(key),
+          ) &&
+          (route === 'dialog' || route === 'inner'),
+        'Invalid native file-open graph request or route',
+      );
+      assert(
+        visits[request.slot].size === 0,
+        'Native file-open graph requires a fresh role generation',
+      );
+      const initial = controller.plan(request),
+        binding = pending.get(initial)!,
+        patch = coldPatch(binding.project, request, route);
+      const plan: NativeGraphEntryPlan = Object.freeze({
+        ...initial,
+        changed: Object.keys(patch).length > 0,
+        patch: Object.freeze(patch),
+      });
+      pending.delete(initial);
+      pending.set(plan, { ...binding, nativeFileOpen: true });
+      return plan;
+    },
     commit(plan, publish) {
       const binding = pending.get(plan);
       assert(binding && typeof publish === 'function', 'Unknown native graph entry plan');
@@ -229,15 +313,7 @@ export function createNativeGraphEntryController(options: {
             same(context(project, binding.request), binding.before),
           'Native graph entry requires its matching detached role proposal',
         );
-        const channel = target(project, binding.request),
-          patch = plan.patch;
-        if (patch.gain !== undefined) channel.gain = patch.gain;
-        if (patch.additionalGain !== undefined) channel.additionalGain = patch.additionalGain;
-        if (patch.hfdGainLowered !== undefined) project.hfdGainLowered = patch.hfdGainLowered;
-        if (patch.applyMicCorrection !== undefined)
-          channel.hfdMeasurement = { ...channel.hfdMeasurement!, applyMicCorrection: false };
-        if (patch.hfdSelectedGroupId !== undefined)
-          project.hfdSelectedGroupId = patch.hfdSelectedGroupId;
+        applyPatch(project, binding.request, plan.patch);
         applied = true;
       });
       if (
@@ -251,6 +327,7 @@ export function createNativeGraphEntryController(options: {
       assert(
         generations[plan.slot] === plan.generation &&
           plan.fresh === !visits[plan.slot].has(binding.key) &&
+          (!binding.nativeFileOpen || visits[plan.slot].size === 0) &&
           (!plan.changed || applied),
         'Native graph entry was not published in its current generation',
       );
@@ -261,7 +338,10 @@ export function createNativeGraphEntryController(options: {
       if (patch.additionalGain !== undefined) expected.additionalGain = patch.additionalGain;
       if (patch.hfdGainLowered !== undefined) expected.hfdGainLowered = patch.hfdGainLowered;
       if (patch.applyMicCorrection !== undefined)
-        expected.hfdMeasurement = { ...expected.hfdMeasurement!, applyMicCorrection: false };
+        expected.hfdMeasurement = {
+          ...(expected.hfdMeasurement ?? defaultHfdMeasurementOptions()),
+          applyMicCorrection: patch.applyMicCorrection,
+        };
       if (patch.hfdSelectedGroupId !== undefined)
         expected.hfdSelectedGroupId = patch.hfdSelectedGroupId;
       assert(
@@ -287,4 +367,5 @@ export function createNativeGraphEntryController(options: {
       });
     },
   };
+  return controller;
 }

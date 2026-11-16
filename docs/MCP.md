@@ -4,6 +4,14 @@ Agents use the same controllers and validation as the human interface. Normal us
 
 The current registry contains **91 commands**, including stateless native parameter-wheel adjustments, shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
 
+## V51 shared native File Open
+
+The existing 91-command registry uses the same native-open preparation as visible Open controls. Strict schemas do not expose a caller flag that turns JSON into native input. Validated native XML uploads and native-only uploaded folders use the outer `dialog` policy; fresh native saved-directory reads, including browser recent-source opens, use `inner`. JSON, valid `FusionProject.json` sidecars and library snapshots retain snapshot semantics, even when they contain `sourceXml`. Exact native Recent/MRU callback identity remains unqualified.
+
+Before any authoritative replacement or durable receipt, each role gets a detached final proposal with its own runtime preset, saved group, route-specific microphone flags, cold constructor and reconciled measurement data. Both-role requests validate every proposal first and commit one data transaction, independently of Mirror. The post-hook claims matching visits/views only and does not write a second document. Undo and durable receipt replay do not execute Native Open again. Snapshot replacement retains its separate ordinary visible-Graph contract.
+
+Offline uses preset 1. A connected role can use only its validated cached panel preset; this operation performs no hardware preset read or selection. An unknown or absent group opens no arbitrary Graph. Native linked-load copying and browser cache classification remain a gap; no full File Open or connected-device parity is claimed. See [architecture](ARCHITECTURE.md#v51-native-file-open-preparation).
+
 ## V50 shared channel graph entry
 
 The existing `fusion_select` and `fusion_view` commands share explicit visible Crossover Graph entry with the human UI; the registry stays at 91 commands. Only the selected role's graph is constructed or initialized, even with Mirror L/R enabled. Choosing a channel while Help, Device settings, Input EQ or the signal chain is shown does not initialize a hidden graph. Status, parsing and hydration stay passive. The graph's project/preset/channel visit record is trusted private context, not a caller bypass flag or serialized project field.
