@@ -10,6 +10,16 @@ _Filter editor with a persistent parameter inspector._
 
 This is an independent project. Software implementation and simulation coverage do not establish complete HFD compatibility or qualify every hardware operation. Current live protocol support targets FA503 / DSP3-213 core 5.1. Other device families, macOS USB behavior and simultaneous operation of two physical amplifiers remain unqualified.
 
+## V52 input-EQ metadata and verification
+
+Input-EQ Q metadata now uses HFD's signed 16-bit interpretation. The shared UI/MCP upload path refuses positive values whose rounded Q word exceeds 32767, preventing sign changes on native readback. Exact-zero defaults, ordinary Q 0.1–20 editing and retained compiled coefficients are unchanged. Negative raw metadata remains readable; this does not widen ordinary authoring or hardware-write admission.
+
+The complete private run passed **3,573 tests in 228 files**: 3,465 canonical tests plus 108 retained diagnostics. The public run passed **3,464 tests with the sole optional installed-PDF skip**, 3,465 total in 225 files. TypeScript, Next and Worker packaging passed. The public source inventory remains 449 source plus 13 protected files, 462 total.
+
+Actual Chrome and the production local MCP client separately verified the named V51/f31 native-open, paired import, independent edit, Undo, reload and receipt-recovery paths with synthetic projects. Thirty observations support 35 accepted checks; two earlier verifier mistakes remain recorded with corrected checks. Both complete projects and selection were restored.
+
+Five fresh offline HFD Saves qualify resolved linked-channel Graph copying separately from Open/Save without a Graph. Destination AdditionalGain and identities remain intact. Its remaining browser lifecycle/cache implementation is still open; this update does not add blanket link normalization. No amplifier setting or bridge configuration was applied. See [the evidence and limits](docs/VERIFICATION.md#v52-eq-metadata-browser-recovery-and-native-link-comparisons).
+
 ## V51 native File Open
 
 Native XML and native-only folder Open now share UI/MCP preparation before replacement or durable storage. Offline Open chooses preset 1 and the saved channel group; unknown groups retain their metadata and open no arbitrary Graph. Each requested role prepares independently, all targets validate before one replacement transaction, and one Undo restores that transaction. JSON, validated browser sidecars and library snapshots do not acquire native-open intent from saved XML. Parsing, hydration and receipt replay stay passive; ordinary visible Graph entry remains separate.

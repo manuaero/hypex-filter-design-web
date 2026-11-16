@@ -160,3 +160,99 @@ describe('initialized native EQ zero-metadata interpretation', () => {
     expect(saved).toHaveLength(2);
   }, 10000);
 });
+
+describe('native EQ signed Q metadata', () => {
+  // Independent literal pages, not encodeEq output. CRC words were calculated
+  // with Python binascii.crc_hqx(page[:254], 0xffff), independently of crc16.
+  // Native ab0ef3..ab0f52 reads a signed16 word and substitutes only exact zero.
+  it.each([
+    { index: 0, word: 0x0000, q: 0.707, crc: 0xdd36 },
+    { index: 1, word: 0x0001, q: 0.001, crc: 0x28e6 },
+    { index: 2, word: 0x0064, q: 0.1, crc: 0x1e6e },
+    { index: 3, word: 0x4e20, q: 20, crc: 0x5ab3 },
+    { index: 4, word: 0x7fff, q: 32.767, crc: 0x7679 },
+    { index: 5, word: 0x8000, q: -32.768, crc: 0xa078 },
+    { index: 6, word: 0xf830, q: -2, crc: 0x3f5d },
+    { index: 8, word: 0xffff, q: -0.001, crc: 0xc71d },
+  ])(
+    'decodes Q word$word in band$index as$q without changing its page or compiled response',
+    ({ index, word, q, crc }) => {
+      const page = fixture(),
+        offset = 180 + index * 8,
+        view = new DataView(page.buffer);
+      page[offset] = (index % 2 ? 0 : 128) | (index % 3);
+      view.setUint16(offset + 4, word, true);
+      view.setUint16(254, crc, true);
+      expect(crc16(page.subarray(0, 254))).toBe(crc);
+      const padded = new Uint8Array(274).fill(0x5a);
+      padded.set(page, 7);
+      const original = padded.slice(),
+        bands = decodeEq(padded.subarray(7, 263)),
+        band = bands[index];
+      expect(band).toMatchObject({
+        q,
+        frequency: (123456 + index) / 100,
+        gain: (-2500 + index) / 1000,
+        enabled: index % 2 === 0,
+        kind: ['peak', 'lowshelf2', 'highshelf2'][index % 3],
+        provenance: 'panel',
+        coefficients: { b2: 0.0625, b1: 0.125, b0: 1, f2: -0.125, f1: 0.25 },
+      });
+      for (let other = 0; other < 9; other++)
+        if (other !== index) expect(bands[other].q).toBe((1234 + other) / 1000);
+      expect(padded).toEqual(original);
+    },
+  );
+
+  it.each([
+    { q: 32.7665, word: 32766 },
+    { q: 32.767, word: 32767 },
+    { q: 32.7674, word: 32767 },
+  ])(
+    'encodes rounded positive Q$q as signed word$word, retaining cached coefficients',
+    ({ q, word }) => {
+      const page = fixture(),
+        bands = decodeEq(page);
+      bands[8].q = q;
+      const original = structuredClone(bands),
+        encoded = encodeEq(bands);
+      expect(new DataView(encoded.buffer).getInt16(248, true)).toBe(word);
+      expect(encoded.subarray(0, 180)).toEqual(page.subarray(0, 180));
+      expect(decodeEq(encoded)[8].q).toBe(word / 1000);
+      expect(bands).toEqual(original);
+    },
+  );
+
+  it.each([32.7675, 32.768, 40, 65.535, -0.001])(
+    'refuses Q%s metadata rather than emitting a signed-word wrap despite stable cached coefficients',
+    (q) => {
+      const bands = decodeEq(fixture());
+      bands[8].q = q;
+      const original = structuredClone(bands);
+      expect(() => encodeEq(bands)).toThrow('metadata exceeds device range');
+      expect(bands).toEqual(original);
+    },
+  );
+
+  it.each([32.7675, -0.001])(
+    'refuses an explicit simulated EQ upload with Q%s before any wire request or backup',
+    async (q) => {
+      const bands = decodeEq(fixture());
+      bands[8].q = q;
+      const original = structuredClone(bands),
+        panel = new SimulatedPanel('SYNTHETIC-EQ-SIGNED-Q'),
+        memoryBefore = panel.memory.slice(),
+        backups: Backup[] = [],
+        session = new PanelSession(panel, async (backup) => {
+          backups.push(backup);
+        });
+      await expect(session.uploadEq(1, bands, true)).rejects.toThrow(
+        'metadata exceeds device range',
+      );
+      expect(panel.requests).toEqual([]);
+      expect(panel.memory).toEqual(memoryBefore);
+      expect(backups).toEqual([]);
+      expect(bands).toEqual(original);
+    },
+  );
+});

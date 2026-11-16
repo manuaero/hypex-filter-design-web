@@ -2,6 +2,62 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V52 EQ metadata, browser recovery and native link comparisons
+
+The complete private run passed **3,573/3,573 tests in 228 files**: 3,465 canonical tests in 225 files plus 108 retained diagnostic assertions in 3 files. The public run passed **3,464 tests plus the sole optional exact installed-PDF skip**, 3,465 total in 225 files. TypeScript, Next and Worker packaging passed on unchanged checked source. All 449 source and 13 protected public files are tracked separately from ignored native/runtime evidence. Five bounded source/build privacy categories returned zero matches; these scans are not exhaustive secret detection.
+
+The installed HFD 5.2.4.24 reader interprets initialized input-EQ Q words as
+signed 16-bit, then divides nonzero values by 1000; exact zero retains Q 0.707.
+The browser now follows that interpretation. Its encoder refuses positive values
+whose rounded metadata word exceeds 32767, because HFD would read them as
+negative. Negative metadata remains readable with its retained compiled words,
+while existing positive-Q authoring/bank checks and negative-word write
+refusals remain in place. Erased-band handling, ordinary positive authoring and raw recovery images
+remain separate. This correction is backed by on-disk native code and independent
+CRC-valid software fixtures, without a new physical EQ write.
+
+The released V51/f31 software was exercised in actual Chrome through the real
+Studio, workspace authority and production local MCP client/server. Thirty
+observations and 40 HTTP requests support 35 accepted browser checks. Two earlier
+verifier assertions are retained: an incorrect signal-chain heading expectation
+and a premature synchronous socket-close expectation. Corrected checks passed.
+The malformed folder request without its required name was refused before any
+mutation; the named request succeeded. These diagnostics are not rewritten as
+successful attempts.
+
+Named accepted paths include native XML and unknown-group Open, explicit Both
+preparation, independent Left edits despite Mirror, exact paired Undo, JSON
+snapshot origin despite sourceXml, verified chunk commit, receipt replay,
+native-only folders, valid sidecars and stale-sidecar native fallback. Complete
+Left/Right originals and baseline selection survived normal reload and cold
+receipt replay. The final workspace was saved, disconnected and unchanged;
+the test tab and owned loopback servers were closed. This covers those synthetic
+paths, not every command or physical stereo operation.
+
+Fresh classic screenshots and physical input in offline HFD produced five
+archived explicit File Saves. An initial input saved on preset 3 lost its P1
+link; that case is retained separately. A link created through HFD confirmed
+the saved linkedto=1 representation. Corrected independent A/B inputs used saved
+preset 1 and group 777: A Open/Save without a Graph retained Gain 24, invert/mute,
+local delay and all 135 BQ/cache records. B explicit linked Graph opening copied
+Gain 0, invert/mute, local delay and BQ processing from the master. C used saved
+group 2 and opened the Graph automatically; its whole parsed output equals B
+except for saved group. Destination AdditionalGain 0 and process identities
+remained intact, while the master retained AdditionalGain 10. Global delay 2
+already became 0 in A and is not attributed separately to Graph copying. FIR
+processing was not varied in this runtime comparison.
+
+HFD closed normally before releasing the metadata-only HID exclusion. Original
+and both Restore files stayed exact, Settings outside RecentProjects stayed
+byte-exact, and ASIO selections stayed empty. No amplifier setting or bridge
+configuration was applied. The exclusion is not a physical USB disconnect or
+bus trace, and this is not a fresh amplifier-state or flash-image verification.
+Resolved-link admission, saved-preset interaction and browser coefficient-cache
+representation still need an explicit implementation policy; no blanket parser
+normalization is implied. Physical two-device testing, macOS, acoustics, manual
+download delivery and exhaustive HFD parity remain open.
+
+
 ## V51 native File Open checkpoint
 
 The completed private run passed **3,555 / 3,555 tests in 228 files**: 3,447 canonical tests in 225 files plus 108 retained diagnostics in 3 files. The public run passed **3,446 tests**, with the sole optional installed-PDF skip, out of 3,447 tests in 225 files. TypeScript, Next and Worker checks passed on unchanged source. The public manifest contains 449 source files and 13 protected files, 462 files in total.

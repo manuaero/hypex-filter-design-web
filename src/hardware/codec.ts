@@ -332,7 +332,9 @@ export function encodeEq(bands: Filter[]) {
     const freq = roundEven(f.frequency * 100),
       q = roundEven(f.q * 1000),
       g = roundEven(f.gain * 1000);
-    if (freq < 0 || freq > 0xffffff || q < 0 || q > 65535 || g < -32768 || g > 32767)
+    // Native ab0da8/ab0ef3 reads Q as signed16. Refuse a positive
+    // rounded word that would become negative when the panel page is read.
+    if (freq < 0 || freq > 0xffffff || q < 0 || q > 32767 || g < -32768 || g > 32767)
       throw new Error('Input EQ metadata exceeds device range');
     bytes.set(addr(freq), o + 1);
     v.setUint16(o + 4, q, true);
@@ -366,7 +368,7 @@ export function decodeEq(bytes: Uint8Array): Filter[] {
     if (!kind) throw new Error('Unsupported EQ metadata type');
     const a = Array.from({ length: 5 }, (_, j) => v.getInt32(i * 20 + j * 4, true) / 2 ** 24),
       frequency = bytes[o + 1] + (bytes[o + 2] << 8) + (bytes[o + 3] << 16),
-      q = v.getUint16(o + 4, true);
+      q = v.getInt16(o + 4, true);
     return {
       ...f,
       kind,
