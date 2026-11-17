@@ -10,6 +10,20 @@ _Filter editor with a persistent parameter inspector._
 
 This is an independent project. Software implementation and simulation coverage do not establish complete HFD compatibility or qualify every hardware operation. Current live protocol support targets FA503 / DSP3-213 core 5.1. Other device families, macOS USB behavior and simultaneous operation of two physical amplifiers remain unqualified.
 
+## V58 output mute and gain
+
+Live mute controls for CH1/CH2/CH3 and the selected channel Gain now stay visible
+at the top of the sidebar. Live mute affects one output on the selected amplifier
+immediately; Preview mute remains a separate local analysis control. Design gain
+uses the existing native profile and requires an explicit upload. The shared
+MCP `fusion_controls` accepts a strict, one-based `outputMute` intent that merges
+only that bit into fresh device status. The registry remains at 92 tools.
+See [Output levels and mute](docs/OUTPUT-LEVELS.md).
+
+This increment includes the latest upstream erased-FIR-filename fix. Its new
+physical-output behavior is tested with simulated panels; browser layout checks
+sent no amplifier setters and did not change bridge configuration.
+
 ## V57 USB discovery and current-device reading
 
 The connection manager finds previously permitted amplifiers, reconnects remembered serial identities and offers **Use as Left**, **Use as Right** and **Swap Left/Right**. First USB access still needs the browser's device chooser. Exclusive digital routing is shown as a hint; ambiguous devices stay unassigned. Mapping changes only the attached connections and preserves both designs. **Auto reconnect** controls future automatic connections, while a manual disconnect pauses scans and hotplug reconnection for the current session until an explicit Connect, Add or assignment.
@@ -185,6 +199,7 @@ The public source does not include vendor executables, firmware bundles or a ven
 - [Architecture and persistence](docs/ARCHITECTURE.md)
 - [MCP server](docs/MCP.md)
 - [Explicit coefficient editing and cache interpretation](docs/HFD-RAW-COEFFICIENT-EDITOR.md)
+- [Output mute, channel gain and filter gain](docs/OUTPUT-LEVELS.md)
 - [USB connections, Left/Right mapping and current-device reading](docs/USB-CONNECTIONS.md)
 - [USB protocol and operation boundaries](docs/USB_PROTOCOL.md)
 - [Native digital User mixer](docs/NATIVE_MIXER.md)

@@ -53,6 +53,8 @@ export interface Controls {
   volume?: number;
   preset?: number;
   channelMutes?: boolean[];
+  /** One output intent, merged into the fresh status inside the session reservation. */
+  outputMute?: { channel: number; muted: boolean };
   routing?: number;
   forceInput?: number;
   eqEnabled?: boolean;
@@ -129,6 +131,23 @@ export function settings(status: PanelStatus) {
   };
 }
 export function control(status: PanelStatus, patch: Controls, moduleType?: number) {
+  if (Object.hasOwn(patch, 'outputMute')) {
+    const intent = patch.outputMute;
+    if (
+      Object.keys(patch).length !== 1 ||
+      !intent ||
+      typeof intent !== 'object' ||
+      Array.isArray(intent) ||
+      Object.keys(intent).length !== 2 ||
+      !Object.hasOwn(intent, 'channel') ||
+      !Object.hasOwn(intent, 'muted') ||
+      !Number.isInteger(intent.channel) ||
+      intent.channel < 1 ||
+      intent.channel > 3 ||
+      typeof intent.muted !== 'boolean'
+    )
+      throw new Error('outputMute requires only channel 1–3 and muted, as a separate intent');
+  }
   for (const operation of requiredControlOperations(patch))
     assertOperationAllowed(status, operation, moduleType);
   const b = packet(5);
@@ -151,6 +170,10 @@ export function control(status: PanelStatus, patch: Controls, moduleType?: numbe
   if (patch.channelMutes) {
     if (patch.channelMutes.length !== 3) throw new Error('Expected three mute bits');
     b[6] = (b[6] & 0xf8) | patch.channelMutes.reduce((x, m, i) => x | (m ? 1 << i : 0), 0);
+  }
+  if (patch.outputMute) {
+    const mask = 1 << (patch.outputMute.channel - 1);
+    b[6] = (b[6] & ~mask) | (patch.outputMute.muted ? mask : 0);
   }
   if (patch.routing !== undefined) {
     if (![0, 1, 2, 3, 4].includes(patch.routing)) throw new Error('Invalid routing');

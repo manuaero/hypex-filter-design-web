@@ -513,9 +513,7 @@ export default function DeviceSettings({
               label={`Output ${i + 1} mute`}
               checked={muted}
               onChange={(value) => {
-                const channelMutes = [...live.status.channelMutes];
-                channelMutes[i] = value;
-                void controls({ channelMutes });
+                void controls({ outputMute: { channel: i + 1, muted: value } });
               }}
             />
           ))}

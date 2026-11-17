@@ -2,6 +2,57 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V58 output mute and gain
+
+The sidebar now pins all three output selectors and live mute buttons, plus the
+selected channel’s existing native Gain editor. Extra channel parameters scroll
+independently. Live output mute is separate from Preview mute and design Gain;
+design changes still need explicit uploads. Link controls does not widen a human
+one-output mute beyond the selected amplifier. See [Output levels](OUTPUT-LEVELS.md).
+
+The shared `fusion_controls` / session path accepts one-based
+`outputMute: { channel, muted }` as a standalone intent, validates it, merges one
+bit into final fresh status and verifies the reply. Other mute bits, master mute,
+source, active preset, volume and bridge configuration are retained. The older
+whole `channelMutes` array keeps its explicit all-three replacement semantics.
+Device settings switches use the same one-output intent. A failed or uncertain
+output acknowledgement reports an error without a retry, rollback or additional
+master-mute setter; other existing controls retain their previous recovery policy.
+
+Focused tests passed **28 codec/session/MCP cases** and **seven actual-Studio
+cases** using simulated panels. They cover malformed/composite refusal, fresh
+state preservation, explicit target roles despite linked controls, staged Gain,
+Undo, preview mute, linked-follower refusal and stale editor drafts. The uncertain
+reply regression first failed with two setters; the fixed UI and MCP paths each
+send exactly one requested setter and report the failure. Focused counts overlap
+the complete suites and are not added to their totals.
+
+A read-only browser layout check at 514×818 confirmed all three live mute buttons
+and Gain visible without scrolling. Selecting CH2 changed the Gain context, and
+CH1 was restored. The browser reported both USB roles offline; mute buttons were
+disabled. No physical output mute, volume, gain upload, bridge or other amplifier
+setter was requested. This qualifies layout/navigation, not new hardware behavior.
+
+The latest remote commit `52f48ff` was fetched and integrated, retaining its erased
+EEPROM FIR-name normalization and tests. Raw recovery bytes stay intact while
+erased names display as empty. The tool registry remains at **92 commands**.
+
+The final private suite passed **4,047/4,047 assertions in 255 files**:
+3,939 canonical assertions in 252 files plus 108 retained diagnostics in three files.
+Nonincremental TypeScript and changed-source formatting passed. Public validation
+and production builds are recorded separately from these private checks.
+
+No two-physical-amplifier, macOS USB, physical gain/upload or complete HFD parity
+qualification is inferred. Bridge configuration must never be applied during
+testing with the connected drivers.
+
+The complete public suite passed **3,938 assertions**, with the sole optional
+installed-vendor-PDF check skipped because those bytes are not distributed:
+**3,939 total in 252 files**, no failures. Nonincremental TypeScript, formatting
+and the Next/Worker production build passed. All 24 raw public static assets and
+the Worker passed privacy scans. This public subset excludes the 108 private
+diagnostic assertions; the two suite totals are not additive.
+
 ## V57 USB discovery, roles and current-device reading
 
 The [connection manager](USB-CONNECTIONS.md) discovers previously permitted

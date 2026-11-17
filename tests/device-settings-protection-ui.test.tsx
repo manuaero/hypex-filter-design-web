@@ -230,7 +230,7 @@ describe('actual DeviceSettings native OEM access rendering', () => {
     for (const label of ['Output 1 mute', 'Output 2 mute', 'Output 3 mute'])
       expect(disabled(toggle(label))).toBe(false);
     await act(async () => toggle('Output 2 mute').click());
-    expect(controls).toHaveBeenLastCalledWith({ channelMutes: [false, true, false] });
+    expect(controls).toHaveBeenLastCalledWith({ outputMute: { channel: 2, muted: true } });
     const preset = select('Hardware preset');
     await act(async () => {
       preset.value = '2';

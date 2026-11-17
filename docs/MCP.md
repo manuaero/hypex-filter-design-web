@@ -4,6 +4,33 @@ Agents use the same controllers and validation as the human interface. Normal us
 
 The current registry contains **92 commands**, including stateless native parameter-wheel adjustments, shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
 
+## V58 live output mute
+
+The existing `fusion_controls` now accepts a strict, standalone one-output mute
+intent. The registry remains at 92 commands. Channels are one-based:
+
+```json
+{ "target": "right", "patch": { "outputMute": { "channel": 2, "muted": true } } }
+```
+
+`outputMute` must be the only patch field and contain only `channel` (1–3) and
+`muted` (boolean). It merges one bit into final fresh status inside the shared
+session reservation and verifies the returned control state. Other output mute
+bits, master mute, source, preset, volume and bridge configuration are retained.
+The older `channelMutes` array explicitly replaces all three bits.
+An unconfirmed output-mute response reports an error without automatic retry,
+rollback or an additional master-mute setter.
+
+The human sidebar targets only the selected amplifier, independent of Link
+controls. MCP continues to use its explicit `target`; Both preserves each amp’s
+other mute bits independently. Channel design Gain is still `fusion_channel_set`
+with `patch.gain`, and takes effect on hardware only after an explicit upload.
+Preview mute is a separate local analysis flag. See [Output levels](OUTPUT-LEVELS.md).
+
+New live-output tests use simulated panels. The browser check only observed the
+offline UI and changed the selected editing channel, then restored it. No real
+output mute/unmute, volume, filter upload or bridge action was tested.
+
 ## V57 USB discovery and current-device reading
 
 `fusion_devices` shares the human connection manager. It does not open a USB

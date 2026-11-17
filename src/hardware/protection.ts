@@ -140,7 +140,7 @@ export function requiredControlOperations(patch: Controls): ProtectionOperation[
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
     let operation: ProtectionOperation;
-    if (['mute', 'volume', 'channelMutes'].includes(key)) operation = 'volumeMute';
+    if (['mute', 'volume', 'channelMutes', 'outputMute'].includes(key)) operation = 'volumeMute';
     else if (key === 'preset') operation = 'preset';
     else if (key === 'forceInput') operation = 'inputSource';
     else if (['eqEnabled', 'presetEq'].includes(key)) operation = 'equalizer';

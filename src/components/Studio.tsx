@@ -4,6 +4,8 @@ import FilterPalette, { FilterGlyph, FILTER_LABELS, hasQ } from './FilterPalette
 import FilterCards from './FilterCards';
 import EqPresetActions from './EqPresetActions';
 import LiveEqToggle from './LiveEqToggle';
+import OutputChannels from './OutputChannels';
+import outputStyles from './OutputChannels.module.css';
 import LiveMeters from './LiveMeters';
 import NoisePanel from './NoisePanel';
 import { createNoiseController } from '../application/noise-control';
@@ -2208,9 +2210,12 @@ export default function Studio() {
         }),
       );
       if (results.some((r) => r.status === 'rejected')) {
-        await Promise.allSettled(
-          prepared.map(({ connection }) => connection.session.setControls({ mute: true })),
-        );
+        // A one-output intent must not expand into a master-mute write when its
+        // acknowledgement is uncertain. Report it without another setter.
+        if (!patch.outputMute)
+          await Promise.allSettled(
+            prepared.map(({ connection }) => connection.session.setControls({ mute: true })),
+          );
         throw new Error(
           results
             .filter((r) => r.status === 'rejected')
@@ -3667,229 +3672,195 @@ export default function Studio() {
             );
           })}
         </nav>
-        <aside className="sidebar">
-          <div className="section-label">
-            EDITING <span>{w.slot.toUpperCase()}</span>
-          </div>
-          <div className="preset-tabs">
-            {[0, 1, 2].map((i) => (
-              <button
-                key={i}
-                className={w.preset === i ? 'active' : ''}
-                onClick={() => chooseWorkspace({ preset: i, filter: 0 })}
-              >
-                Preset {i + 1}
-              </button>
-            ))}
-          </div>
-          <input
-            className="preset-name"
-            aria-label="Preset name"
-            value={preset.name}
-            onChange={(e) =>
-              w.edit((p) => {
-                p.presets[w.preset].name = e.target.value;
-              })
-            }
-          />
-          {uploadFirWarnings.length > 0 && (
-            <details className="side-section" aria-label="Upload FIR scope">
-              <summary style={{ fontSize: 9, lineHeight: 1.5, cursor: 'pointer' }}>
-                FIR upload scope · {uploadFirWarnings.length}{' '}
-                {uploadFirWarnings.length === 1 ? 'advisory' : 'advisories'}
-                <small
-                  style={{ display: 'block', fontSize: 8, marginLeft: 12, color: 'var(--muted)' }}
-                >
-                  Other-placement FIRs stay in the graph; not uploaded.
-                </small>
-                <small
-                  style={{ display: 'block', fontSize: 8, marginLeft: 12, color: 'var(--muted)' }}
-                >
-                  {SLOTS.flatMap((slot) => {
-                    const presets = [
-                      ...new Set(
-                        uploadFirWarnings
-                          .filter((warning) => warning.slot === slot)
-                          .map((warning) => warning.preset),
-                      ),
-                    ];
-                    return presets.length
-                      ? [`${slot === 'left' ? 'Left' : 'Right'} P${presets.join(',')}`]
-                      : [];
-                  }).join(' · ')}
-                </small>
-              </summary>
-              <div
-                role="region"
-                aria-label="FIR upload advisories"
-                tabIndex={0}
-                style={{ maxHeight: 160, overflowY: 'auto' }}
-              >
-                {uploadFirWarnings.map((warning) => (
-                  <p className="hint" key={`${warning.slot}:${warning.preset}:${warning.message}`}>
-                    {warning.slot === 'left' ? 'Left' : 'Right'} · Preset {warning.preset}:{' '}
-                    {warning.message}
-                  </p>
-                ))}
-              </div>
-            </details>
-          )}
-          <div className="channel-list">
-            {preset.channels.map((c, i) => (
-              <button
-                key={c.id}
-                style={{ '--channel-color': COLORS[i] } as React.CSSProperties}
-                className={w.channel === i ? 'active' : ''}
-                onClick={() => chooseWorkspace({ channel: i, filter: 0 })}
-              >
-                <span className="channel-number">0{i + 1}</span>
-                <div>
-                  <strong>{c.name}</strong>
-                  <small>
-                    {c.filters.filter((f) => f.enabled && f.kind !== 'unity').length} filters ·{' '}
-                    {c.gain.toFixed(1)} dB
-                  </small>
-                </div>
-                <span className="channel-pip" />
-              </button>
-            ))}
-          </div>
-          <div className="side-section">
+        <aside className={`sidebar ${outputStyles.sidebar}`}>
+          <div className={outputStyles.pinned}>
             <div className="section-label">
-              CHANNEL PARAMETERS <SlidersHorizontal size={13} />
+              EDITING <span>{w.slot.toUpperCase()}</span>
             </div>
-            <label className="field-label">
-              Channel name
-              <input value={channel.name} onChange={(e) => editChannel({ name: e.target.value })} />
-            </label>
-            <div
-              ref={hardwareGainInput}
-              data-channel-gain-context={`${w.slot}:${documentEpochs[w.slot]}:${w.preset}:${channel.id}`}
-            >
-              <Numeric
-                contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:gain:${channel.additionalGain ?? 0}`}
-                channelGain
-                channelGainAdditionalGain={channel.additionalGain ?? 0}
-                channelGainRevision={w.documentRevision}
-                getChannelGainRevision={() => useWorkspace.getState().documentRevision}
-                begin={beginNumericGesture}
-                end={w.endGesture}
-                disabled={channel.linkedTo !== undefined}
-                label="Gain"
-                value={channel.gain}
-                onChange={(gain) => editChannel({ gain })}
-                onTextCommit={(text) => {
-                  const role = editChannel({ gain: text });
-                  return role ? role.gainResult! : false;
-                }}
-                onChannelGainWheel={(result, direction) => {
-                  const role = editChannel({ gainWheel: { direction, basis: w.slot } }, w.channel, {
-                    gainWheelSourceEvent: {
-                      slot: w.slot,
-                      channelId: channel.id,
-                      expectedGain: channel.gain,
-                      expectedAdditionalGain: channel.additionalGain ?? 0,
-                      result,
-                    },
-                  });
-                  return role !== false;
-                }}
-                unit="dB"
-                min={HFD_CHANNEL_GAIN_BOUNDS.min}
-                max={HFD_CHANNEL_GAIN_BOUNDS.max}
-                adjustmentBounds={HFD_CHANNEL_GAIN_BOUNDS}
-                step={0.1}
-              />
+            <div className="preset-tabs">
+              {[0, 1, 2].map((i) => (
+                <button
+                  key={i}
+                  className={w.preset === i ? 'active' : ''}
+                  onClick={() => chooseWorkspace({ preset: i, filter: 0 })}
+                >
+                  Preset {i + 1}
+                </button>
+              ))}
             </div>
-            {hardwareGainAvailable && (
-              <>
-                <label className="toggle-label">
-                  <input
-                    aria-label="Hardware gain compensation"
-                    type="checkbox"
-                    disabled={channel.linkedTo !== undefined}
-                    checked={(channel.additionalGain ?? 0) !== 0}
-                    onChange={(event) => editChannel({ hardwareGain: event.target.checked })}
-                  />
-                  <span className="switch" />
-                  Hardware gain compensation
-                </label>
-                <p className="hint">Design compensation only · amplifier settings stay separate.</p>
-              </>
-            )}
-            <Numeric
-              begin={beginDelayGesture}
-              end={w.endGesture}
-              disabled={channel.linkedTo !== undefined || !selectedDelayProfiles}
-              label="Delay"
-              contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:delay:${selectedDelayProfiles?.contextKey}`}
-              channelDelay={selectedDelayProfiles?.local}
-              channelDelayRevision={w.documentRevision}
-              getChannelDelayRevision={() => useWorkspace.getState().documentRevision}
-              value={channel.delayUs}
-              onChange={(delayUs) => editChannel({ delayUs })}
-              onTextCommit={(text) => {
-                const role = editChannel({ delayUs: text });
-                return role ? role.delayResult! : false;
-              }}
-              onChannelDelayWheel={(result, direction) => {
-                const role = editChannel(
-                  { delayWheel: { parameter: 'local', direction, basis: w.slot } },
-                  w.channel,
-                  {
-                    delayWheelSourceEvent: {
-                      slot: w.slot,
-                      channelId: channel.id,
-                      expectedValue: channel.delayUs,
-                      expectedContextKey: selectedDelayProfiles!.contextKey,
-                      result,
-                    },
-                  },
-                );
-                return role !== false;
-              }}
-              unit="µs"
-              min={0}
-              max={
-                selectedDelayProfiles ? Number(selectedDelayProfiles.local.maximumText) : undefined
+            <input
+              className="preset-name"
+              aria-label="Preset name"
+              value={preset.name}
+              onChange={(e) =>
+                w.edit((p) => {
+                  p.presets[w.preset].name = e.target.value;
+                })
               }
-              step={1e6 / w.documents[w.slot].sampleRate}
             />
-            <div
-              ref={globalDelayInput}
-              data-delay-context={
-                selectedDelayProfiles &&
-                delayViewKey(
-                  { slot: w.slot, presetIndex: w.preset, channelIndex: w.channel },
-                  channel.id,
-                  selectedDelayProfiles.contextKey,
-                )
+            <OutputChannels
+              channels={preset.channels}
+              colors={COLORS}
+              selected={w.channel}
+              slot={w.slot}
+              channelMutes={selectedLive?.status.channelMutes}
+              masterMuted={selectedLive?.status.muted}
+              busy={!!busy || !!selectedLive?.session.busy}
+              onSelect={(index) => chooseWorkspace({ channel: index, filter: 0 })}
+              onLiveMute={(index, muted) =>
+                void controls({ outputMute: { channel: index + 1, muted } })
               }
-            >
+            />
+            <section className={outputStyles.gain} aria-label={`Design gain CH${w.channel + 1}`}>
+              <div className={outputStyles.gainContext}>
+                <span>DESIGN GAIN</span>
+                <strong>CH{w.channel + 1}</strong>
+              </div>
+              <div
+                ref={hardwareGainInput}
+                data-channel-gain-context={`${w.slot}:${documentEpochs[w.slot]}:${w.preset}:${channel.id}`}
+              >
+                <Numeric
+                  contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:gain:${channel.additionalGain ?? 0}`}
+                  channelGain
+                  channelGainAdditionalGain={channel.additionalGain ?? 0}
+                  channelGainRevision={w.documentRevision}
+                  getChannelGainRevision={() => useWorkspace.getState().documentRevision}
+                  begin={beginNumericGesture}
+                  end={w.endGesture}
+                  disabled={channel.linkedTo !== undefined}
+                  label="Gain"
+                  value={channel.gain}
+                  onChange={(gain) => editChannel({ gain })}
+                  onTextCommit={(text) => {
+                    const role = editChannel({ gain: text });
+                    return role ? role.gainResult! : false;
+                  }}
+                  onChannelGainWheel={(result, direction) => {
+                    const role = editChannel(
+                      { gainWheel: { direction, basis: w.slot } },
+                      w.channel,
+                      {
+                        gainWheelSourceEvent: {
+                          slot: w.slot,
+                          channelId: channel.id,
+                          expectedGain: channel.gain,
+                          expectedAdditionalGain: channel.additionalGain ?? 0,
+                          result,
+                        },
+                      },
+                    );
+                    return role !== false;
+                  }}
+                  unit="dB"
+                  min={HFD_CHANNEL_GAIN_BOUNDS.min}
+                  max={HFD_CHANNEL_GAIN_BOUNDS.max}
+                  adjustmentBounds={HFD_CHANNEL_GAIN_BOUNDS}
+                  step={0.1}
+                />
+              </div>
+              <p>Upload preset to apply gain to the amplifier.</p>
+            </section>
+          </div>
+          <div className={outputStyles.parameters}>
+            {uploadFirWarnings.length > 0 && (
+              <details className="side-section" aria-label="Upload FIR scope">
+                <summary style={{ fontSize: 9, lineHeight: 1.5, cursor: 'pointer' }}>
+                  FIR upload scope · {uploadFirWarnings.length}{' '}
+                  {uploadFirWarnings.length === 1 ? 'advisory' : 'advisories'}
+                  <small
+                    style={{ display: 'block', fontSize: 8, marginLeft: 12, color: 'var(--muted)' }}
+                  >
+                    Other-placement FIRs stay in the graph; not uploaded.
+                  </small>
+                  <small
+                    style={{ display: 'block', fontSize: 8, marginLeft: 12, color: 'var(--muted)' }}
+                  >
+                    {SLOTS.flatMap((slot) => {
+                      const presets = [
+                        ...new Set(
+                          uploadFirWarnings
+                            .filter((warning) => warning.slot === slot)
+                            .map((warning) => warning.preset),
+                        ),
+                      ];
+                      return presets.length
+                        ? [`${slot === 'left' ? 'Left' : 'Right'} P${presets.join(',')}`]
+                        : [];
+                    }).join(' · ')}
+                  </small>
+                </summary>
+                <div
+                  role="region"
+                  aria-label="FIR upload advisories"
+                  tabIndex={0}
+                  style={{ maxHeight: 160, overflowY: 'auto' }}
+                >
+                  {uploadFirWarnings.map((warning) => (
+                    <p
+                      className="hint"
+                      key={`${warning.slot}:${warning.preset}:${warning.message}`}
+                    >
+                      {warning.slot === 'left' ? 'Left' : 'Right'} · Preset {warning.preset}:{' '}
+                      {warning.message}
+                    </p>
+                  ))}
+                </div>
+              </details>
+            )}
+            <div className="side-section">
+              <div className="section-label">
+                CHANNEL PARAMETERS <SlidersHorizontal size={13} />
+              </div>
+              <label className="field-label">
+                Channel name
+                <input
+                  value={channel.name}
+                  onChange={(e) => editChannel({ name: e.target.value })}
+                />
+              </label>
+              {hardwareGainAvailable && (
+                <>
+                  <label className="toggle-label">
+                    <input
+                      aria-label="Hardware gain compensation"
+                      type="checkbox"
+                      disabled={channel.linkedTo !== undefined}
+                      checked={(channel.additionalGain ?? 0) !== 0}
+                      onChange={(event) => editChannel({ hardwareGain: event.target.checked })}
+                    />
+                    <span className="switch" />
+                    Hardware gain compensation
+                  </label>
+                  <p className="hint">
+                    Design compensation only · amplifier settings stay separate.
+                  </p>
+                </>
+              )}
               <Numeric
-                begin={beginGlobalDelayGesture}
+                begin={beginDelayGesture}
                 end={w.endGesture}
-                disabled={!selectedDelayProfiles}
-                label="Global delay · analysis"
-                contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:global-delay:${selectedDelayProfiles?.contextKey}`}
-                channelDelay={selectedDelayProfiles?.global}
+                disabled={channel.linkedTo !== undefined || !selectedDelayProfiles}
+                label="Delay"
+                contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:delay:${selectedDelayProfiles?.contextKey}`}
+                channelDelay={selectedDelayProfiles?.local}
                 channelDelayRevision={w.documentRevision}
                 getChannelDelayRevision={() => useWorkspace.getState().documentRevision}
-                value={channel.globalDelayUs}
-                onChange={(globalDelayUs) => editChannel({ globalDelayUs })}
+                value={channel.delayUs}
+                onChange={(delayUs) => editChannel({ delayUs })}
                 onTextCommit={(text) => {
-                  const role = editChannel({ globalDelayUs: text });
+                  const role = editChannel({ delayUs: text });
                   return role ? role.delayResult! : false;
                 }}
                 onChannelDelayWheel={(result, direction) => {
                   const role = editChannel(
-                    { delayWheel: { parameter: 'global', direction, basis: w.slot } },
+                    { delayWheel: { parameter: 'local', direction, basis: w.slot } },
                     w.channel,
                     {
                       delayWheelSourceEvent: {
                         slot: w.slot,
                         channelId: channel.id,
-                        expectedValue: channel.globalDelayUs,
+                        expectedValue: channel.delayUs,
                         expectedContextKey: selectedDelayProfiles!.contextKey,
                         result,
                       },
@@ -3901,111 +3872,163 @@ export default function Studio() {
                 min={0}
                 max={
                   selectedDelayProfiles
-                    ? Number(selectedDelayProfiles.global.maximumText)
+                    ? Number(selectedDelayProfiles.local.maximumText)
                     : undefined
                 }
                 step={1e6 / w.documents[w.slot].sampleRate}
               />
-            </div>
-            {delayProfileError && (
-              <p className="hint" role="status">
-                {delayProfileError}
-              </p>
-            )}
-            <div className="parameter-hint">
-              {((channel.delayUs + channel.globalDelayUs) * 0.343).toFixed(1)} mm ·{' '}
-              {Math.round((channel.delayUs + channel.globalDelayUs) * 0.09375)} samples
-            </div>
-            {channel.coefficientCache === 'unresolved' && (
+              <div
+                ref={globalDelayInput}
+                data-delay-context={
+                  selectedDelayProfiles &&
+                  delayViewKey(
+                    { slot: w.slot, presetIndex: w.preset, channelIndex: w.channel },
+                    channel.id,
+                    selectedDelayProfiles.contextKey,
+                  )
+                }
+              >
+                <Numeric
+                  begin={beginGlobalDelayGesture}
+                  end={w.endGesture}
+                  disabled={!selectedDelayProfiles}
+                  label="Global delay · analysis"
+                  contextKey={`${w.slot}:${w.preset}:${channel.id}:${documentEpochs[w.slot]}:global-delay:${selectedDelayProfiles?.contextKey}`}
+                  channelDelay={selectedDelayProfiles?.global}
+                  channelDelayRevision={w.documentRevision}
+                  getChannelDelayRevision={() => useWorkspace.getState().documentRevision}
+                  value={channel.globalDelayUs}
+                  onChange={(globalDelayUs) => editChannel({ globalDelayUs })}
+                  onTextCommit={(text) => {
+                    const role = editChannel({ globalDelayUs: text });
+                    return role ? role.delayResult! : false;
+                  }}
+                  onChannelDelayWheel={(result, direction) => {
+                    const role = editChannel(
+                      { delayWheel: { parameter: 'global', direction, basis: w.slot } },
+                      w.channel,
+                      {
+                        delayWheelSourceEvent: {
+                          slot: w.slot,
+                          channelId: channel.id,
+                          expectedValue: channel.globalDelayUs,
+                          expectedContextKey: selectedDelayProfiles!.contextKey,
+                          result,
+                        },
+                      },
+                    );
+                    return role !== false;
+                  }}
+                  unit="µs"
+                  min={0}
+                  max={
+                    selectedDelayProfiles
+                      ? Number(selectedDelayProfiles.global.maximumText)
+                      : undefined
+                  }
+                  step={1e6 / w.documents[w.slot].sampleRate}
+                />
+              </div>
+              {delayProfileError && (
+                <p className="hint" role="status">
+                  {delayProfileError}
+                </p>
+              )}
+              <div className="parameter-hint">
+                {((channel.delayUs + channel.globalDelayUs) * 0.343).toFixed(1)} mm ·{' '}
+                {Math.round((channel.delayUs + channel.globalDelayUs) * 0.09375)} samples
+              </div>
+              {channel.coefficientCache === 'unresolved' && (
+                <label className="field-label">
+                  Imported coefficients
+                  <select
+                    aria-label="Imported coefficient gain"
+                    defaultValue=""
+                    onChange={(e) =>
+                      w.edit((p) =>
+                        resolveGainCache(
+                          p.presets[w.preset].channels[w.channel],
+                          e.target.value as 'base' | 'effective',
+                        ),
+                      )
+                    }
+                  >
+                    <option value="" disabled>
+                      Choose gain interpretation
+                    </option>
+                    <option value="base">Base filter coefficients</option>
+                    <option value="effective">Already include channel gain</option>
+                  </select>
+                </label>
+              )}
               <label className="field-label">
-                Imported coefficients
+                Channel link
                 <select
-                  aria-label="Imported coefficient gain"
-                  defaultValue=""
+                  aria-label="Channel link"
+                  value={channel.linkedTo ?? ''}
                   onChange={(e) =>
                     w.edit((p) =>
-                      resolveGainCache(
-                        p.presets[w.preset].channels[w.channel],
-                        e.target.value as 'base' | 'effective',
+                      linkChannel(
+                        p.presets[w.preset],
+                        w.channel,
+                        e.target.value === '' ? null : Number(e.target.value),
                       ),
                     )
                   }
                 >
-                  <option value="" disabled>
-                    Choose gain interpretation
-                  </option>
-                  <option value="base">Base filter coefficients</option>
-                  <option value="effective">Already include channel gain</option>
+                  <option value="">Independent channel</option>
+                  {preset.channels.map(
+                    (c, i) =>
+                      i !== w.channel && (
+                        <option key={i} value={i}>
+                          Follow {c.name}
+                        </option>
+                      ),
+                  )}
                 </select>
               </label>
-            )}
-            <label className="field-label">
-              Channel link
-              <select
-                aria-label="Channel link"
-                value={channel.linkedTo ?? ''}
-                onChange={(e) =>
-                  w.edit((p) =>
-                    linkChannel(
-                      p.presets[w.preset],
-                      w.channel,
-                      e.target.value === '' ? null : Number(e.target.value),
-                    ),
-                  )
+              <div className="polarity-row">
+                <button
+                  disabled={channel.linkedTo !== undefined}
+                  className={channel.invert ? 'active' : ''}
+                  onClick={() => editChannel({ invert: !channel.invert })}
+                >
+                  Ø Invert
+                </button>
+                <button
+                  disabled={channel.linkedTo !== undefined}
+                  className={channel.muted ? 'danger active' : ''}
+                  onClick={() => editChannel({ muted: !channel.muted })}
+                >
+                  <VolumeX size={14} />
+                  Preview mute
+                </button>
+              </div>
+            </div>
+            <div className="side-section">
+              <Toggle checked={w.linkedEdits} onChange={(v) => chooseWorkspace({ linkedEdits: v })}>
+                <Link2 size={14} />
+                Mirror L/R edits
+              </Toggle>
+              <p className="hint">
+                Applies edits to matching channels. Each amplifier retains its own project.
+              </p>
+              <button
+                className="full-width"
+                onClick={() =>
+                  w.edit((p) => {
+                    p.presets[w.preset].channels[w.channel] = structuredClone(
+                      w.documents[w.slot === 'left' ? 'right' : 'left'].presets[w.preset].channels[
+                        w.channel
+                      ],
+                    );
+                  }, false)
                 }
               >
-                <option value="">Independent channel</option>
-                {preset.channels.map(
-                  (c, i) =>
-                    i !== w.channel && (
-                      <option key={i} value={i}>
-                        Follow {c.name}
-                      </option>
-                    ),
-                )}
-              </select>
-            </label>
-            <div className="polarity-row">
-              <button
-                disabled={channel.linkedTo !== undefined}
-                className={channel.invert ? 'active' : ''}
-                onClick={() => editChannel({ invert: !channel.invert })}
-              >
-                Ø Invert
-              </button>
-              <button
-                disabled={channel.linkedTo !== undefined}
-                className={channel.muted ? 'danger active' : ''}
-                onClick={() => editChannel({ muted: !channel.muted })}
-              >
-                <VolumeX size={14} />
-                Preview mute
+                <Copy size={14} />
+                Copy from {w.slot === 'left' ? 'Right' : 'Left'}
               </button>
             </div>
-          </div>
-          <div className="side-section">
-            <Toggle checked={w.linkedEdits} onChange={(v) => chooseWorkspace({ linkedEdits: v })}>
-              <Link2 size={14} />
-              Mirror L/R edits
-            </Toggle>
-            <p className="hint">
-              Applies edits to matching channels. Each amplifier retains its own project.
-            </p>
-            <button
-              className="full-width"
-              onClick={() =>
-                w.edit((p) => {
-                  p.presets[w.preset].channels[w.channel] = structuredClone(
-                    w.documents[w.slot === 'left' ? 'right' : 'left'].presets[w.preset].channels[
-                      w.channel
-                    ],
-                  );
-                }, false)
-              }
-            >
-              <Copy size={14} />
-              Copy from {w.slot === 'left' ? 'Right' : 'Left'}
-            </button>
           </div>
         </aside>
         <section

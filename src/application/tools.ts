@@ -561,6 +561,12 @@ export const controlsSchema = z
     volume: finite.min(-96).max(18),
     preset,
     channelMutes: z.array(z.boolean()).length(3),
+    outputMute: z
+      .object({ channel: z.number().int().min(1).max(3), muted: z.boolean() })
+      .strict()
+      .describe(
+        'Mute or unmute one physical output (1–3), preserving other fresh mute bits. Supply this field alone.',
+      ),
     routing: z.number().int().min(0).max(4),
     forceInput: z
       .number()
@@ -610,7 +616,10 @@ export const controlsSchema = z
     standbyLedMode: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]),
   })
   .partial()
-  .strict();
+  .strict()
+  .refine((patch) => !Object.hasOwn(patch, 'outputMute') || Object.keys(patch).length === 1, {
+    message: 'outputMute is a separate intent; supply it alone',
+  });
 const audioToolSchema = z
   .object({
     action: z.enum([
@@ -1890,7 +1899,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     'Connect an already permitted amplifier by identity or open its browser device chooser.',
   fusion_disconnect: 'Release USB sessions for the selected roles.',
   fusion_controls:
-    'Change live controls from a fresh status packet, preserving other settings. Every target is preflighted before writes, including composite OEM permissions and actual per-role relative volumes. Native runtime input/volume/mute/preset remain available independently of mask bits. OLED maximum/dimmed brightness are 0..15 and require advertised OLED capability. standbyLedMode is encoded 0=OFF,1=100%,2=50%,3=25% and does not require OLED.',
+    'Change live controls from a fresh status packet, preserving other settings. outputMute:{channel:1|2|3,muted:boolean} is a standalone intent for one physical output and preserves the other outputs’ fresh mute bits; channelMutes explicitly replaces all three. Every target is preflighted before writes, including composite OEM permissions and actual per-role relative volumes. Native runtime input/volume/mute/preset remain available independently of mask bits. OLED maximum/dimmed brightness are 0..15 and require advertised OLED capability. standbyLedMode is encoded 0=OFF,1=100%,2=50%,3=25% and does not require OLED.',
   fusion_read_preset: 'Read the physical preset into the chosen document and save an exact backup.',
   fusion_backup: 'Save exact hardware preset sectors before any edit.',
   fusion_backups_list: 'List saved local recovery images and checksums.',
@@ -3611,9 +3620,12 @@ export function createToolExecutor(adapter: ToolAdapter) {
               }),
             );
             if (result.some((r) => r.status === 'rejected')) {
-              await Promise.allSettled(
-                slots.map((s) => get(s).session.setControls({ mute: true })),
-              );
+              // An uncertain one-output mute does not authorize a second,
+              // amplifier-wide setter or an automatic retry.
+              if (!p.patch.outputMute)
+                await Promise.allSettled(
+                  slots.map((s) => get(s).session.setControls({ mute: true })),
+                );
               throw new Error(
                 result
                   .filter((r) => r.status === 'rejected')
