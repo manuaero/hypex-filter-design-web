@@ -177,3 +177,13 @@ it('keeps complete recovery manifest exports and matching-device Restore availab
     'Complete FIR recovery image restored and verified. Outputs remain muted.',
   );
 });
+
+it('renders a cached erased EEPROM name as an empty FIR bank', async () => {
+  const preset = newProject().presets[0];
+  preset.inputFir.name = 'ÿ'.repeat(32);
+  await act(async () => root.render(<FirPanel {...props()} preset={preset} />));
+  const row = host.querySelector('table tbody tr')!;
+  expect(row.textContent).toContain('No FIR loaded');
+  expect(row.textContent).not.toContain('ÿ');
+  expect(row.querySelector('[title="No FIR loaded"]')).not.toBeNull();
+});

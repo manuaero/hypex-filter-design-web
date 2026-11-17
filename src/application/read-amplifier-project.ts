@@ -1,3 +1,4 @@
+import { decodeFirName } from '../domain/fir-name';
 import { newProject, type Project } from '../domain/model';
 import { projectSchema } from '../domain/files';
 import { applyReadFir } from '../domain/fir-editing';
@@ -144,9 +145,7 @@ export async function readAmplifierProject(
     applyReadFir(preset, fir[index]);
     // The backup holds all four physical filenames even though its shared
     // coefficient memory has just one current placement interpretation.
-    const names = fir[index].backup.filenames.map((name) =>
-      new TextDecoder('latin1').decode(unhex(name.hex)).replace(/\0.*$/s, ''),
-    );
+    const names = fir[index].backup.filenames.map((name) => decodeFirName(unhex(name.hex)));
     preset.inputFir.name = names[0];
     preset.channels.forEach((channel, c) => {
       channel.fir.name = names[c + 1];

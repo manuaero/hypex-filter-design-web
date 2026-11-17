@@ -1,3 +1,4 @@
+import { decodeFirName } from '../domain/fir-name';
 import { type Preset, type Fir, uid } from '../domain/model';
 import { planFirActivation, presetFirPlacement } from '../domain/fir-state';
 import { q24 } from '../domain/dsp';
@@ -259,9 +260,7 @@ export async function readFir(session: PanelSession, preset: number, save?: Save
           count = output ? 1500 : 4500,
           offset = output ? i * 8192 : 0;
         return {
-          name: new TextDecoder('latin1')
-            .decode(unhex(backup.filenames[nameIndex].hex))
-            .replace(/\0.*$/s, ''),
+          name: decodeFirName(unhex(backup.filenames[nameIndex].hex)),
           enabled: !!(flags & (1 << bit)),
           hfdState: { loaded: !!(flags & (1 << (bit + 4))), used: true, tapCount: count },
           taps:

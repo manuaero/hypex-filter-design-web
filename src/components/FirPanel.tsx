@@ -1,4 +1,6 @@
 'use client';
+
+import { firDisplayName } from '../domain/fir-name';
 import { useEffect, useState } from 'react';
 import {
   FolderOpen,
@@ -177,8 +179,11 @@ export default function FirPanel({
                   </span>
                 </th>
                 <td>
-                  <span className={styles.filename} title={f.name || 'No FIR loaded'}>
-                    {f.name || 'No FIR loaded'}
+                  <span
+                    className={styles.filename}
+                    title={firDisplayName(f.name) || 'No FIR loaded'}
+                  >
+                    {firDisplayName(f.name) || 'No FIR loaded'}
                   </span>
                   <span className={styles.state}>
                     {!state.loaded
