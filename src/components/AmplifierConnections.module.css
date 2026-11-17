@@ -1,0 +1,121 @@
+.dialog {
+  width: min(760px, calc(100vw - 40px));
+  max-height: calc(100dvh - 64px);
+  margin: auto;
+  padding: 22px;
+  border: 1px solid var(--border, #334c3d);
+  border-radius: 14px;
+  background: var(--panel, #15251e);
+  color: var(--text, #e8efdb);
+  overflow: auto;
+  box-shadow: 0 22px 90px #0009;
+}
+.dialog::backdrop {
+  background: #0008;
+}
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.header h2 {
+  margin: 0 0 5px;
+  font-size: 20px;
+}
+.header p,
+.footer p {
+  color: var(--muted, #a6b5a7);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.header p {
+  margin: 0;
+}
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 20px 0 14px;
+}
+.devices {
+  display: grid;
+  gap: 10px;
+}
+.device {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px;
+  border: 1px solid var(--border, #334c3d);
+  border-radius: 10px;
+}
+.identity {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.identity strong {
+  overflow-wrap: anywhere;
+}
+.identity small {
+  color: var(--muted, #a6b5a7);
+  overflow-wrap: anywhere;
+}
+.identity span {
+  font-size: 12px;
+  color: #c0d498;
+}
+.identity p {
+  margin: 3px 0;
+  font-size: 12px;
+  color: #efb3a0;
+}
+.actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.actions label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+.actions select {
+  min-width: 125px;
+}
+.footer {
+  margin-top: 18px;
+  border-top: 1px solid var(--border, #334c3d);
+  padding-top: 14px;
+}
+.footer label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.footer p {
+  margin-bottom: 0;
+}
+.empty {
+  padding: 20px 8px;
+  color: var(--muted, #a6b5a7);
+}
+.error {
+  color: #efb3a0;
+  font-size: 13px;
+}
+@media (max-width: 580px) {
+  .device {
+    flex-direction: column;
+  }
+  .actions {
+    align-items: stretch;
+  }
+}

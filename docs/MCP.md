@@ -2,7 +2,34 @@
 
 Agents use the same controllers and validation as the human interface. Normal users can work entirely through visible controls; the optional command console is a development aid.
 
-The current registry contains **91 commands**, including stateless native parameter-wheel adjustments, shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
+The current registry contains **92 commands**, including stateless native parameter-wheel adjustments, shared amplifier-mode review, native digital mixer editing and Native Save artifacts. Query `tools/list` on the running server for exact names, descriptions and strict schemas. Public preset, channel, filter and audio-channel numbers are one-based; internal model indices are zero-based.
+
+## V57 USB discovery and current-device reading
+
+`fusion_devices` shares the human connection manager. It does not open a USB
+permission chooser for an agent or send amplifier-setting commands. First access
+requires the human **Add amplifier** gesture. See [USB connections](USB-CONNECTIONS.md).
+
+| Action         | Arguments                        | Effect                                                                                      |
+| -------------- | -------------------------------- | ------------------------------------------------------------------------------------------- |
+| `status`       | None                             | Return cached discovery state and its revision.                                             |
+| `discover`     | None                             | Read previously permitted device identities and routing hints.                              |
+| `assign`       | `id`, `slot`, `expectedRevision` | Remember a device as `left` or `right`.                                                     |
+| `swap`         | `expectedRevision`               | Exchange connected role bindings.                                                           |
+| `disconnect`   | `slot`, `expectedRevision`       | Release a role and pause reconnection for this session.                                     |
+| `auto-connect` | `enabled`, `expectedRevision`    | Change the local automatic reconnect preference.                                            |
+| `read`         | `slot`                           | Load all three crossovers, input EQ, selected FIR banks and device settings into that role. |
+
+Use the opaque device `id` and current `revision` from the discovery snapshot.
+Stale mapping changes are refused. Confirmed serial assignments take precedence
+over routing hints; ambiguous devices stay unassigned. Assignment and swap
+preserve both local designs. Reading explicitly replaces one design with an
+undoable detached result and retains exact crossover/FIR recovery images. Raw
+coefficients do not recover original filter shapes, frequency/Q or measurements.
+
+These actions require trusted admitted application context. New MCP tests use
+the actual Studio executor and independent simulated devices; they do not add a
+fresh HTTP, hosted-pairing, two-physical-amplifier or macOS qualification.
 
 ## V51 shared native File Open
 
@@ -326,18 +353,18 @@ for the bounded native/browser evidence and completed public-source checks.
 
 ## Command families
 
-| Purpose                      | Representative commands                                                                                                                                                                                          |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| State, selection and history | `fusion_state`, `fusion_select`, `fusion_view`, `fusion_history`                                                                                                                                                 |
-| Projects and storage         | `fusion_project_new`, `fusion_project_import`, `fusion_project_export`, `fusion_project_save`, `fusion_workspace_storage`, `fusion_project_sources`, `fusion_project_directory`                                  |
+| Purpose                      | Representative commands                                                                                                                                                                                                                  |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| State, selection and history | `fusion_state`, `fusion_select`, `fusion_view`, `fusion_history`                                                                                                                                                                         |
+| Projects and storage         | `fusion_project_new`, `fusion_project_import`, `fusion_project_export`, `fusion_project_save`, `fusion_workspace_storage`, `fusion_project_sources`, `fusion_project_directory`                                                          |
 | Filters and channels         | `fusion_filter_palette`, `fusion_preview_filter`, `fusion_filter_add`, `fusion_filter_set`, `fusion_filter_adjust`, `fusion_filter_delete`, `fusion_filter_reset`, `fusion_channel_set`, `fusion_channel_link`, `fusion_biquad_exchange` |
-| EQ and FIR                   | `fusion_eq_set`, `fusion_eq_bank`, `fusion_eq_read`, `fusion_eq_upload`, `fusion_fir_set`, `fusion_fir_read`, `fusion_fir_upload`                                                                                |
-| Measurements and analysis    | `fusion_hfd_measurement`, `fusion_microphone`, `fusion_analyze`, `fusion_time_analyze`, `fusion_audio`                                                                                                           |
-| Device state and settings    | `fusion_device_read`, `fusion_controls`, `fusion_amplifier_modes`, `fusion_limiter_editor`, `fusion_device_defaults`                                                                                             |
-| Device templates             | `fusion_device_clone`                                                                                                                                                                                            |
-| Backup/upload/recovery       | `fusion_backup`, `fusion_configuration_backup`, `fusion_upload`, `fusion_upload_all`, `fusion_restore`                                                                                                           |
-| Large files                  | `fusion_file_upload_begin`, `fusion_file_upload_chunk`, `fusion_file_upload_commit`, `fusion_file_export`, `fusion_file_chunk_read`, `fusion_file_status`, `fusion_file_list`, `fusion_file_close`               |
-| Help                         | `fusion_help`                                                                                                                                                                                                    |
+| EQ and FIR                   | `fusion_eq_set`, `fusion_eq_bank`, `fusion_eq_read`, `fusion_eq_upload`, `fusion_fir_set`, `fusion_fir_read`, `fusion_fir_upload`                                                                                                        |
+| Measurements and analysis    | `fusion_hfd_measurement`, `fusion_microphone`, `fusion_analyze`, `fusion_time_analyze`, `fusion_audio`                                                                                                                                   |
+| Device state and settings    | `fusion_device_read`, `fusion_controls`, `fusion_amplifier_modes`, `fusion_limiter_editor`, `fusion_device_defaults`                                                                                                                     |
+| Device templates             | `fusion_device_clone`                                                                                                                                                                                                                    |
+| Backup/upload/recovery       | `fusion_backup`, `fusion_configuration_backup`, `fusion_upload`, `fusion_upload_all`, `fusion_restore`                                                                                                                                   |
+| Large files                  | `fusion_file_upload_begin`, `fusion_file_upload_chunk`, `fusion_file_upload_commit`, `fusion_file_export`, `fusion_file_chunk_read`, `fusion_file_status`, `fusion_file_list`, `fusion_file_close`                                       |
+| Help                         | `fusion_help`                                                                                                                                                                                                                            |
 
 Some older clients cache tool names. Existing validated compatibility namespaces expose selected newer operations; use the server’s current schema rather than guessing nested arguments. Firmware inspection and authentication actions are available through `fusion_device_read` namespaces. Physical firmware programming remains disabled.
 
@@ -460,13 +487,18 @@ Agents can read or save only through already granted filesystem roots. Missing/r
 
 The optional hosted bridge has its own authentication and browser-lease checks. It does not use the local bearer token. Queue encryption protects transient stored command/results, but the authenticated server processes plaintext; an agent also receives data explicitly returned by tools. Hosted authentication and deployment are separate from local setup.
 
-
 ## V41 raw coefficient checkpoint
 
 `fusion_filter_set` accepts a strict, nonempty partial coefficient object for raw sections. For example:
 
 ```json
-{"target":"both","preset":1,"channel":1,"index":1,"patch":{"coefficients":{"b0":0.5}}}
+{
+  "target": "both",
+  "preset": 1,
+  "channel": 1,
+  "index": 1,
+  "patch": { "coefficients": { "b0": 0.5 } }
+}
 ```
 
 Each role merges only `b0` into its own complete finite vector. The other four values, bypass state and first-cache interpretation stay independent. All targets are preflighted before one Undoable edit; malformed or linked destinations refuse the entire operation. An exact no-op retains metadata and history. Raw bypass or latent parameter edits retain the vector under the default redesign option. Full nonraw cache overrides remain compatible; changed vectors clear stale original-coefficient provenance.
@@ -477,18 +509,18 @@ Direct raw Add starts at Unity. Conversion captures the current unbypassed secti
 
 Input EQ frequency, Q and gain have their own recovered FloatEdit authoring profile. Frequency commits to **Double**, unlike the ordinary output-BQ Single path:
 
-| Field | Explicit Text bounds | Fixed display | Wheel event |
-| --- | --- | --- | --- |
-| Frequency | 10–50,000 Hz | one decimal | directional 1/10/100/1,000 Hz decades |
-| Q | 0.1–20 | three decimals | 0.04 |
-| Gain | −15.9…15.9 dB | two decimals | 0.1 dB |
+| Field     | Explicit Text bounds | Fixed display  | Wheel event                           |
+| --------- | -------------------- | -------------- | ------------------------------------- |
+| Frequency | 10–50,000 Hz         | one decimal    | directional 1/10/100/1,000 Hz decades |
+| Q         | 0.1–20               | three decimals | 0.04                                  |
+| Gain      | −15.9…15.9 dB        | two decimals   | 0.1 dB                                |
 
 Whole Text is parsed/normalized with the recovered Extended arithmetic, then formatted and reparsed to Double. Exact frequency/Q zero keeps the previous internal value before that format/reparse, so excess canonical precision may round; gain zero is accepted. Strict finite browser input and semantic Enter/blur commits are bounded adaptations, not native per-keystroke timing acceptance. Untouched imported parameters are retained. EQ wheels do not use output-channel AdditionalGain.
 
 `fusion_eq_adjust` applies one signed, stateless wheel event. Magnitude, custom steps and private field state are not tool arguments:
 
 ```json
-{"target":"both","preset":1,"index":1,"parameter":"q","direction":"up","basis":"each"}
+{ "target": "both", "preset": 1, "index": 1, "parameter": "q", "direction": "up", "basis": "each" }
 ```
 
 The default basis advances each selected role independently; `left` or `right` mirrors that selected source's changed value. A source no-op does not overwrite its peer. Each result returns the role's own Text and value. All destination EQ banks validate before a single Undoable design transaction, with no amplifier I/O. `fusion_eq_set` uses the same committed-field profile. Its `patch.enabled` controls one band; the separate top-level `enabled` controls whole-EQ activation. Type changes retain per-role band bypass unless explicitly changed.

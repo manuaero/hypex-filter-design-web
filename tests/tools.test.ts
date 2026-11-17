@@ -532,7 +532,7 @@ it('exposes one strict wheel event with atomic independent Both changes, no-op p
   });
   const before = structuredClone(state().documents);
   expect(TOOL_DEFINITIONS.find((tool) => tool.name === 'fusion_filter_adjust')).toBeDefined();
-  expect(TOOL_DEFINITIONS).toHaveLength(91);
+  expect(TOOL_DEFINITIONS).toHaveLength(92);
   const event = {
     target: 'both',
     preset: 1,
@@ -903,7 +903,7 @@ it('graph surface schema and linked-target admission refuse without weakening fi
   });
   expect(state().documents).toEqual(linked);
   expect(edits).not.toHaveBeenCalled();
-  expect(TOOL_DEFINITIONS).toHaveLength(91);
+  expect(TOOL_DEFINITIONS).toHaveLength(92);
 });
 
 it('wheel preflight refuses inactive/linked roles atomically, while fixed-source mirror allows latent destinations', async () => {

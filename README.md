@@ -10,6 +10,14 @@ _Filter editor with a persistent parameter inspector._
 
 This is an independent project. Software implementation and simulation coverage do not establish complete HFD compatibility or qualify every hardware operation. Current live protocol support targets FA503 / DSP3-213 core 5.1. Other device families, macOS USB behavior and simultaneous operation of two physical amplifiers remain unqualified.
 
+## V57 USB discovery and current-device reading
+
+The connection manager finds previously permitted amplifiers, reconnects remembered serial identities and offers **Use as Left**, **Use as Right** and **Swap Left/Right**. First USB access still needs the browser's device chooser. Exclusive digital routing is shown as a hint; ambiguous devices stay unassigned. Mapping changes only the attached connections and preserves both designs. **Auto reconnect** controls future automatic connections, while a manual disconnect pauses scans and hotplug reconnection for the current session until an explicit Connect, Add or assignment.
+
+**Load current amplifier** reads all three crossover presets, physical input EQ, selected FIR placements and device settings into a checked, undoable project for one role. It retains exact crossover/FIR recovery images and compiled coefficients; it cannot recover original filter parameters, inactive FIR caches, measurements or driver labels from coefficients alone. Device-template host defaults are marked separately from reported settings. Discovery, assignment and loading send no amplifier-setting commands. See [USB connections and reading](docs/USB-CONNECTIONS.md).
+
+The MCP registry now has **92 tools**, including **fusion_devices** for the same discovery, assignment and read operations. The private suite passed **4,009 assertions**: 3,901 canonical assertions and 108 retained diagnostics. A bounded Windows Chrome test with one FA503 completed the full read, persisted it and reconnected Right after normal reload, with reported source, volume and hardware preset retained and bridge off. Simulated two-device and admitted actual-Studio MCP tests are separate from that physical evidence. Two physical amplifiers, macOS USB, uploads and a fresh HTTP/hosted MCP run remain outside this acceptance. See [V57 verification](docs/VERIFICATION.md#v57-usb-discovery-roles-and-current-device-reading).
+
 ## V56 ordinary folder Save
 
 Folder Save now writes its captured delay values and the current runtime preset, then reconciles the open preset after verified file completion. Left and Right remain independent even with Mirror enabled. The shared UI/MCP path publishes at most one Undo step; previews, downloads and historical receipt replay remain passive. Partial writes and workspace persistence failures retain distinct recovery outcomes. See [Project Save semantics](docs/HFD-PROJECT-SAVE.md) and [verification](docs/VERIFICATION.md#v56-ordinary-folder-save).
@@ -93,7 +101,7 @@ V50 adds shared native channel graph-entry behavior to this web implementation a
 - Browser project persistence, a project library, granted-directory Open/Save, reviewed recovery and bounded large-file transfers.
 - A shared Native Save artifact for JSON, native folders and ZIPs, with fresh read-only physical settings/EQ capture for supported connected targets and an explicit Design only option.
 - Offline firmware file inspection and explicit runtime identity reports for known 5.7/core 5.1 and 5.82/core 5.5 profiles. File recognition does not prove the installed image; core 5.5 remains diagnostic-only and production firmware programming is unavailable.
-- A local MCP server and optional authenticated hosted bridge. The current registry exposes **91 commands**; the running server’s `tools/list` is authoritative.
+- A local MCP server and optional authenticated hosted bridge. The current registry exposes **92 commands**; the running server’s `tools/list` is authoritative.
 
 Magnitude graph Q gestures now use the native selected-section behavior: wheel input anywhere in the chart applies one signed 0.04 step to the already-selected section, and Ctrl-drag captures Ctrl at drag start and applies one step per qualifying vertical move. LP2, HP2, Shelf2 and Peak support graph Q; Asymmetric and AP2 retain their separate numeric Q controls. Whole-channel response display does not remove the editing selection. Ordinary graph Q explicitly reparses its final three-decimal Text to Double, including an off-grid bound whose visible Text does not change. Input EQ graph editing remains a browser convenience using its separate field-publication profile.
 
@@ -177,6 +185,7 @@ The public source does not include vendor executables, firmware bundles or a ven
 - [Architecture and persistence](docs/ARCHITECTURE.md)
 - [MCP server](docs/MCP.md)
 - [Explicit coefficient editing and cache interpretation](docs/HFD-RAW-COEFFICIENT-EDITOR.md)
+- [USB connections, Left/Right mapping and current-device reading](docs/USB-CONNECTIONS.md)
 - [USB protocol and operation boundaries](docs/USB_PROTOCOL.md)
 - [Native digital User mixer](docs/NATIVE_MIXER.md)
 - [Firmware files and read-only runtime identity](docs/FIRMWARE_RUNTIME.md)

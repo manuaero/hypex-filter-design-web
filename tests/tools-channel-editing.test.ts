@@ -169,7 +169,7 @@ it('strict hardware-gain intent rejects arbitrary scalars, caller eligibility an
   ])
     expect(await f.execute('fusion_channel_set', command(patch))).toMatchObject({ ok: false });
   expect(f.editByRole).not.toHaveBeenCalled();
-  expect(TOOL_DEFINITIONS).toHaveLength(91);
+  expect(TOOL_DEFINITIONS).toHaveLength(92);
   expect(f.forbidden).not.toHaveBeenCalled();
 });
 it('Off changes selected gain offsets and project hints while retaining every coefficient cache and unrelated gain', async () => {

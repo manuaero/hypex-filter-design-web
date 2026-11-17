@@ -122,6 +122,9 @@ import {
   type NativeProjectSaveController,
 } from '../application/native-project-save';
 import { applyNativeOrdinarySavePostState } from '../application/native-save-lifecycle';
+import { createAmplifierDiscovery } from '../application/amplifier-discovery';
+import { readAmplifierProject } from '../application/read-amplifier-project';
+import AmplifierConnections from './AmplifierConnections';
 import AmplifierConfiguration from './AmplifierConfiguration';
 import DeviceClonePanel from './DeviceClonePanel';
 import { exportNativeCloneProject, nativeCloneProjectFiles } from '../domain/clone-project';
@@ -434,6 +437,7 @@ export default function Studio() {
     [showMeters, setShowMeters] = useState(false),
     [showNoise, setShowNoise] = useState(false),
     [saveDialog, setSaveDialog] = useState<SaveDialogCapture>(),
+    [showConnections, setShowConnections] = useState(false),
     [healthDetails, setHealthDetails] = useState(false),
     [mode, setMode] = useState<PlotMode>('Magnitude'),
     [measurementView, setMeasurementView] = useState<MeasurementView>('frequency'),
@@ -1709,6 +1713,160 @@ export default function Studio() {
     }
   };
   const operationActive = useRef(false);
+  const usbLifetime = useRef(0);
+  function publishAmplifierBindings(supplied: Partial<Record<Slot, Live>>) {
+    const previous = liveRef.current;
+    const next = { ...supplied };
+    const changed = SLOTS.filter((slot) => previous[slot]?.session !== next[slot]?.session);
+    if (!changed.length) return;
+    for (const slot of changed) {
+      delete firmwareAssignments.current[slot];
+      delete firmwareRemembered.current[slot];
+      delete firmwareCandidates.current[slot];
+      descriptorVerifier.clear(slot);
+      deviceAuth.clear(slot);
+      const connection = next[slot];
+      if (connection) {
+        next[slot] = { ...connection, connectionId: crypto.randomUUID() };
+        firmwareAssignments.current[slot] = {
+          assignmentId: crypto.randomUUID(),
+          connectionId: next[slot]!.connectionId,
+          connectionEpoch: ++firmwareAssignmentEpoch.current,
+          serial: connection.identity.serial,
+        };
+        firmwareRemembered.current[slot] = {
+          key: crypto.randomUUID(),
+          serial: connection.identity.serial,
+          device: connection.device,
+        };
+      }
+    }
+    liveRef.current = next;
+    setLive(next);
+    firmwareExecution.refreshContext();
+    descriptorVerifier.refreshBindings();
+    deviceAuth.refreshBindings();
+    deviceDefaults.refreshBindings();
+    deviceClone.refreshBindings();
+    amplifierModes.refreshBindings();
+    nativeLimiter.refreshBindings();
+    nativeMixer.refreshBindings();
+    firmwareRuntime.refreshBindings();
+    noiseController.refreshBindings();
+  }
+  const amplifierDiscovery = useMemo(
+    () =>
+      createAmplifierDiscovery<Live>({
+        currentBindings: () => liveRef.current,
+        replaceBindings: (next) => publishAmplifierBindings(next),
+        canChangeBindings: () =>
+          !operationActive.current &&
+          SLOTS.every((slot) => {
+            const noise = noiseController.getSnapshot()[slot];
+            return !liveRef.current[slot]?.session.busy && !noise.busy && noise.requested !== true;
+          }),
+        probe: async (device) => {
+          if (device.opened)
+            throw new Error(
+              'This amplifier is already open. Close its other controller and retry.',
+            );
+          await device.open();
+          const session = new PanelSession(new WebHidTransport(device), saveBackup);
+          try {
+            const identity = await session.identify();
+            const status = await session.status();
+            return { device, session, identity, status, connectionId: crypto.randomUUID() };
+          } catch (error) {
+            await session.close().catch(() => {});
+            throw error;
+          }
+        },
+      }),
+    [],
+  );
+  const discoveredAmps = useSyncExternalStore(
+    amplifierDiscovery.subscribe,
+    amplifierDiscovery.getSnapshot,
+    amplifierDiscovery.getSnapshot,
+  );
+  const discoveryLifetime = useRef(0);
+  useEffect(() => {
+    if (authorityStatus.phase !== 'ready') return;
+    const lifetime = ++discoveryLifetime.current;
+    void amplifierDiscovery
+      .start()
+      .catch((error) =>
+        setError(error instanceof Error ? error.message : 'Amplifier discovery failed'),
+      );
+    return () => {
+      queueMicrotask(() => {
+        if (discoveryLifetime.current === lifetime) amplifierDiscovery.dispose();
+      });
+    };
+  }, [amplifierDiscovery, authorityStatus.phase]);
+  useEffect(() => amplifierDiscovery.refreshBindings(), [live, amplifierDiscovery]);
+  async function addAmplifier() {
+    if (!navigator.hid) throw new Error('USB connection needs desktop Chrome or Edge.');
+    // The browser chooser must be invoked directly from the Add button gesture.
+    const granted = await navigator.hid.requestDevice({
+      filters: [{ vendorId: VID, productId: PID, usagePage: 0xff00, usage: 1 }],
+    });
+    await amplifierDiscovery.acceptGranted(granted, {});
+  }
+  async function loadCurrentAmplifier(slot: Slot) {
+    return operate('Reading amplifier filters and settings', async () => {
+      const connection = liveRef.current[slot];
+      if (!connection) throw new Error('Connect an amplifier to this side first.');
+      const before = useWorkspace.getState();
+      const assertCurrent = () => {
+        const current = useWorkspace.getState();
+        if (
+          current.documentRevision !== before.documentRevision ||
+          current.documents[slot] !== before.documents[slot] ||
+          liveRef.current[slot]?.session !== connection.session ||
+          liveRef.current[slot]?.connectionId !== connection.connectionId
+        )
+          throw new Error(
+            'The design or amplifier assignment changed during the read. Nothing was loaded.',
+          );
+      };
+      const result = await readAmplifierProject(connection.session, connection.identity, {
+        assertCurrent,
+      });
+      assertCurrent();
+      useWorkspace.getState().replaceAt(slot, result.project);
+      projectViewsReplaced([slot]);
+      const next = {
+        ...liveRef.current,
+        [slot]: { ...connection, identity: result.identity, status: result.status },
+      };
+      liveRef.current = next;
+      setLive(next);
+      setWorkspaceTabOnly('Device settings');
+      chooseWorkspace(
+        { slot, preset: result.status.preset - 1, channel: 0, filter: 0 },
+        { initializeGraph: false },
+      );
+      await flushWorkspacePersistence();
+      const persistedRead = getWorkspacePersistenceStatus();
+      if (persistedRead.unsaved || persistedRead.error)
+        throw new Error(
+          'The filters and settings were loaded, but saving this workspace is unconfirmed. Retry workspace storage; no amplifier change or rollback was sent.',
+        );
+      setNotice(
+        'Loaded all three crossovers, input EQ, active FIR banks and device settings. Exact backups saved. No amplifier settings changed.',
+      );
+      return {
+        slot,
+        name: result.project.name,
+        presets: 3,
+        coefficientSections: 135,
+        rawCoefficients: true,
+        deviceChanged: false,
+        warnings: result.project.warnings,
+      };
+    });
+  }
   const readFile = (accept: string, fn: (text: string, name: string) => void) => {
     pendingFile.current = fn;
     file.current!.accept = accept;
@@ -1779,6 +1937,7 @@ export default function Studio() {
     };
   }, [workspaceAuthority, authorityStatus.phase]);
   useEffect(() => {
+    const lifetime = ++usbLifetime.current;
     const beforeUnload = (event: BeforeUnloadEvent) => {
       const status = getWorkspacePersistenceStatus();
       if (!status.unsaved && !status.saving) return;
@@ -1792,16 +1951,20 @@ export default function Studio() {
       .catch(() => {});
     return () => {
       window.removeEventListener('beforeunload', beforeUnload);
-      Object.entries(liveRef.current).forEach(([slot, connection]) => {
-        void noiseController
-          .stopOwned(slot as Slot)
-          .catch(() => {})
-          .finally(() => connection.session.close().catch(() => {}));
+      const owned = Object.entries(liveRef.current);
+      queueMicrotask(() => {
+        // Effect replay and Fast Refresh retain the same USB owner. Only a
+        // final unmount may release its captured interfaces.
+        if (usbLifetime.current !== lifetime) return;
+        owned.forEach(([slot, connection]) => {
+          void noiseController
+            .stopOwned(slot as Slot)
+            .catch(() => {})
+            .finally(() => connection.session.close().catch(() => {}));
+        });
+        SLOTS.forEach((slot) => descriptorVerifier.clear(slot));
+        SLOTS.forEach((slot) => deviceAuth.clear(slot));
       });
-      SLOTS.forEach((slot) => descriptorVerifier.clear(slot));
-      // Invalidate ephemeral state without permanently disposing a memoized
-      // controller that React may reuse during its development effect replay.
-      SLOTS.forEach((slot) => deviceAuth.clear(slot));
     };
   }, []);
   useEffect(() => {
@@ -1824,15 +1987,11 @@ export default function Studio() {
             )
             .catch((e) => {
               if (liveRef.current[slot]?.session !== l.session) return;
-              descriptorVerifier.clear(slot);
-              deviceAuth.clear(slot);
               setError(`${slot}: ${e.message}`);
-              setLive((old) => {
-                if (old[slot]?.session !== l.session) return old;
-                const next = { ...old };
-                delete next[slot];
-                return next;
-              });
+              const next = { ...liveRef.current };
+              delete next[slot];
+              publishAmplifierBindings(next);
+              amplifierDiscovery.refreshBindings();
               void l.session.close().catch(() => {});
             });
         }
@@ -1928,6 +2087,7 @@ export default function Studio() {
           deviceAuth.clear(slot);
           liveRef.current = next;
           setLive(next);
+          amplifierDiscovery.refreshBindings(slot);
           setNotice(
             `${slot === 'left' ? 'Left' : 'Right'} connected · ${identity.name || 'FA503'}`,
           );
@@ -2819,13 +2979,10 @@ export default function Studio() {
       await connection.session.close();
     } finally {
       if (liveRef.current[slot]?.session === connection.session) {
-        descriptorVerifier.clear(slot);
-        deviceAuth.clear(slot);
         const next = { ...liveRef.current };
         delete next[slot];
-        liveRef.current = next;
-        setLive(next);
-        noiseController.refreshBindings();
+        publishAmplifierBindings(next);
+        amplifierDiscovery.noteManualDisconnect(connection.identity.serial);
       }
     }
     if (noiseFailure)
@@ -2883,6 +3040,8 @@ export default function Studio() {
     deviceClone,
     amplifierModes,
     nativeProjectSave,
+    amplifiers: amplifierDiscovery,
+    readAmplifierProject: loadCurrentAmplifier,
     nativeLimiter,
     nativeMixer,
     eqClipboard: {
@@ -3239,6 +3398,26 @@ export default function Studio() {
     );
   return (
     <div className="studio">
+      {showConnections && (
+        <AmplifierConnections
+          snapshot={discoveredAmps}
+          busy={!!busy}
+          onClose={() => setShowConnections(false)}
+          onAdd={addAmplifier}
+          onDiscover={amplifierDiscovery.discover}
+          onAssign={async (id, slot, revision) => {
+            if (slot === 'unassigned') {
+              const assigned = amplifierDiscovery
+                .getSnapshot()
+                .devices.find((device) => device.id === id)?.slot;
+              if (assigned) await amplifierDiscovery.disconnect(assigned, revision);
+            } else await amplifierDiscovery.assign(id, slot, revision);
+          }}
+          onSwap={amplifierDiscovery.swap}
+          onAutoReconnect={amplifierDiscovery.setAutoReconnect}
+          onRead={loadCurrentAmplifier}
+        />
+      )}
       {palette && (
         <FilterPalette
           mode={palette.mode}
@@ -3405,6 +3584,13 @@ export default function Studio() {
             );
           })}
         </div>
+        <button
+          aria-label="Manage amplifiers"
+          title="Discover, connect and assign amplifiers"
+          onClick={() => setShowConnections(true)}
+        >
+          <Cable size={16} />
+        </button>
         <Toggle checked={w.linkedControls} onChange={(v) => chooseWorkspace({ linkedControls: v })}>
           <Link2 size={13} />
           Link controls

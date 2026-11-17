@@ -103,7 +103,7 @@ it('strict graph-drag schema admits only its complete finite position contract a
     expect(await f.execute('fusion_filter_adjust', args)).toMatchObject({ ok: false });
   expect(f.editByRole).not.toHaveBeenCalled();
   expect(f.forbidden).not.toHaveBeenCalled();
-  expect(TOOL_DEFINITIONS).toHaveLength(91);
+  expect(TOOL_DEFINITIONS).toHaveLength(92);
 });
 it('applies one shared absolute frequency and independently captured relative gains to explicit duplicate-ID roles', async () => {
   const f = fixture(),

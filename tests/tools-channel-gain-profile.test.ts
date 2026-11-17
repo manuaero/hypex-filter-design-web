@@ -224,7 +224,7 @@ it('canonical raw no-op returns final Text while retaining whole projects and hi
   expect(f.history).toHaveLength(0);
 });
 it('channel gain expands within the existing91-tool registry and strict sole intent schema', () => {
-  expect(TOOL_DEFINITIONS).toHaveLength(91);
+  expect(TOOL_DEFINITIONS).toHaveLength(92);
   const tool = TOOL_DEFINITIONS.find((x) => x.name === 'fusion_channel_set')!;
   expect(JSON.stringify(tool)).toContain('gainWheel');
   expect(JSON.stringify(tool)).toContain('basis');

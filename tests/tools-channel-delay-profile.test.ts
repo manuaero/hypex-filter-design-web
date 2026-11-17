@@ -337,7 +337,7 @@ it.each([
   expect(f.forbidden).not.toHaveBeenCalled();
 });
 it('delay intents extend the existing91-tool schema without serializing trusted context', () => {
-  expect(TOOL_DEFINITIONS).toHaveLength(91);
+  expect(TOOL_DEFINITIONS).toHaveLength(92);
   const tool = TOOL_DEFINITIONS.find((t) => t.name === 'fusion_channel_set')!;
   expect(JSON.stringify(tool)).toContain('delayWheel');
   expect(JSON.stringify(tool)).not.toContain('sessionKey');

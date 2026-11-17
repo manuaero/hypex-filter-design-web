@@ -154,6 +154,7 @@ import {
   prepareFileExport,
 } from './file-workflows';
 import type { NativeProjectSaveController } from './native-project-save';
+import type { AmplifierDiscoveryController } from './amplifier-discovery';
 import {
   type PanelSession,
   type Identity,
@@ -253,6 +254,8 @@ export interface ToolAdapter {
   amplifierModes?: AmplifierModesController;
   nativeMixer?: NativeMixerController;
   nativeProjectSave?: NativeProjectSaveController;
+  amplifiers?: AmplifierDiscoveryController;
+  readAmplifierProject?: (slot: Slot) => Promise<unknown>;
   descriptorVerifier?: UsbDescriptorVerifier;
   sources?: ProjectSources;
   directoryWriter?: ProjectDirectoryWriter & Partial<DirectoryLegacyAccess>;
@@ -1481,6 +1484,36 @@ const schemas = {
           });
     }),
   fusion_connect: z.object({ slot, serial: z.string().optional() }).strict(),
+  fusion_devices: z.discriminatedUnion('action', [
+    z.object({ action: z.literal('status') }).strict(),
+    z.object({ action: z.literal('discover') }).strict(),
+    z
+      .object({
+        action: z.literal('assign'),
+        id: z.string().min(1).max(200),
+        slot,
+        expectedRevision: z.number().int().nonnegative(),
+      })
+      .strict(),
+    z
+      .object({ action: z.literal('swap'), expectedRevision: z.number().int().nonnegative() })
+      .strict(),
+    z
+      .object({
+        action: z.literal('disconnect'),
+        slot,
+        expectedRevision: z.number().int().nonnegative(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal('auto-connect'),
+        enabled: z.boolean(),
+        expectedRevision: z.number().int().nonnegative(),
+      })
+      .strict(),
+    z.object({ action: z.literal('read'), slot }).strict(),
+  ]),
   fusion_disconnect: z.object({ target }).strict(),
   fusion_controls: z
     .object({ target, patch: controlsSchema, relativeVolume: z.boolean().default(false) })
@@ -1717,6 +1750,8 @@ const schemas = {
 };
 export type ToolName = keyof typeof schemas;
 export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
+  fusion_devices:
+    'Discover and manage previously permitted USB amplifiers through the same human connection manager. status is cached. discover reads identities and routing hints without opening a permission chooser or changing amplifier settings. Confirmed serial-to-Left/Right assignments are remembered in this browser; exclusive digital routing can suggest a side but does not prove physical speaker location. assign, swap and disconnect require the current discovery expectedRevision. They change connection bindings only, preserve both local designs and never write routing, bridge, mute, volume, power or filters. auto-connect changes the local reconnect preference only. read explicitly loads all three crossover presets, physical input EQ, selected FIR banks and device settings into one role local design, saving exact recovery images and retaining a single Undo step. Compiled raw filter coefficients are preserved; original filter types/frequency/Q are not claimed recovered. A new device needs the human Add amplifier permission gesture once. Ambiguous hints and duplicate identities never take a role by enumeration order.',
   fusion_native_mixer:
     'Use the shared native digital User mixer editor for eligible OEM StereoDSP devices. No manufacturing enable operation is exposed. status reads cached weights, eligibility, independent Left/Right drafts, reviews and bounded history without I/O. load freshly reads the complete three-preset matrix and opens only the explicit one-based preset; open applies native modal formatting to that row without I/O. edit stages one CH1/2/3 left/right contribution in -1..1 at an exact revision; negative weights invert and no sum normalization is imposed. cancel restores the exact captured row and closes it. review captures fresh identities, permissions and matrix baselines. save requires a context-bound one-use reviewId and confirm:true; all changed-target before-images are durably verified before any setter, followed by an all-target fresh barrier. Only the selected row changes; other physical presets remain byte-exact. Both uses each amplifier own draft. One 67/01 attempt per changed target is independently read back; partial and uncertain outcomes stay in the UI and never retry or roll back automatically. refresh-history reads local journals; export-record returns a checked chunked recovery record. No common settings, DSP power, bridge or manufacturing configuration writes. Physical OEM mixer and two-device operation remain unqualified.',
   fusion_amplifier_modes:
@@ -3518,6 +3553,27 @@ export function createToolExecutor(adapter: ToolAdapter) {
         case 'fusion_view':
           adapter.view(schemas.fusion_view.parse(a));
           break;
+        case 'fusion_devices': {
+          const p = schemas.fusion_devices.parse(a);
+          const devices = adapter.amplifiers;
+          if (!devices) throw new Error('Amplifier discovery is unavailable in this client');
+          if (!context)
+            throw new Error('Amplifier discovery requires a trusted application context');
+          parseExecutionPrincipal({ owner: context.owner, scope: context.scope });
+          if (p.action === 'read') {
+            if (!adapter.readAmplifierProject)
+              throw new Error('Reading a complete amplifier design is unavailable');
+            return { ok: true, result: await adapter.readAmplifierProject(p.slot) };
+          }
+          if ('expectedRevision' in p && devices.getSnapshot().revision !== p.expectedRevision)
+            throw new Error('Amplifier connections changed; review the current assignments');
+          if (p.action === 'discover') await devices.discover();
+          if (p.action === 'assign') await devices.assign(p.id, p.slot, p.expectedRevision);
+          if (p.action === 'swap') devices.swap(p.expectedRevision);
+          if (p.action === 'disconnect') await devices.disconnect(p.slot, p.expectedRevision);
+          if (p.action === 'auto-connect') devices.setAutoReconnect(p.enabled);
+          return { ok: true, devices: devices.getSnapshot() };
+        }
         case 'fusion_connect': {
           const p = schemas.fusion_connect.parse(a);
           await adapter.connect(p.slot, p.serial);

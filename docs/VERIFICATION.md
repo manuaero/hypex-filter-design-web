@@ -2,6 +2,66 @@
 
 Implementation, simulation, browser checks and physical acceptance are tracked separately. A large automated suite does not demonstrate that every HFD feature or amplifier operation is safe on every firmware/device combination.
 
+## V57 USB discovery, roles and current-device reading
+
+The [connection manager](USB-CONNECTIONS.md) discovers previously permitted
+interfaces, reconnects remembered serials and exposes explicit Left/Right
+assignment and swap. Exclusive digital routing is labeled as an inference;
+unknown or conflicting hints never select a role by enumeration order. Manual
+disconnect pauses Find scans and hotplug reconnects during the current session.
+Explicit Add, assignment or Connect can resume it. Browser permission remains a
+human action for each origin. Assignments preserve both local project documents
+and do not send routing or other amplifier setters.
+
+The shared complete-read operation captures all three crossover presets,
+physical input EQ, selected FIR placements and device metadata. Exact crossover
+and FIR recovery images are stored locally. A checked detached project replaces
+only the requested role with one Undo step and separate persistence reporting.
+Compiled raw coefficients are retained; original filter shape/frequency/Q,
+separately factored gain/polarity, measurements and driver labels are not claimed
+recovered. Inactive FIR tap caches are not invented.
+
+Captured EQ metadata and coefficients do not constitute a whole-byte backup of
+unused padding. Native project templates also contain marked host-only defaults
+for fields the device does not supply; those fields are not claimed as observed
+hardware settings. Exact recovery-image acceptance applies to crossover/FIR
+images, not the entire device byte state.
+
+An actual Windows Chrome session connected the available FA503 as Right and
+identified DSP3-213/core 5.1 with firmware 5.7. It read all 135 crossover sections
+and then completed the full new load action. The loaded project was persisted.
+A normal browser reload automatically reconnected Right with the same project
+visible. Reported source, volume and hardware preset were retained, and bridge
+remained off. No amplifier write or bridge action was requested. These reported
+state observations are distinct from a USB bus trace or upload acceptance.
+
+Focused runs passed 27 discovery cases, 10 actual-Studio cases, 10 complete-read
+cases and nine discovery-tool cases. These counts overlap broader runs and are
+not added into a full-suite total. The tests cover independent simulated roles,
+stale and duplicate identities, reversed enumeration, conflicting hints,
+hotplug/disconnect races, explicit reconnect, effect replay, role-preserving
+reads, exact recovery data, persistence failures and admitted MCP execution.
+
+The complete private run passed **4,009/4,009 assertions in 252 files**: 3,901
+canonical assertions in 249 files plus 108 retained diagnostics in three files.
+Nonincremental TypeScript and changed-source formatting passed. Focused counts
+are not added to this total. Build, public validation and publication evidence is
+recorded separately; these checks do not establish that every HFD feature works.
+Only one physical amplifier was available. Two physical amplifiers, macOS USB,
+cross-tab ownership arbitration, uploads and firmware programming remain outside
+this acceptance. MCP acceptance here uses the admitted actual-Studio executor,
+not a new HTTP or hosted-pairing run. No bridge configuration was applied during
+testing.
+
+The public suite excludes the 108 retained private diagnostics. It completed
+**3,901 assertions in 249 files**: **3,900 passed**, with the single optional
+installed-vendor-PDF check skipped because those vendor bytes are not distributed.
+There were no failures. Nonincremental TypeScript and the Next/Worker production
+build passed. All 24 raw static assets and the Worker passed the privacy scan.
+These results are separate from the private diagnostic run and physical evidence.
+The registry has **92 tools**, including the shared **fusion_devices** service;
+registry size is not acceptance of every command through HTTP or hosted pairing.
+
 ## V56 ordinary folder Save
 
 Four offline native HFD File-menu Saves establish the successful ordinary Save
