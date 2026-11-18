@@ -32,10 +32,12 @@ const queued = async () => {
 };
 
 describe('WebHID response diagnostics and fencing', () => {
-  it('holds the wire queue after a status setter so a delayed status cannot satisfy the next read', async () => {
+  it.each([0, 1])('holds the wire queue after status mode %s so a delayed status cannot satisfy the next read', async (mode) => {
     vi.useFakeTimers();
     const { transport, device, reply } = setup();
-    const setter = transport.exchange(frame(5));
+    const request = frame(5);
+    request[1] = mode;
+    const setter = transport.exchange(request);
     const read = transport.exchange(frame(6));
     await queued();
     reply(frame(5));
