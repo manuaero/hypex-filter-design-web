@@ -32,22 +32,65 @@ const queued = async () => {
 };
 
 describe('WebHID response diagnostics and fencing', () => {
-  it.each([0, 1])('holds the wire queue after status mode %s so a delayed status cannot satisfy the next read', async (mode) => {
+  it('keeps status telemetry separate from a pending runtime identity read', async () => {
+    const { transport, device, reply } = setup();
+    const request = frame(6);
+    request[1] = 1;
+    const result = transport.exchange(request), settled = vi.fn();
+    void result.then(settled);
+    await queued();
+    reply(frame(5));
+    await queued();
+    expect(settled).not.toHaveBeenCalled();
+    reply(frame(6));
+    expect(await result).toEqual(frame(6));
+    expect(device.sendReport).toHaveBeenCalledTimes(1);
+    await transport.close();
+  });
+
+  it('does not extend a runtime read timeout when status notifications arrive', async () => {
     vi.useFakeTimers();
+    const { transport, reply } = setup();
+    const request = frame(0x66);
+    const result = transport.exchange(request, 100);
+    const assertion = expect(result).rejects.toThrow(/timed out/);
+    await queued();
+    await vi.advanceTimersByTimeAsync(90);
+    reply(frame(5));
+    await vi.advanceTimersByTimeAsync(10);
+    await assertion;
+    await transport.close();
+  });
+
+  it.each([[3, 0], [0x66, 1], [0x40, 0]])('still rejects status as a reply to setter/firmware %s/%s', async (opcode, mode) => {
+    const { transport, reply } = setup();
+    const request = frame(opcode);
+    request[1] = mode;
+    const result = transport.exchange(request);
+    const assertion = expect(result).rejects.toThrow(/Unexpected HID reply/);
+    await queued();
+    reply(frame(5));
+    await assertion;
+    await transport.close();
+  });
+
+  it.each([0, 1])('does not confuse a delayed status mode %s notification with the next identity reply', async (mode) => {
     const { transport, device, reply } = setup();
     const request = frame(5);
     request[1] = mode;
     const setter = transport.exchange(request);
-    const read = transport.exchange(frame(6));
+    const identity = frame(6);
+    identity[1] = 1;
+    const read = transport.exchange(identity), settled = vi.fn();
+    void read.then(settled);
     await queued();
     reply(frame(5));
-    await vi.advanceTimersByTimeAsync(100);
-    reply(frame(5)); // observed delayed setter notification, while no request is pending
-    expect(device.sendReport).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(150);
     await setter;
     await queued();
     expect(device.sendReport).toHaveBeenCalledTimes(2);
+    reply(frame(5));
+    await queued();
+    expect(settled).not.toHaveBeenCalled();
     reply(frame(6));
     expect(await read).toEqual(frame(6));
     await transport.close();

@@ -32,6 +32,7 @@ export class WebHidTransport implements Transport {
   private queue = new AsyncQueue();
   private pending?: {
     command: number;
+    allowStatusNotification: boolean;
     resolve: (b: Uint8Array) => void;
     reject: (e: Error) => void;
     timer: ReturnType<typeof setTimeout>;
@@ -63,6 +64,12 @@ export class WebHidTransport implements Transport {
       event.data.byteOffset,
       event.data.byteLength,
     ).slice();
+    // Runtime FA503s also publish 05 telemetry while a read is outstanding.
+    // It is not an acknowledgement of that read: retain its original timer
+    // and wait for its own opcode. Admit this only for known runtime reads,
+    // never setters, stream/loader requests, malformed frames or other opcodes.
+    if (event.reportId === 0 && b.length === 64 && b[0] === 5 && p.allowStatusNotification)
+      return;
     if (event.reportId !== 0 || b.length !== 64 || b[0] !== p.command) {
       const opcode = (value: number | undefined) =>
         value === undefined ? 'missing' : `0x${value.toString(16).padStart(2, '0')}`;
@@ -115,22 +122,18 @@ export class WebHidTransport implements Transport {
           () => this.fail(new Error('USB reply timed out; reconnect before continuing')),
           timeout,
         );
-        this.pending = { command: request[0], resolve, reject, timer };
+        const allowStatusNotification =
+          !beforeWireSend && ((request[0] === 6 && request[1] === 1) ||
+          (request[0] === 3 && request[1] === 8) ||
+          ((request[0] === 0x66 || request[0] === 0x67) && request[1] === 0) ||
+          (request[0] === 0x65 && request[1] >= 1 && request[1] <= 60));
+        this.pending = { command: request[0], allowStatusNotification, resolve, reject, timer };
         try {
           this.device.sendReport(0, request).catch((e) => this.fail(new Error(String(e))));
         } catch (error) {
           this.fail(new Error(String(error)));
         }
       });
-      // FA503 firmware 5.7 can emit an additional 05 status after a status
-      // transaction. Keep the physical queue idle while that notification drains;
-      // otherwise it can be mistaken for the following status read, leaving
-      // that read's reply to collide with a later identity/configuration read.
-      // This sends no retry and does not relax pending-reply validation.
-      if (request[0] === 5) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 250));
-        if (this.fault) throw this.fault;
-      }
       return reply;
     });
   }
