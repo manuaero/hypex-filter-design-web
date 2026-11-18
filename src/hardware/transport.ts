@@ -110,7 +110,7 @@ export class WebHidTransport implements Transport {
       // There is no await between this callback and sendReport. A refusal has
       // no pending request/timer and does not poison an unattempted transport.
       if (beforeWireSend) runWireFence(beforeWireSend);
-      return new Promise<Uint8Array>((resolve, reject) => {
+      const reply = await new Promise<Uint8Array>((resolve, reject) => {
         const timer = setTimeout(
           () => this.fail(new Error('USB reply timed out; reconnect before continuing')),
           timeout,
@@ -122,6 +122,16 @@ export class WebHidTransport implements Transport {
           this.fail(new Error(String(error)));
         }
       });
+      // FA503 firmware 5.7 can emit an additional 05 status after a 05/00
+      // setter. Keep the physical queue idle while that notification drains;
+      // otherwise it can be mistaken for the following status read, leaving
+      // that read's reply to collide with a later identity/configuration read.
+      // This sends no retry and does not relax pending-reply validation.
+      if (request[0] === 5 && request[1] === 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 250));
+        if (this.fault) throw this.fault;
+      }
+      return reply;
     });
   }
   /** Fixed runtime40/00 transition, not an ordinary request/reply exchange.

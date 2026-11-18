@@ -32,6 +32,25 @@ const queued = async () => {
 };
 
 describe('WebHID response diagnostics and fencing', () => {
+  it('holds the wire queue after a status setter so a delayed status cannot satisfy the next read', async () => {
+    vi.useFakeTimers();
+    const { transport, device, reply } = setup();
+    const setter = transport.exchange(frame(5));
+    const read = transport.exchange(frame(6));
+    await queued();
+    reply(frame(5));
+    await vi.advanceTimersByTimeAsync(100);
+    reply(frame(5)); // observed delayed setter notification, while no request is pending
+    expect(device.sendReport).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(150);
+    await setter;
+    await queued();
+    expect(device.sendReport).toHaveBeenCalledTimes(2);
+    reply(frame(6));
+    expect(await read).toEqual(frame(6));
+    await transport.close();
+  });
+
   it('accepts a matching sliced 64-byte report', async () => {
     const { transport, reply } = setup();
     const request = new Uint8Array(64);
