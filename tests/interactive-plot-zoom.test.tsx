@@ -464,3 +464,95 @@ it('uses absolute native pixel frequency while preserving the shelf gain origin 
   expect(end).toHaveBeenCalledTimes(1);
   expect(end).toHaveBeenCalledWith();
 });
+
+it('offers left-button box zoom with a visible selection and no filter edit', async () => {
+  await mount('Magnitude');
+  const button = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Box zoom')!;
+  await act(async () => button.click());
+  await pointer('pointerdown', 148, 74, 0);
+  await pointer('pointermove', 348, 174, 0);
+  expect(host.querySelector('.plot-zoom-box')).not.toBeNull();
+  await pointer('pointerup', 348, 174, 0);
+  expect(host.querySelector('.plot-zoom-box')).toBeNull();
+  expect(updates.at(-1)?.frequencyMin).toBeCloseTo(10 ** 1.75, 10);
+  expect(updates.at(-1)?.frequencyMax).toBeCloseTo(10 ** 3.25, 10);
+  expect(changed).not.toHaveBeenCalled();
+});
+
+it('reads logarithmic X and linear Y coordinates, then clears crosshairs outside the plot', async () => {
+  await mount('Magnitude');
+  await pointer('pointermove', 248, 124, 0);
+  expect(host.querySelector('.plot-crosshair-x')?.textContent).toBe('316 Hz');
+  expect(host.querySelector('.plot-crosshair-y')?.textContent).toBe('-10.00 dB');
+  await pointer('pointermove', 20, 124, 0);
+  expect(host.querySelector('.plot-crosshair')).toBeNull();
+  expect(changed).not.toHaveBeenCalled();
+});
+
+it('zooms with buttons, focuses bass, and resets without changing filters', async () => {
+  await mount('Magnitude');
+  const click = async (label: string) => {
+    const button = [...host.querySelectorAll('button')].find(
+      (b) => b.getAttribute('aria-label') === label || b.textContent === label,
+    )!;
+    await act(async () => button.click());
+  };
+  await click('Zoom chart in');
+  expect(updates.at(-1)!.frequencyMax / updates.at(-1)!.frequencyMin).toBeCloseTo(Math.sqrt(1000));
+  await click('Bass');
+  expect(updates.at(-1)).toMatchObject({
+    frequencyMin: 10,
+    frequencyMax: 200,
+    dbMin: -40,
+    dbMax: 20,
+  });
+  await click('Reset');
+  expect(updates.at(-1)).toEqual(DEFAULT_RANGE);
+  expect(changed).not.toHaveBeenCalled();
+  expect(begin).not.toHaveBeenCalled();
+});
+
+it.each(['Magnitude', 'Phase', 'Group delay'] as const)(
+  '%s wheel zooms frequency around the pointer without editing Q',
+  async (mode) => {
+    await mount(mode);
+    const event = new WheelEvent('wheel', {
+      deltaY: -120,
+      clientX: 248 + 100,
+      clientY: 124 + 50,
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => host.querySelector('.plot-interaction')!.dispatchEvent(event));
+    const next = updates.at(-1)!;
+    expect(next.frequencyMax / next.frequencyMin).toBeLessThan(
+      initial.frequencyMax / initial.frequencyMin,
+    );
+    expect(Math.sqrt(next.frequencyMax * next.frequencyMin)).toBeCloseTo(
+      Math.sqrt(initial.frequencyMax * initial.frequencyMin),
+      8,
+    );
+    expect([next.dbMin, next.dbMax]).toEqual([initial.dbMin, initial.dbMax]);
+    expect(changed).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+    expect(viewGestures).toEqual(['start:zoom', 'range', 'commit']);
+  },
+);
+
+it('Shift-wheel zooms the vertical axis and leaves frequency unchanged', async () => {
+  await mount('Magnitude');
+  const event = new WheelEvent('wheel', {
+    deltaY: -120,
+    shiftKey: true,
+    clientX: 348,
+    clientY: 174,
+    bubbles: true,
+    cancelable: true,
+  });
+  await act(async () => host.querySelector('.plot-interaction')!.dispatchEvent(event));
+  const next = updates.at(-1)!;
+  expect(next.dbMax - next.dbMin).toBeLessThan(60);
+  expect((next.dbMax + next.dbMin) / 2).toBeCloseTo(-10);
+  expect([next.frequencyMin, next.frequencyMax]).toEqual([10, 10000]);
+  expect(changed).not.toHaveBeenCalled();
+});

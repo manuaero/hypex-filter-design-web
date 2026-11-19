@@ -4493,9 +4493,9 @@ export default function Studio() {
                           </>
                         ) : (
                           <>
-                            <span title="Drag background to pan; middle-drag to zoom">
+                            <span title="Wheel zooms frequency around the pointer; Shift-wheel zooms the vertical axis; Ctrl-wheel adjusts Q. Drag background to pan; middle-drag or Box zoom selects a range.">
                               {mode === 'Magnitude'
-                                ? 'Drag: Hz / dB · Ctrl-drag or wheel: Q'
+                                ? 'Drag: Hz / dB · Ctrl-drag / Ctrl-wheel: Q · Wheel: zoom'
                                 : 'Frequency / phase response'}
                             </span>
                             <button onClick={resetPlotRange}>Reset view</button>

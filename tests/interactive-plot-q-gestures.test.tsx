@@ -112,7 +112,14 @@ async function mount(kind: FilterKind, linked = false, options: Options = {}) {
 }
 const marker = () => host.querySelector<HTMLButtonElement>('[data-filter="0"]')!;
 async function wheel(deltaY: number, target: Element = marker()) {
-  const event = new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true });
+  const event = new WheelEvent('wheel', {
+    deltaY,
+    ctrlKey: true,
+    clientX: 250,
+    clientY: 120,
+    bubbles: true,
+    cancelable: true,
+  });
   await act(async () => target.dispatchEvent(event));
   return event;
 }
@@ -149,10 +156,10 @@ it.each(manualKinds)(
     await wheel(120);
     if (qKinds.has(kind)) {
       expect(changed.mock.calls.map(([patch]) => patch)).toEqual([{ q: 0.74 }, { q: 0.7 }]);
-      expect(marker().title).toContain('Ctrl-drag or wheel Q');
+      expect(marker().title).toContain('Ctrl-drag or Ctrl-wheel Q');
     } else {
       expect(changed).not.toHaveBeenCalled();
-      expect(marker().title).not.toContain('Ctrl-drag or wheel Q');
+      expect(marker().title).not.toContain('Ctrl-drag or Ctrl-wheel Q');
     }
     expect(channels).toEqual(before);
   },
@@ -205,7 +212,7 @@ it('linked channel markers remain inspection-only for wheel and Ctrl-drag', asyn
   expect(changed).not.toHaveBeenCalled();
   expect(begin).not.toHaveBeenCalled();
   expect(marker().title).toContain('linked to master');
-  expect(marker().title).not.toContain('Ctrl-drag or wheel Q');
+  expect(marker().title).not.toContain('Ctrl-drag or Ctrl-wheel Q');
 });
 
 it('actual native selected Peak progresses1.15->1.19->1.23 from blank-chart wheel120 and360', async () => {

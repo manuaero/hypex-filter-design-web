@@ -3812,3 +3812,74 @@ fieldset:disabled {
     display: none;
   }
 }
+
+/* Shared crossover / input-EQ navigation. These controls only edit the viewport. */
+.plot-navigation {
+  position: absolute;
+  top: 1px;
+  left: 48px;
+  display: flex;
+  gap: 3px;
+  z-index: 5;
+}
+.plot-navigation button {
+  min-height: 20px;
+  padding: 1px 7px;
+  font-size: 10px;
+  line-height: 16px;
+}
+.plot-navigation button[aria-pressed='true'] {
+  color: #172015;
+  background: #c5df8b;
+  border-color: #c5df8b;
+}
+.plot-interaction.is-zooming {
+  cursor: crosshair;
+}
+.plot-crosshair,
+.plot-zoom-box {
+  position: absolute;
+  pointer-events: none;
+  z-index: 4;
+}
+.plot-crosshair {
+  inset: 0;
+}
+.plot-crosshair-vertical,
+.plot-crosshair-horizontal {
+  position: absolute;
+}
+.plot-crosshair-vertical {
+  border-left: 1px dashed #d5eea2aa;
+}
+.plot-crosshair-horizontal {
+  border-top: 1px dashed #d5eea2aa;
+}
+.plot-crosshair-x,
+.plot-crosshair-y {
+  position: absolute;
+  padding: 2px 5px;
+  border: 1px solid #829a66;
+  border-radius: 3px;
+  background: #172019;
+  color: #e3f3c6;
+  white-space: nowrap;
+  font:
+    11px 'IBM Plex Mono',
+    monospace;
+  font-variant-numeric: tabular-nums;
+}
+.plot-crosshair-x {
+  transform: translateX(-50%);
+}
+.plot-crosshair-y {
+  transform: translate(-100%, -50%);
+}
+.plot-zoom-box {
+  border: 1px solid #c5df8b;
+  background: #c5df8b22;
+}
+.interactive-cursor {
+  top: auto;
+  bottom: 1px;
+}

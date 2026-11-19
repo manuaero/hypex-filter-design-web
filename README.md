@@ -1,5 +1,19 @@
 # Fusion Studio
 
+## Chart navigation
+
+Crossover and Input EQ share mouse-wheel zoom and hover crosshairs. Scroll up to
+zoom in around the pointer, down to zoom out; hold Shift to zoom the vertical
+axis. Crosshair labels show the pointer's axis coordinates (Hz/dB, degrees,
+delay, or time/amplitude), not a snapped measurement of a response curve.
+
+Use **Box zoom** and drag left to right to select both axes; drag right to left
+to undo a rectangle zoom. **Pan** restores normal filter-handle editing and
+background panning. The **+ / −**, **Bass** (10–200 Hz), and **Reset** controls
+also work without a wheel. Hold **Ctrl while scrolling** to adjust the selected
+filter's Q. Navigation changes only graph bounds, never filter values or amp
+settings; it does not add filter Undo steps.
+
 Fusion Studio is a web implementation of the Hypex Filter Design Windows app’s functionality, with an MCP server.
 
 Design crossovers, inspect measurements and manage Hypex FA503 amplifier settings in a browser. Left and Right have independent projects and device identities, with shared controls where appropriate. The interface and agents use the same application services.

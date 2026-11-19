@@ -107,7 +107,9 @@ export default function InteractivePlot({
 }) {
   const element = useRef<HTMLDivElement>(null),
     [size, setSize] = useState({ width: 800, height: 330 }),
-    [cursor, setCursor] = useState(''),
+    [hover, setHover] = useState<{ x: number; y: number }>(),
+    [zoomBox, setZoomBox] = useState<{ x: number; y: number; endX: number; endY: number }>(),
+    [navigation, setNavigation] = useState<'pan' | 'zoom'>('pan'),
     [menu, setMenu] = useState<{ x: number; y: number; frequency: number; matches: number[] }>();
   const drag = useRef<
     | {
@@ -145,7 +147,8 @@ export default function InteractivePlot({
   const zoomHistory = useRef<Partial<Record<PlotMode, RectangleZoomHistory>>>({});
   useEffect(() => {
     setMenu(undefined);
-    setCursor('');
+    setHover(undefined);
+    setZoomBox(undefined);
     return () => {
       if (drag.current?.kind === 'filter') finishFilterDrag(drag.current, true);
       else drag.current?.cancelRange?.();
@@ -234,6 +237,45 @@ export default function InteractivePlot({
     );
   const timeAt = (x: number, r = range) =>
     r.timeMinMs + ((x - L) / W) * (r.timeMaxMs - r.timeMinMs);
+  const xLabel = (x: number) =>
+    timed ? `${timeAt(x).toFixed(3)} ms` : `${frequency(x).toFixed(frequency(x) < 100 ? 1 : 0)} Hz`;
+  const yLabel = (y: number) =>
+    timed
+      ? (
+          range.amplitudeMax -
+          ((y - T) / H) * (range.amplitudeMax - range.amplitudeMin)
+        ).toPrecision(4)
+      : `${(range.dbMax - ((y - T) / H) * (range.dbMax - range.dbMin)).toFixed(2)} ${mode === 'Phase' ? '°' : mode === 'Group delay' ? 'ms' : 'dB'}`;
+  const changeView = (next: PlotRange) => {
+    onRangeGestureStart?.('zoom');
+    onRange(next);
+    onRangeGestureCommit?.();
+    setHover(undefined);
+  };
+  const resetView = () => {
+    delete zoomHistory.current[mode];
+    setHover(undefined);
+    if (onResetRange) onResetRange();
+    else changeView(defaultPlotRange(mode));
+  };
+  const zoomView = (factor: number) => {
+    if (timed) {
+      const center = (range.timeMinMs + range.timeMaxMs) / 2,
+        half = Math.max(
+          0.0005,
+          Math.min(300000, ((range.timeMaxMs - range.timeMinMs) * factor) / 2),
+        );
+      changeView({ ...range, timeMinMs: center - half, timeMaxMs: center + half });
+    } else {
+      const center = (Math.log(range.frequencyMin) + Math.log(range.frequencyMax)) / 2,
+        half = ((Math.log(range.frequencyMax) - Math.log(range.frequencyMin)) * factor) / 2;
+      changeView({
+        ...range,
+        frequencyMin: Math.max(0.001, Math.exp(center - half)),
+        frequencyMax: Math.min(50000, Math.exp(center + half)),
+      });
+    }
+  };
   const handles = useMemo(
     () =>
       W > 0 && H > 0
@@ -272,38 +314,55 @@ export default function InteractivePlot({
     const node = element.current;
     if (!node) return;
     const wheel = (e: WheelEvent) => {
-      if (timed) {
+      if (e.deltaY === 0 || drag.current) return;
+      if (!timed && e.ctrlKey) {
+        if (mode !== 'Magnitude' || !editable || !filter) return;
         e.preventDefault();
-        const { x, y } = point(e),
-          scale = Math.exp(Math.max(-1, Math.min(1, e.deltaY * 0.002)));
-        if (e.shiftKey) {
-          const anchor =
-              range.amplitudeMax - ((y - T) / H) * (range.amplitudeMax - range.amplitudeMin),
-            span = Math.max(
-              1e-9,
-              Math.min(1e12, (range.amplitudeMax - range.amplitudeMin) * scale),
-            ),
-            fraction = Math.max(0, Math.min(1, (y - T) / H));
-          onRange({
-            ...range,
-            amplitudeMax: anchor + fraction * span,
-            amplitudeMin: anchor - (1 - fraction) * span,
-          });
-        } else {
-          const anchor = timeAt(x),
-            span = Math.max(0.001, Math.min(600000, (range.timeMaxMs - range.timeMinMs) * scale)),
-            fraction = Math.max(0, Math.min(1, (x - L) / W));
-          onRange({
-            ...range,
-            timeMinMs: anchor - fraction * span,
-            timeMaxMs: anchor + (1 - fraction) * span,
-          });
-        }
+        stepGraphQ(e.deltaY < 0 ? 1 : -1);
         return;
       }
-      if (mode !== 'Magnitude' || !editable || !filter || e.deltaY === 0) return;
+      const { x, y } = point(e);
+      if (W <= 0 || H <= 0 || x < L || x > L + W || y < T || y > T + H) return;
       e.preventDefault();
-      stepGraphQ(e.deltaY < 0 ? 1 : -1);
+      // Wheel deltas can be pixels, lines or pages. Bound a single event so
+      // coarse mouse wheels and smooth trackpads both remain controllable.
+      const pixels = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? H : 1),
+        scale = Math.exp(Math.max(-0.7, Math.min(0.7, pixels * 0.002)));
+      if (e.shiftKey) {
+        const low = timed ? range.amplitudeMin : range.dbMin,
+          high = timed ? range.amplitudeMax : range.dbMax,
+          fraction = (y - T) / H,
+          anchor = high - fraction * (high - low),
+          span = Math.max(1e-6, Math.min(1e12, (high - low) * scale));
+        changeView({
+          ...range,
+          ...(timed
+            ? {
+                amplitudeMax: anchor + fraction * span,
+                amplitudeMin: anchor - (1 - fraction) * span,
+              }
+            : { dbMax: anchor + fraction * span, dbMin: anchor - (1 - fraction) * span }),
+        });
+      } else if (timed) {
+        const anchor = timeAt(x),
+          span = Math.max(0.001, Math.min(600000, (range.timeMaxMs - range.timeMinMs) * scale)),
+          fraction = (x - L) / W;
+        changeView({
+          ...range,
+          timeMinMs: anchor - fraction * span,
+          timeMaxMs: anchor + (1 - fraction) * span,
+        });
+      } else {
+        const fraction = (x - L) / W,
+          anchor = Math.log(frequency(x)),
+          span = Math.max(0.0001, Math.log(range.frequencyMax / range.frequencyMin) * scale);
+        changeView({
+          ...range,
+          frequencyMin: Math.max(0.001, Math.exp(anchor - fraction * span)),
+          frequencyMax: Math.min(50000, Math.exp(anchor + (1 - fraction) * span)),
+        });
+      }
+      setHover({ x, y });
     };
     node.addEventListener('wheel', wheel, { passive: false });
     return () => node.removeEventListener('wheel', wheel);
@@ -315,14 +374,11 @@ export default function InteractivePlot({
       onPointerMove={(e) => {
         const { x, y } = point(e),
           f = frequency(x);
-        setCursor(
-          timed
-            ? `${timeAt(x).toFixed(3)} ms · ${(range.amplitudeMax - ((y - T) / H) * (range.amplitudeMax - range.amplitudeMin)).toPrecision(4)}`
-            : `${f.toFixed(f < 100 ? 1 : 0)} Hz · ${(range.dbMax - ((y - T) / H) * (range.dbMax - range.dbMin)).toFixed(2)} ${mode === 'Phase' ? '°' : mode === 'Group delay' ? 'ms' : 'dB'}`,
-        );
+        setHover(x >= L && x <= L + W && y >= T && y <= T + H ? { x, y } : undefined);
         const d = drag.current;
         if (!d) return;
         if (d.mode !== mode || d.contextKey !== contextKey) return;
+        if (d.kind === 'zoom') setZoomBox({ x: d.x, y: d.y, endX: x, endY: y });
         if (d.kind === 'filter' && d.filter) {
           if (d.ctrlKey) {
             if (filter?.id === d.filter.id && filter.kind === d.filter.kind && y !== d.y)
@@ -405,7 +461,9 @@ export default function InteractivePlot({
           onRange({ ...d.range, dbMin: d.range.dbMin + delta, dbMax: d.range.dbMax + delta });
         }
       }}
+      onPointerLeave={() => setHover(undefined)}
       onPointerUp={(e) => {
+        setZoomBox(undefined);
         const d = drag.current;
         if (!d) return;
         if (d.mode !== mode || d.contextKey !== contextKey) {
@@ -472,6 +530,7 @@ export default function InteractivePlot({
         if (d.kind !== 'filter') d.commitRange?.();
       }}
       onPointerCancel={() => {
+        setZoomBox(undefined);
         graphQ.current = undefined;
         if (drag.current?.kind === 'filter') finishFilterDrag(drag.current, true);
         else drag.current?.cancelRange?.();
@@ -493,7 +552,7 @@ export default function InteractivePlot({
         selectedFilter={selectedFilter}
       />
       <div
-        className="plot-interaction"
+        className={`plot-interaction ${navigation === 'zoom' ? 'is-zooming' : ''}`}
         onContextMenu={(e) => {
           e.preventDefault();
           if (timed || mode !== 'Magnitude') return;
@@ -501,17 +560,20 @@ export default function InteractivePlot({
           setMenu({ x, y, frequency: frequency(x), matches: matching(x, y) });
         }}
         onDoubleClick={(e) => {
-          if (editable && mode === 'Magnitude') onChange({ frequency: frequency(point(e).x) });
+          if (navigation === 'pan' && editable && mode === 'Magnitude')
+            onChange({ frequency: frequency(point(e).x) });
         }}
         onPointerDown={(e) => {
-          if ((e.target as Element).closest('button')) return;
+          if (navigation !== 'zoom' && (e.target as Element).closest('button')) return;
           setMenu(undefined);
           const { x, y } = point(e);
           if (e.button === 0 || e.button === 1) {
             e.preventDefault();
-            onRangeGestureStart?.(e.button === 1 ? 'zoom' : 'pan');
+            const kind = e.button === 1 || navigation === 'zoom' ? 'zoom' : 'pan';
+            onRangeGestureStart?.(kind);
+            if (kind === 'zoom') setZoomBox({ x, y, endX: x, endY: y });
             drag.current = {
-              kind: e.button === 1 ? 'zoom' : 'pan',
+              kind,
               x,
               y,
               mode,
@@ -543,7 +605,7 @@ export default function InteractivePlot({
                 aria-label={`Graph filter ${i + 1}: ${f.kind}`}
                 aria-pressed={i === activeFilter}
                 aria-controls="selected-filter-inspector"
-                title={`BQ ${i + 1} · ${f.frequency.toFixed(1)} Hz · Q ${f.q.toFixed(3)}${editable ? ` · drag frequency${gainType(f) ? '/gain' : ''}${qType(f) ? ', Ctrl-drag or wheel Q' : ''}` : ' · linked to master'}`}
+                title={`BQ ${i + 1} · ${f.frequency.toFixed(1)} Hz · Q ${f.q.toFixed(3)}${editable ? ` · drag frequency${gainType(f) ? '/gain' : ''}${qType(f) ? ', Ctrl-drag or Ctrl-wheel Q' : ''}` : ' · linked to master'}`}
                 className={`filter-handle ${i === activeFilter ? 'selected' : ''} ${f.enabled ? '' : 'bypassed'} ${f.kind.startsWith('lowpass') ? 'lowpass' : f.kind.startsWith('highpass') ? 'highpass' : 'other'}`}
                 style={{ left: x, top: y }}
                 onClick={(e) => {
@@ -551,7 +613,7 @@ export default function InteractivePlot({
                 }}
                 onDoubleClick={(e) => e.stopPropagation()}
                 onPointerDown={(e) => {
-                  if (e.button !== 0) return;
+                  if (e.button !== 0 || navigation === 'zoom') return;
                   e.stopPropagation();
                   e.preventDefault();
                   const raw = point(e),
@@ -606,7 +668,78 @@ export default function InteractivePlot({
             );
           })}
       </div>
-      <span className="interactive-cursor">{cursor}</span>
+      <div className="plot-navigation" role="toolbar" aria-label="Chart navigation">
+        <button
+          type="button"
+          aria-pressed={navigation === 'pan'}
+          onClick={() => setNavigation('pan')}
+          title="Drag background to pan; drag a filter handle to edit"
+        >
+          Pan
+        </button>
+        <button
+          type="button"
+          aria-pressed={navigation === 'zoom'}
+          onClick={() => setNavigation('zoom')}
+          title="Drag a rectangle left to right to zoom; right to left to undo"
+        >
+          Box zoom
+        </button>
+        <button type="button" aria-label="Zoom chart in" onClick={() => zoomView(0.5)}>
+          +
+        </button>
+        <button type="button" aria-label="Zoom chart out" onClick={() => zoomView(2)}>
+          −
+        </button>
+        {!timed && (
+          <button
+            type="button"
+            onClick={() => changeView({ ...range, frequencyMin: 10, frequencyMax: 200 })}
+            title="Inspect 10–200 Hz without changing filters"
+          >
+            Bass
+          </button>
+        )}
+        <button type="button" onClick={resetView}>
+          Reset
+        </button>
+      </div>
+      {hover && !zoomBox && (
+        <div className="plot-crosshair" aria-hidden="true">
+          <div className="plot-crosshair-vertical" style={{ left: hover.x, top: T, height: H }} />
+          <div className="plot-crosshair-horizontal" style={{ left: L, top: hover.y, width: W }} />
+          <span
+            className="plot-crosshair-x"
+            style={{ left: Math.max(L + 42, Math.min(L + W - 42, hover.x)), top: T + H + 1 }}
+          >
+            {xLabel(hover.x)}
+          </span>
+          <span
+            className="plot-crosshair-y"
+            style={{ left: L + W, top: Math.max(T + 12, Math.min(T + H - 12, hover.y)) }}
+          >
+            {yLabel(hover.y)}
+          </span>
+        </div>
+      )}
+      {zoomBox && (
+        <div
+          className="plot-zoom-box"
+          style={{
+            left: Math.min(zoomBox.x, zoomBox.endX),
+            top: Math.min(zoomBox.y, zoomBox.endY),
+            width: Math.abs(zoomBox.endX - zoomBox.x),
+            height: Math.abs(zoomBox.endY - zoomBox.y),
+          }}
+        />
+      )}
+      <span className="interactive-cursor">
+        {hover
+          ? `${xLabel(hover.x)} · ${yLabel(hover.y)}`
+          : navigation === 'zoom'
+            ? 'Drag → zoom · Drag ← undo'
+            : 'Wheel: zoom · Shift-wheel: vertical zoom'}
+      </span>
       {menu && (
         <div
           className="plot-menu"
@@ -659,11 +792,7 @@ export default function InteractivePlot({
           )}
           <button
             onClick={() => {
-              if (onResetRange) onResetRange();
-              else {
-                delete zoomHistory.current[mode];
-                onRange(defaultPlotRange(mode));
-              }
+              resetView();
               setMenu(undefined);
             }}
           >

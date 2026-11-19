@@ -158,14 +158,14 @@ function verify(tab: 'Crossover' | 'Input EQ', before: { left: Project; right: P
   expect(state().past).toHaveLength(1);
 }
 it.each(['Crossover', 'Input EQ'] as const)(
-  'actual %s whole-channel response still permits the selected filter chart-wide Q wheel',
+  'actual %s whole-channel response still permits the selected filter chart-wide Ctrl-wheel Q',
   async (tab) => {
     await mount(tab);
     const before = structuredClone(state().documents);
     const chart = host.querySelector('.plot-interaction')!;
     await act(async () =>
       chart.dispatchEvent(
-        new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true }),
+        new WheelEvent('wheel', { deltaY: -120, ctrlKey: true, bubbles: true, cancelable: true }),
       ),
     );
     verify(tab, before);
@@ -189,5 +189,30 @@ it.each(['Crossover', 'Input EQ'] as const)(
     verify(tab, before);
     await act(async () => state().undo());
     expect(state().documents).toEqual(before);
+  },
+);
+
+it.each(['Crossover', 'Input EQ'] as const)(
+  '%s wheel navigation preserves both amplifier documents and filter Undo history',
+  async (tab) => {
+    await mount(tab);
+    const before = structuredClone(state().documents),
+      revision = state().documentRevision;
+    await act(async () =>
+      host
+        .querySelector('.plot-interaction')!
+        .dispatchEvent(
+          new WheelEvent('wheel', {
+            deltaY: -120,
+            clientX: 348,
+            clientY: 174,
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+    );
+    expect(state().documents).toEqual(before);
+    expect(state().documentRevision).toBe(revision);
+    expect(state().past).toHaveLength(0);
   },
 );
