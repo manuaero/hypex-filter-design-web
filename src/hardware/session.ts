@@ -1449,8 +1449,15 @@ export class PanelSession {
     if (fir) await programFirInternal(this, preset, fir, progress);
     await this.setNameInternal(name);
     await this.writeSectorInternal(presetBase(preset), target, progress);
+    // Re-selecting the active preset can acknowledge without loading its new IIR bank.
+    // Keep the outputs muted across a real preset transition and let the DSP settle.
+    if ((await this.statusInternal()).preset === preset) {
+      await this.controlsInternal({ mute: true, preset: preset === 1 ? 2 : 1 });
+      await sleep(1000);
+    }
     await this.controlsInternal({ mute: true, preset });
-    progress(100, 'Verified · outputs remain muted');
+    await sleep(1000);
+    progress(100, 'Verified · preset reloaded · outputs remain muted');
   }
   async upload(preset: number, name: string, design: Preset, progress: Progress = () => {}) {
     return this.exclusive(async () => {

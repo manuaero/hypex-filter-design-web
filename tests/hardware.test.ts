@@ -106,6 +106,25 @@ describe('FA503 protocol', () => {
     await Promise.allSettled([a, b]);
     expect(events).toEqual([1, 2, 3]);
   });
+  it('leaves and reloads the active preset while muted after uploading', async () => {
+    const sim = new SimulatedPanel(),
+      session = new PanelSession(sim, save);
+    const transitions: number[] = [];
+    const exchange = sim.exchange.bind(sim);
+    sim.exchange = async (request) => {
+      const before = decodeStatus(sim.status).preset;
+      const reply = await exchange(request);
+      const after = decodeStatus(sim.status);
+      if (after.preset !== before) {
+        expect(after.muted).toBe(true);
+        transitions.push(after.preset);
+      }
+      return reply;
+    };
+    await session.upload(1, 'reload test', newProject().presets[0]);
+    expect(transitions).toEqual([2, 1]);
+    expect(decodeStatus(sim.status).muted).toBe(true);
+  }, 10000);
   it('backs up before erase and restores exact bytes while retaining mute', async () => {
     const sim = new SimulatedPanel(),
       saved: Backup[] = [];
