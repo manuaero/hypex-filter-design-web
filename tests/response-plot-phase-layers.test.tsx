@@ -111,7 +111,7 @@ function fixture() {
   source(preset.channels[1], -60, 90);
   return preset;
 }
-const sumStroke = () => strokes.find((stroke) => stroke.color === '#e9eddf')!;
+const sumStroke = () => strokes.find((stroke) => stroke.color === '#f1ede6')!;
 
 it('hides phase curves independently while the native sum retains all canonical UseInSum sources with unit measurement amplitude', async () => {
   const preset = fixture(),
@@ -128,13 +128,13 @@ it('hides phase curves independently while the native sum retains all canonical 
       />,
     );
   await act(async () => render({ channels: [true, false, false], sum: true }));
-  expect(strokes.map((stroke) => stroke.color)).toEqual(['#efb45d', '#e9eddf']);
+  expect(strokes.map((stroke) => stroke.color)).toEqual(['#efb162', '#f1ede6']);
   // atan2(1,1)=+45deg: the hidden -60dB driver's phase still contributes equally.
   // With top180/bottom-180 and plot height200 this lies at y24+75=99px.
   expect(sumStroke().points[500][1]).toBeCloseTo(99, 10);
   const sum = sumStroke().points;
   await act(async () => render({ channels: [false, true, false], sum: true }));
-  expect(strokes.map((stroke) => stroke.color)).toEqual(['#58d6bb', '#e9eddf']);
+  expect(strokes.map((stroke) => stroke.color)).toEqual(['#9cc6d1', '#f1ede6']);
   expect(sumStroke().points).toEqual(sum);
   expect(preset).toEqual(before);
 });
@@ -151,9 +151,9 @@ it('phase sum visibility overrides the magnitude/time sum flag in both direction
       />,
     );
   await act(async () => render(true, false));
-  expect(strokes.map((stroke) => stroke.color)).toEqual(['#58d6bb']);
+  expect(strokes.map((stroke) => stroke.color)).toEqual(['#9cc6d1']);
   await act(async () => render(false, true));
-  expect(strokes.map((stroke) => stroke.color)).toEqual(['#58d6bb', '#e9eddf']);
+  expect(strokes.map((stroke) => stroke.color)).toEqual(['#9cc6d1', '#f1ede6']);
 });
 it('uses canonical inclusion rather than visibility for the recovered phase sum', async () => {
   const preset = fixture();
@@ -173,7 +173,7 @@ it('uses canonical inclusion rather than visibility for the recovered phase sum'
       />,
     ),
   );
-  expect(strokes.map((stroke) => stroke.color)).toEqual(['#58d6bb', '#e9eddf']);
+  expect(strokes.map((stroke) => stroke.color)).toEqual(['#9cc6d1', '#f1ede6']);
   expect(sumStroke().points[500][1]).toBeCloseTo(124, 10);
   expect(preset).toEqual(before);
 });
@@ -202,7 +202,7 @@ it('keeps unavailable checked native curves hidden and never applies phase masks
       />,
     ),
   );
-  expect(strokes.map((stroke) => stroke.color)).toEqual(['#efb45d', '#58d6bb', '#a596f5']);
+  expect(strokes.map((stroke) => stroke.color)).toEqual(['#efb162', '#9cc6d1', '#b3a3d6']);
 });
 it('supports independent electrical phase rendering and retains the legacy renderer when no phase state is supplied', async () => {
   const preset = newProject().presets[0];
@@ -217,11 +217,11 @@ it('supports independent electrical phase rendering and retains the legacy rende
       />,
     ),
   );
-  expect(strokes.map((stroke) => stroke.color)).toEqual(['#58d6bb']);
+  expect(strokes.map((stroke) => stroke.color)).toEqual(['#9cc6d1']);
   await act(async () =>
     root.render(
       <ResponsePlot channels={preset.channels} mode="Phase" measured={false} sum={false} />,
     ),
   );
-  expect(strokes.map((stroke) => stroke.color)).toEqual(['#efb45d', '#58d6bb', '#a596f5']);
+  expect(strokes.map((stroke) => stroke.color)).toEqual(['#efb162', '#9cc6d1', '#b3a3d6']);
 });
