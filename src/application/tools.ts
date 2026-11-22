@@ -1907,7 +1907,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     'Validate a standard 4 KiB IIR/input-EQ backup file and import it into the local recovery library. Returns its backupId; no amplifier connection or flash write is performed. FIR manifests use their separate recovery flow.',
   fusion_restore: 'Restore an identity-bound backup and verify every page, retaining mute.',
   fusion_upload:
-    'Back up, mute, program and verify the selected preset on one or both amplifiers. Only its selected FIR placement is transferred; effective opposite-placement graph FIRs stay in the document and produce per-role/preset warnings in fir metadata. Outputs remain muted.',
+    'Back up, mute, program and verify the selected preset on one or both amplifiers. Only its selected FIR placement is transferred; effective opposite-placement graph FIRs stay in the document and produce per-role/preset warnings in fir metadata. The previous master mute state is restored after successful verification.',
   fusion_device_read:
     'Read fresh device options, hardware/accessory overview, limiter configuration and power statistics.',
   fusion_power:

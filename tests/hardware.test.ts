@@ -14,6 +14,7 @@ describe('FA503 protocol', () => {
       r = new PanelSession(right, save),
       lp = newProject().presets[0],
       rp = newProject().presets[0];
+    left.status[6] &= 0x7f;
     lp.channels[0].gain = -3;
     rp.channels[0].gain = -7;
     for (const [panel, other] of [
@@ -33,6 +34,8 @@ describe('FA503 protocol', () => {
     ]);
     expect(left.memory.slice(0x22000, 0x22200)).toEqual(encodeChannel(lp.channels[0]));
     expect(right.memory.slice(0x22000, 0x22200)).toEqual(encodeChannel(rp.channels[0]));
+    expect(decodeStatus(left.status).muted).toBe(false);
+    expect(decodeStatus(right.status).muted).toBe(true);
     expect(left.maxConcurrent).toBe(1);
     expect(right.maxConcurrent).toBe(1);
   }, 10000);

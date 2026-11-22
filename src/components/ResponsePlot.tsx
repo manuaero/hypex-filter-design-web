@@ -10,7 +10,7 @@ import { buildHfdResponseView } from '../domain/hfd-response-view';
 import { prepareNativeElectricalView } from '../domain/native-electrical-view';
 import { buildMagnitudeLayers, type MagnitudeLayers } from '../domain/plot-layers';
 import type { PhaseViewState } from '../application/graph-view';
-export const COLORS = ['#efb45d', '#58d6bb', '#a596f5'];
+export const COLORS = ['#efb162', '#9cc6d1', '#b3a3d6'];
 export default function ResponsePlot({
   channels,
   preset,
@@ -163,7 +163,7 @@ export default function ResponsePlot({
       ctx.clearRect(0, 0, W, H);
       ctx.font = `${compact ? 9 : 11}px ui-monospace, monospace`;
       ctx.strokeStyle = '#ffffff0e';
-      ctx.fillStyle = '#718083';
+      ctx.fillStyle = '#b0a89b';
       ctx.lineWidth = 1;
       const xMin = range?.frequencyMin ?? 10,
         xMax = range?.frequencyMax ?? 40000,
@@ -227,7 +227,7 @@ export default function ResponsePlot({
           ctx.fillText(label, x - ctx.measureText(label).width / 2, H - 13);
         }
       }
-      ctx.fillStyle = '#899896';
+      ctx.fillStyle = '#b0a89b';
       ctx.fillText(
         timed
           ? 'amplitude · ms'
@@ -274,7 +274,7 @@ export default function ResponsePlot({
             if (mode !== 'Phase' || !phaseLayers || phaseLayers.channels[index])
               add(curve, COLORS[index % COLORS.length]);
           });
-          if (showSum) add(view.sum, '#e9eddf');
+          if (showSum) add(view.sum, '#f1ede6');
         } else if (timed) {
           if (timeData.error) throw new Error(timeData.error);
           const analysis = timeData.analysis;
@@ -296,7 +296,7 @@ export default function ResponsePlot({
             curves.push({ points, color });
           };
           analysis?.channels.forEach((curve, index) => add(curve, COLORS[index % COLORS.length]));
-          if (sum) add(analysis?.sum, '#e9eddf');
+          if (sum) add(analysis?.sum, '#f1ede6');
         } else {
           if (electricalData.error) throw new Error(electricalData.error);
           const N = 900;
@@ -341,7 +341,7 @@ export default function ResponsePlot({
           });
           if (showSum)
             curves.push({
-              color: '#e9eddf',
+              color: '#f1ede6',
               points: makeCurve((f) =>
                 channels.reduce<[number, number]>(
                   ([a, b], ch, index) => {
@@ -359,7 +359,7 @@ export default function ResponsePlot({
             });
         }
       } catch (e) {
-        ctx.fillStyle = '#efb45d';
+        ctx.fillStyle = '#efb162';
         ctx.fillText(String(e), L + 20, T + 25);
       }
       const gl = target.getContext('webgl2', { alpha: true, antialias: true });

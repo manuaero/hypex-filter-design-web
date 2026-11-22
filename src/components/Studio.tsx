@@ -1975,32 +1975,47 @@ export default function Studio() {
     void ensureWorkspaceHydrated().catch(() => {});
   }, [ensureWorkspaceHydrated]);
   useEffect(() => {
-    const timer = setInterval(
-      () => {
-        for (const slot of SLOTS) {
-          const l = liveRef.current[slot];
-          if (!l || l.session.busy || busy) continue;
-          l.session
-            .status()
-            .then((status) =>
-              setLive((old) =>
-                old[slot]?.session === l.session ? { ...old, [slot]: { ...l, status } } : old,
-              ),
-            )
-            .catch((e) => {
-              if (liveRef.current[slot]?.session !== l.session) return;
-              setError(`${slot}: ${e.message}`);
-              const next = { ...liveRef.current };
-              delete next[slot];
-              publishAmplifierBindings(next);
-              amplifierDiscovery.refreshBindings();
-              void l.session.close().catch(() => {});
+    let disposed = false;
+    const pending = new Set<PanelSession>();
+    const refresh = () => {
+      if (disposed) return;
+      for (const slot of SLOTS) {
+        const l = liveRef.current[slot];
+        if (!l || l.session.busy || busy || pending.has(l.session)) continue;
+        pending.add(l.session);
+        l.session
+          .status()
+          .then((status) => {
+            if (disposed) return;
+            setLive((old) => {
+              const binding = old[slot];
+              return binding?.session === l.session
+                ? { ...old, [slot]: { ...binding, status } }
+                : old;
             });
-        }
-      },
-      showMeters ? 250 : 2000,
-    );
-    return () => clearInterval(timer);
+          })
+          .catch((e) => {
+            if (disposed || liveRef.current[slot]?.session !== l.session) return;
+            setError(`${slot}: ${e.message}`);
+            const next = { ...liveRef.current };
+            delete next[slot];
+            publishAmplifierBindings(next);
+            amplifierDiscovery.refreshBindings();
+            void l.session.close().catch(() => {});
+          })
+          .finally(() => pending.delete(l.session));
+      }
+    };
+    const timer = setInterval(refresh, showMeters ? 250 : 2000);
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('focus', refresh);
+    refresh();
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', refresh);
+    };
   }, [busy, showMeters]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -2264,7 +2279,7 @@ export default function Studio() {
         })),
       );
       setNotice(
-        `${both ? 'Both amplifiers' : 'Preset'} programmed and read back. Outputs remain muted.`,
+        `${both ? 'Both amplifiers' : 'Preset'} programmed and read back. Previous playback state restored.`,
       );
       for (const slot of slots) {
         const l = live[slot]!;

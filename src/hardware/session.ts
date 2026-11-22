@@ -1457,13 +1457,27 @@ export class PanelSession {
     }
     await this.controlsInternal({ mute: true, preset });
     await sleep(1000);
-    progress(100, 'Verified · preset reloaded · outputs remain muted');
+    await this.restoreUploadMuteInternal(true);
+    progress(100, 'Verified · preset reloaded');
+  }
+  async restoreUploadMuteInternal(muted: boolean) {
+    // Preset activation can change runtime mute after its initial acknowledgement.
+    await this.controlsInternal({ mute: muted });
+    if ((await this.statusInternal()).muted !== muted)
+      throw new Error('Amplifier mute did not match fresh readback');
   }
   async upload(preset: number, name: string, design: Preset, progress: Progress = () => {}) {
     return this.exclusive(async () => {
       const plan = await this.prepareInternal(preset, design);
+      const { muted } = await this.statusInternal();
       await this.controlsInternal({ mute: true });
-      await this.programInternal(preset, name, plan.target, progress, plan.fir);
+      try {
+        await this.programInternal(preset, name, plan.target, progress, plan.fir);
+        await this.restoreUploadMuteInternal(muted);
+      } catch (error) {
+        await this.controlsInternal({ mute: true }).catch(() => {});
+        throw error;
+      }
       return plan.backup;
     });
   }
@@ -1538,13 +1552,20 @@ export class PanelSession {
     await this.writeSectorInternal(presetBase(preset) + 0x3000, target, progress);
     await this.ack(packet(0x64, 3));
     await this.controlsInternal({ mute: true, presetEq: { preset, enabled } });
-    progress(100, 'Input EQ verified · outputs remain muted');
+    progress(100, 'Input EQ verified');
   }
   async uploadEq(preset: number, bands: Filter[], enabled: boolean, progress: Progress = () => {}) {
     return this.exclusive(async () => {
       const plan = await this.prepareEqInternal(preset, bands, enabled);
+      const { muted } = await this.statusInternal();
       await this.controlsInternal({ mute: true });
-      await this.programEqInternal(preset, plan.target, plan.enabled, progress);
+      try {
+        await this.programEqInternal(preset, plan.target, plan.enabled, progress);
+        await this.restoreUploadMuteInternal(muted);
+      } catch (error) {
+        await this.controlsInternal({ mute: true }).catch(() => {});
+        throw error;
+      }
       return plan.backup;
     });
   }
@@ -1978,6 +1999,7 @@ export async function uploadPair(
       program: (plan: Awaited<ReturnType<PanelSession['prepareInternal']>>) =>
         j.session.programInternal(j.preset, j.name, plan.target, j.progress, plan.fir),
     })),
+    true,
   );
 }
 export async function uploadEqPair(
@@ -1998,5 +2020,6 @@ export async function uploadEqPair(
       program: (plan: Awaited<ReturnType<PanelSession['prepareEqInternal']>>) =>
         j.session.programEqInternal(j.preset, plan.target, plan.enabled, j.progress),
     })),
+    true,
   );
 }

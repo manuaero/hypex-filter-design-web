@@ -8,6 +8,7 @@ export async function coordinatedUpload<T>(
     prepare: () => Promise<T>;
     program: (plan: T) => Promise<void>;
   }[],
+  restorePlayback = false,
 ) {
   if (!jobs.length || new Set(jobs.map((j) => j.session)).size !== jobs.length)
     throw new Error('Each role requires a distinct amplifier');
@@ -32,6 +33,9 @@ export async function coordinatedUpload<T>(
       new Set(jobs.map((j) => j.session.identity?.serial)).size !== jobs.length
     )
       throw new Error('The same physical amplifier cannot fill both roles');
+    const starting = restorePlayback
+      ? await Promise.all(jobs.map((j) => j.session.statusInternal()))
+      : [];
     const mutes = await Promise.allSettled(
       jobs.map((j) => j.session.controlsInternal({ mute: true })),
     );
@@ -48,6 +52,17 @@ export async function coordinatedUpload<T>(
           )
           .join(' · '),
       );
+    }
+    if (restorePlayback) {
+      const restored = await Promise.allSettled(
+        jobs.map((j, i) => j.session.restoreUploadMuteInternal(starting[i].muted)),
+      );
+      if (restored.some((r) => r.status === 'rejected')) {
+        await Promise.allSettled(jobs.map((j) => j.session.controlsInternal({ mute: true })));
+        throw new Error(
+          'Upload verified, but playback state could not be restored on every amplifier',
+        );
+      }
     }
   };
   await reserve(0);
